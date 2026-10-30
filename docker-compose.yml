@@ -1,0 +1,32 @@
+# 广告管理系统 —— Docker 一键部署
+# 用法：
+#   构建并启动： docker compose up -d --build
+#   查看日志：   docker compose logs -f
+#   停止：       docker compose down
+#   更新代码后： docker compose up -d --build
+#
+# 默认只暴露 80 端口（web 服务）。生产建议在前方再加 Caddy / Cloudflare Tunnel 提供 HTTPS。
+
+services:
+  backend:
+    build: ./backend
+    environment:
+      - DATABASE_URL=sqlite:////app/data/ad_material.db
+    volumes:
+      - admb_data:/app/data        # SQLite 数据库持久化
+      - admb_uploads:/app/uploads  # 上传素材持久化
+    restart: unless-stopped
+    expose:
+      - "8033"
+
+  web:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  admb_data:
+  admb_uploads:

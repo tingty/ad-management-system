@@ -1,0 +1,31 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# ===== Node / 前端 =====
+node_modules/
+frontend/dist/
+npm-debug.log*
+
+# ===== 数据库与上传（由 Docker 卷持久化，不入库） =====
+backend/*.db
+backend/*.db-wal
+backend/*.db-shm
+backend/*.sqlite
+backend/*.bak*
+backend/uploads/
+
+# ===== 环境变量 / 密钥 =====
+.env
+.env.*
+*.local
+
+# ===== 系统 / IDE =====
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
