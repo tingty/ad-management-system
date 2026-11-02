@@ -174,9 +174,19 @@ npm run dev          # http://localhost:5173
 | `AUTH_TTL_HOURS` | `12` | 登录有效期 |
 | `IMAGE_SIZES_PER_PLATFORM` | `4` | 每平台出几种尺寸的图（主尺寸优先） |
 | `MOCK_DELAY_MS` | `0` | Mock 每次调用延迟，用于演示进度条/取消 |
+| `DEFAULT_LLM_PROVIDER` | `千问大模型` | 默认模型显示名称（设置页「模型名称」列） |
+| `DEFAULT_LLM_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | 默认模型 OpenAI 兼容地址（`/api/v1` 是 DashScope 原生协议路径，不兼容本系统） |
+| `DEFAULT_LLM_MODEL` | `qwen-plus` | 默认模型名 |
+| `DEFAULT_LLM_API_KEY` | 空 | 默认模型密钥；为空则不播种、回退本地 Mock。建议写入 `backend/.env`（已 gitignore）或部署环境变量，勿提交进仓库 |
 
 ## AI 模型接入
 
+- **默认模型（开箱即用）**：`analysis` / `copy` 两个文本用途在启动时自动播种 DashScope 国际版
+  `qwen-plus`（`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`，OpenAI 兼容协议），`is_active=True`。
+  注：DashScope 的 `/api/v1` 是原生协议路径，本系统调用 `/chat/completions`，故使用 `/compatible-mode/v1`。
+  设置页「AI 模型配置」可见、可编辑、可停用。密钥放在 `backend/.env`（已被 `.gitignore` 忽略，不进仓库）
+  或部署环境变量 `DEFAULT_LLM_API_KEY`；未配置密钥则跳过播种、自动回退本地 Mock。
+  图片 / 视频用途不预置，可在设置页继续接入其它模型调试。
 - **网站分析**：`SYS_SITE_ANALYSIS` 提示词驱动，一次调用产出 9 模块 JSON 并落库；未配置 Key 时
   Mock 按 `MARKER:SITE_ANALYSIS_JSON` 返回同结构结果，从正文首句派生产品名，不出现 `Unknown Product`。
 - **未配置 Key**：Mock 出稿（按语言、遵守字数红线、每次重生成措辞不同），图片用 Pillow 合成，开箱即用。

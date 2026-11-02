@@ -65,9 +65,12 @@ SYS_SITE_ANALYSIS = (
 # 旧版基础框架提示词（仅用于兼容，已被 SYS_SITE_ANALYSIS 取代）；保留常量避免引用断裂。
 SYS_FRAMEWORK = SYS_SITE_ANALYSIS
 SYS_ANGLE = (
-    "你是效果广告创意总监。基于产品事实，给出 6 个互不重复的创意方向。严格 JSON："
-    '{"angles":[{"key":"pain|benefit|proof|curiosity|ugc|promo","name":"中文名","insight":"为什么这个角度对这个产品有效",'
-    '"hook":"该方向最短的一句钩子文案（目标语言）","visual":"画面具体长什么样","kpi":"主要影响指标"}]}。只输出 JSON。MARKER:ANGLE_JSON'
+    "你是效果广告创意总监。基于产品事实，给出 8 个互不重复的创意方向，必须覆盖全部 key："
+    "pain / benefit / proof / curiosity / ugc / promo / scenario / comparison。严格 JSON："
+    '{"angles":[{"key":"pain|benefit|proof|curiosity|ugc|promo|scenario|comparison",'
+    '"name":"中文名","insight":"为什么这个角度对这个产品有效",'
+    '"hook":"该方向最短的一句钩子文案（目标语言）","visual":"画面具体长什么样","kpi":"主要影响指标"}]}。'
+    "只输出 JSON。MARKER:ANGLE_JSON"
 )
 SYS_COPY = (
     "你是效果广告文案。严格按创意方向与语言撰写，不使用夸大或无法证实的数字。"
@@ -293,8 +296,10 @@ async def analyze_site(db, page, text, facts, url: str = "") -> dict:
         resp = await llm.chat(SYS_SITE_ANALYSIS, prompt)
         sa = parse_json(resp)
         if isinstance(sa, dict) and sa.get("positioning"):
-            sa["_source"] = "llm" if has_real(db, "analysis") else "mock"
+            # 只有「确实调用了真实模型且成功」才标 llm；FallbackLLM 静默回退 Mock 时如实标 mock。
+            sa["_source"] = "mock" if getattr(llm, "used_fallback", False) or not has_real(db, "analysis") else "llm"
             return sa
+        print(f"[analyze_site] 模型返回无法解析为 9 模块 JSON（len={len(resp)}），回退本地构造")
     except Exception as e:
         print("[analyze_site] llm failed:", str(e)[:140])
     return _local_site_analysis(facts, page)
@@ -340,7 +345,8 @@ async def analyze_landing_page(db, url, text, page=None) -> Framework:
             data["metrics"] = ms
     if site.get("audience", {}).get("primary"):
         data["audience"] = site["audience"]["primary"]
-    data["analyzer"] = "llm+local" if has_real(db, "analysis") else "local"
+    # 按本次分析的真实来源标注，不用「是否配置了模型」代替「是否真的用了模型」。
+    data["analyzer"] = "llm+local" if site.get("_source") == "llm" else "local"
 
     evidence = dict(data.get("evidence") or {})
     if page:

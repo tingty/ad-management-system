@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from database import engine, Base, SessionLocal
-from models import PlatformSpec, User
+from models import PlatformSpec, User, ModelConfig
 from specs_data import PLATFORM_SPECS
 from migrations import ensure_schema, normalize_data
 from routers import router
@@ -43,6 +43,61 @@ async def auth_guard(request: Request, call_next):
 app.mount("/files", StaticFiles(directory=UPLOAD_DIR), name="files")
 app.include_router(router)
 
+# ---------------- 默认大模型 ----------------
+# 轻量加载 backend/.env（已被 .gitignore 忽略，不进仓库）：已存在的环境变量优先。
+def _load_dotenv():
+    path = os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    except Exception:
+        pass
+
+
+_load_dotenv()
+
+# 默认模型：analysis / copy 两个文本用途共用；值可用 .env 或部署环境变量覆盖。
+# 密钥不写死在代码里——DEFAULT_LLM_API_KEY 为空时跳过播种，系统自动退回本地 Mock。
+DEFAULT_LLM = {
+    "provider": os.getenv("DEFAULT_LLM_PROVIDER", "千问大模型"),
+    "base_url": os.getenv("DEFAULT_LLM_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+    "model": os.getenv("DEFAULT_LLM_MODEL", "qwen-plus"),
+    "api_key": os.getenv("DEFAULT_LLM_API_KEY", ""),
+    "params": {"temperature": 0.7, "max_tokens": 4096},
+}
+
+
+def seed_default_model():
+    """为 analysis / copy 播种默认大模型并默认启用；已有配置不覆盖，用户可在设置页改/加。"""
+    if not DEFAULT_LLM["api_key"]:
+        print("[seed] 未配置 DEFAULT_LLM_API_KEY，跳过默认模型播种（使用本地 Mock）")
+        return
+    db = SessionLocal()
+    try:
+        created = []
+        for usage in ("analysis", "copy"):
+            if db.query(ModelConfig).filter_by(usage=usage).count() == 0:
+                db.add(ModelConfig(usage=usage, provider=DEFAULT_LLM["provider"],
+                                   api_key=DEFAULT_LLM["api_key"],
+                                   base_url=DEFAULT_LLM["base_url"],
+                                   model=DEFAULT_LLM["model"],
+                                   params=DEFAULT_LLM["params"], is_active=True))
+                created.append(usage)
+        if created:
+            db.commit()
+            print(f"[seed] 默认大模型已启用：{DEFAULT_LLM['provider']} / {DEFAULT_LLM['model']} @ "
+                  f"{DEFAULT_LLM['base_url']}（{', '.join(created)}）")
+    finally:
+        db.close()
+
+
 DEFAULT_USERS = [
     ("admin", "Admin@123", "系统管理员", "admin"),
     ("manager", "Manager@123", "投放经理", "manager"),
@@ -80,6 +135,7 @@ def on_startup():
     normalize_data()  # 新列数据回填
     seed_specs()
     seed_users()
+    seed_default_model()
 
 @app.get("/api/health")
 def health():

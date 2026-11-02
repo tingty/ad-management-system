@@ -389,22 +389,31 @@ class OpenAICompatibleLLM(LLMProvider):
                         {"role": "user", "content": user},
                     ],
                     "temperature": self.params.get("temperature", 0.7),
-                    "max_tokens": self.params.get("max_tokens", 1500),
+                    # 9 模块结构化 JSON 输出较长，上限过小会被截断导致解析失败；这里设下限保护。
+                    "max_tokens": max(int(self.params.get("max_tokens", 4096)), 3000),
                 },
             )
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"]
 
 class FallbackLLM(LLMProvider):
-    """真实模型调用失败时自动回退 Mock，保证主流程不中断。"""
+    """真实模型调用失败时自动回退 Mock，保证主流程不中断。
+
+    used_fallback 记录本次调用是否真的走了兜底，供上层如实标注结果来源，
+    避免「配了模型但实际用了 Mock」却被标记成 llm 的错误归因。
+    """
     def __init__(self, real, fallback):
         self.real = real
         self.fallback = fallback
+        self.used_fallback = False
 
     async def chat(self, system, user, **kw):
         try:
-            return await self.real.chat(system, user, **kw)
+            out = await self.real.chat(system, user, **kw)
+            self.used_fallback = False
+            return out
         except Exception:
+            self.used_fallback = True
             return await self.fallback.chat(system, user, **kw)
 
 class OpenAIImage(ImageProvider):

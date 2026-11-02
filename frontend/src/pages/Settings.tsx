@@ -106,7 +106,7 @@ export default function Settings() {
         <h2>已配置模型（{list.length}）</h2>
         {list.length === 0 ? <div className="muted">暂无配置，将使用 Mock 兜底。</div> : (
           <table>
-            <thead><tr><th>用途</th><th>Provider</th><th>Base URL</th><th>Model</th><th>状态</th><th>操作</th></tr></thead>
+            <thead><tr><th>用途</th><th>模型名称</th><th>Base URL</th><th>Model</th><th>状态</th><th>操作</th></tr></thead>
             <tbody>
               {list.map(m => (
                 <tr key={m.id}>
