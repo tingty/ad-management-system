@@ -115,7 +115,10 @@ function ReportItem({ it }: { it: any }) {
     return (
       <div className="plat-row">
         <div className="plat-name">{it.platform}<span className="plat-role">{it.role}</span></div>
-        <div className="plat-note">{it.note}</div>
+        {it.note && <div className="plat-note">{it.note}</div>}
+        {it.hook && <div className="plat-sub"><b>前 3 秒钩子</b>：{it.hook}</div>}
+        {it.selling_point && <div className="plat-sub"><b>主推卖点</b>：{it.selling_point}</div>}
+        {it.compliance_note && <div className="plat-sub warn"><b>合规提示</b>：{it.compliance_note}</div>}
       </div>
     )
   }

@@ -50,6 +50,8 @@ class MockLLM(LLMProvider):
             await asyncio.sleep(MOCK_DELAY)
         if "FRAMEWORK_JSON" in system:
             return _mock_framework(user)
+        if "SITE_ANALYSIS_JSON" in system:
+            return _mock_site_analysis(user)
         if "COPY_JSON" in system:
             return _mock_copy(user)
         if "KEYWORD_JSON" in system:
@@ -78,6 +80,126 @@ def _mock_framework(text):
         },
     }
     return json.dumps(data, ensure_ascii=False)
+
+def _metric_kind(v: str):
+    """与 report._metric_detail 一致的轻量分类，仅用于 Mock 兜底时给指标标对类型。"""
+    s = str(v)
+    if s.startswith(("$", "¥", "€", "£")):
+        return "price", "价格"
+    if "%" in s or "％" in s or "percent" in s.lower():
+        return "ratio", "比例 / 提升幅度"
+    if re.search(r"\d\s?(?:x|倍)$", s, re.I):
+        return "multiple", "倍数"
+    if re.search(r"(?:M|B|K|万|亿|\+)$", s):
+        return "scale", "用户量 / 规模"
+    if s.lower().endswith("-star") or re.fullmatch(r"[0-5](?:\.\d)?", s):
+        return "rating", "评分"
+    return "other", "其他量化"
+
+
+def _guess_product(text: str):
+    """Mock 兜底：从正文首句主语猜产品名（如 'Calm is the #1 app…' -> 'Calm'）。
+
+    仅在无真实模型、且本地未抽到产品名时启用，避免报告里出现 'Unknown Product'。
+    只取首句主语，不编造任何信息。
+    """
+    if not text:
+        return None
+    first = re.split(r"[.\n!?]", text.strip(), 1)[0].strip()
+    for pat in (r"^([A-Z][A-Za-z0-9'’&.\-]+)\s+(?:is|are|—|-)\b",
+                r"^([A-Z][A-Za-z0-9'’&.\-]+)\s*[:：]"):
+        m = re.match(pat, first)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _mock_site_analysis(user):
+    """无真实模型时，从提示词里的本地事实 JSON 派生一套自洽的 9 模块网站核心内容。
+
+    关键：Mock 不编造，所有结论都来自提示词中真实抽取的事实（产品/品类/卖点/指标/人群/
+    平台打法），保证端到端可跑通且内容能与页面正文对得上。
+    """
+    facts: dict = {}
+    m = re.search(r"本地已抽取事实（JSON[^\n]*\n(.*?)\n\n请产出", user or "", re.S)
+    if m:
+        try:
+            facts = json.loads(m.group(1).strip())
+        except Exception:
+            facts = {}
+    product = facts.get("product") or "Unknown Product"
+    category = facts.get("category") or "App/工具"
+    dom = facts.get("domain") or "app"
+    points = [str(x) for x in (facts.get("selling_points") or ["核心功能突出", "性价比优势", "用户口碑高"]) if x]
+    metrics = [str(x) for x in (facts.get("metrics") or []) if x]
+    audience = facts.get("audience") or "18-45 岁移动用户，关注效率与性价比"
+    channel_src = facts.get("platform_analysis") or {}
+    # Mock 兜底：本地没抽到产品名时，从正文首句主语猜一个（如 'Calm is the #1 app' -> 'Calm'）
+    body = ""
+    mb = re.search(r"正文:\n(.*?)\n\n### 本地已抽取事实", user or "", re.S)
+    if mb:
+        body = mb.group(1).strip()
+    if not product or product == "Unknown Product":
+        guessed = _guess_product(body)
+        if guessed:
+            product = guessed
+    channel = {}
+    for k, v in (channel_src or {}).items():
+        channel[k] = {
+            "tactics": v,
+            "hook": "前 3 秒用核心卖点直击痛点",
+            "selling_point": points[0] if points else "",
+            "compliance_note": "避免绝对化与收益承诺表述",
+        }
+    return json.dumps({
+        "positioning": {
+            "product": product,
+            "category": category,
+            "category_key": dom,
+            "one_liner": (re.split(r"[.\n!?]", body.strip(), 1)[0].strip()[:80]
+                          if body.strip() else f"{product}：让日常任务更轻松"),
+            "differentiators": points[:2],
+        },
+        "value": {
+            "summary": f"围绕「{product}」提炼 {len(points)} 条核心价值主张，按信息密度排序。",
+            "points": [{"point": p, "type": "benefit", "strength": "中", "evidence": "本地抽取"}
+                       for p in points],
+        },
+        "proof": {
+            "summary": (f"页面给出 {len(metrics)} 个量化指标。" if metrics
+                        else "页面未给出可量化证明，这是当前最大的转化阻力。"),
+            "metrics": [{"value": x, "kind": _metric_kind(x)[0], "label": _metric_kind(x)[1]} for x in metrics],
+            "endorsements": [],
+            "credibility": "需结合应用商店评分与用户量补充硬证据",
+        },
+        "audience": {
+            "primary": audience,
+            "demographics": "移动端为主，关注效率与性价比",
+            "pain_points": ["手动处理重复任务，费时费力"],
+            "secondary": "",
+        },
+        "page": {
+            "sections": ["Hero", "卖点", "证据", "CTA"],
+            "structure_note": "标准落地页结构，卖点分层表达清晰",
+            "conversion_path": "落地页 → 了解卖点 → 主 CTA 转化",
+            "primary_cta": "Get Started",
+            "tone": "专业且亲切",
+        },
+        "channel": channel,
+        "risk": {
+            "items": [{"level": "warn", "item": "需规避绝对化表述",
+                       "detail": "避免「最/第一/100%」等绝对化用词，多数平台会判违规。"}],
+            "compliance": "按品类规避医疗宣称与收益承诺，未成年人定向需避开。",
+        },
+        "gaps": {
+            "missing": (["应用商店评分/用户量硬证据"] if not metrics else []),
+            "confidence": "中",
+        },
+        "next_steps": [
+            "先以 2 个方向、每方向 2 个版位小预算测试 CTR，跑赢的再铺满版位。",
+            "补齐应用商店评分与用户量证据，强化信任背书方向。",
+        ],
+    }, ensure_ascii=False)
 
 _MOCK_COPY = {
     "en": {

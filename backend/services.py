@@ -27,11 +27,43 @@ UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 IMAGE_MAX_SIZES = int(os.getenv("IMAGE_SIZES_PER_PLATFORM", "4"))
 VIDEO_KEYFRAMES = 4
 
-SYS_FRAMEWORK = (
-    "你是海外效果广告投放策略师。基于给出的事实（产品、指标、卖点、品类），"
-    "输出严格 JSON：product, category, audience, geo, languages(列表), selling_points(3-5条，必须来自给定事实，不得编造), "
-    "platform_analysis(对象：平台名 -> 该品类在该平台的素材打法)。只输出 JSON。MARKER:FRAMEWORK_JSON"
+# V4.0 网站核心内容分析提示词：把落地页整理成可投放的结构化「网站核心内容」。
+# 覆盖 9 大模块：产品与定位 / 核心价值主张 / 信任与量化背书 / 目标人群 /
+# 落地页结构与转化路径 / 各平台投放读法 / 风险与合规 / 信息缺口 / 下一步。
+# 设计原则：所有结论必须来自给定事实与正文，缺什么写进 gaps，绝不编造。
+SYS_SITE_ANALYSIS = (
+    "你是海外效果广告投放策略师，擅长从落地页提炼「可投放」的结构化洞察。"
+    "输入：落地页 URL、页面结构（标题/H1/H2/CTA/META 描述）、正文（≤4000 字）、本地已抽取事实。"
+    "任务：把网站内容整理成「网站核心内容」，严格输出如下 JSON（只输出 JSON，不要任何解释文字，"
+    "结尾必须包含 MARKER:SITE_ANALYSIS_JSON）：\n"
+    "{\n"
+    '  "positioning": {"product": str, "category": str, "category_key": str, '
+    '"one_liner": str, "differentiators": [str×2-3]},\n'
+    '  "value": {"summary": str, "points": [{"point": str, "type": "benefit|proof|metric", '
+    '"strength": "强|中|弱", "evidence": str}×3-5]},\n'
+    '  "proof": {"summary": str, "metrics": [{"value": str, "kind": "rating|price|ratio|multiple|scale|other", '
+    '"label": str}], "endorsements": [str], "credibility": str},\n'
+    '  "audience": {"primary": str, "demographics": str, "pain_points": [str], "secondary": str},\n'
+    '  "page": {"sections": [str], "structure_note": str, "conversion_path": str, '
+    '"primary_cta": str, "tone": str},\n'
+    '  "channel": {平台名: {"tactics": str, "hook": str, "selling_point": str, "compliance_note": str}},\n'
+    '  "risk": {"items": [{"level": "error|warn|info", "item": str, "detail": str}], "compliance": str},\n'
+    '  "gaps": {"missing": [str], "confidence": "高|中|低"},\n'
+    '  "next_steps": [str×2-4]\n'
+    "}\n"
+    "硬性约束：\n"
+    "1. 所有结论必须来自给定的事实与正文，禁止编造；正文没有的信息写入 gaps.missing，不要猜测或补通用套话。\n"
+    "2. 量化背书只摘录页面真实出现的数字/奖项/媒体名/认证；「免费」表述保留原文（如 \"Try X for Free\"），不要改写实价。\n"
+    "3. category_key 从固定集合选最贴切者：fitness/finance/game/commerce/education/app/tool/travel/photo_ai/other。\n"
+    "4. value.points 每条都是一条可独立成立的卖点/主张；strength 按「能否直接当素材标题」判：有数字或权威背书为强，纯描述为中。\n"
+    "5. channel 聚焦「素材打法」：创意形式、前 3 秒钩子、主推卖点、需规避的合规点；至少覆盖 Facebook/Google/TikTok/Unity/AppLovin/Moloco/Mintegral/Adsterra。\n"
+    "6. risk 结合品类给真实拒登点（医疗宣称、收益承诺、虚构倒计时、未成年人定向、未授权数据等）；level 按严重度 error/warn/info。\n"
+    "7. next_steps 给投放侧可执行动作（补素材、A/B 方向、合规改写、落地页优化）。\n"
+    "8. 输出前确认 JSON 合法，结尾必须包含 MARKER:SITE_ANALYSIS_JSON。"
 )
+
+# 旧版基础框架提示词（仅用于兼容，已被 SYS_SITE_ANALYSIS 取代）；保留常量避免引用断裂。
+SYS_FRAMEWORK = SYS_SITE_ANALYSIS
 SYS_ANGLE = (
     "你是效果广告创意总监。基于产品事实，给出 6 个互不重复的创意方向。严格 JSON："
     '{"angles":[{"key":"pain|benefit|proof|curiosity|ugc|promo","name":"中文名","insight":"为什么这个角度对这个产品有效",'
@@ -172,6 +204,102 @@ async def fetch_page_text(url: str) -> str:
     return (await fetch_page(url))["text"]
 
 
+def build_site_prompt(page: dict, text: str, facts: dict, url: str = "") -> str:
+    """构造网站核心内容分析的用户提示词：页面结构 + 正文 + 本地已抽取事实（以此为准）。"""
+    pf = {
+        "product": facts.get("product"),
+        "category": facts.get("category"),
+        "domain": facts.get("domain"),
+        "audience": facts.get("audience"),
+        "geo": facts.get("geo"),
+        "languages": facts.get("languages"),
+        "selling_points": facts.get("selling_points"),
+        "metrics": facts.get("metrics"),
+        "platform_analysis": facts.get("platform_analysis"),
+    }
+    return (
+        f"落地页 URL: {url or page.get('final_url') or '无'}\n"
+        f"页面结构: 标题={page.get('title') or '无'}；"
+        f"H1={page.get('h1') or '无'}；H2={page.get('h2') or '无'}；"
+        f"CTA={page.get('ctas') or '无'}；META描述={page.get('description') or '无'}\n"
+        f"正文:\n{(text or '')[:4000]}\n\n"
+        "### 本地已抽取事实（JSON，以此为准，不要编造）\n"
+        f"{json.dumps(pf, ensure_ascii=False)}\n\n"
+        "请产出网站核心内容 JSON。"
+    )
+
+
+def _local_site_analysis(facts: dict, page: dict) -> dict:
+    """无模型/模型失败时的兜底：用本地事实构造自洽的 9 模块结构化分析。"""
+    points = [str(x) for x in (facts.get("selling_points") or []) if x]
+    metrics = [str(x) for x in (facts.get("metrics") or []) if x]
+    h1 = (page or {}).get("h1") or []
+    title = (page or {}).get("title") or ""
+    claim = h1[0] if h1 else (title.split("|")[0].split("—")[0].strip() if title else "")
+    notes = facts.get("platform_analysis") or {}
+    channel = {k: {"tactics": v, "hook": "", "selling_point": "", "compliance_note": ""}
+               for k, v in notes.items()}
+    return {
+        "positioning": {
+            "product": facts.get("product"),
+            "category": facts.get("category"),
+            "category_key": facts.get("domain") or "app",
+            "one_liner": claim,
+            "differentiators": points[:2],
+        },
+        "value": {
+            "summary": f"共 {len(points)} 条卖点，按信息密度排序。",
+            "points": [{"point": p, "type": "benefit", "strength": "中", "evidence": "本地抽取"}
+                       for p in points],
+        },
+        "proof": {
+            "summary": (f"识别到 {len(metrics)} 个量化指标。" if metrics
+                        else "页面没有给出可量化证明，这是当前最大的转化阻力。"),
+            "metrics": [{"value": m, "kind": "scale", "label": "量化"} for m in metrics],
+            "endorsements": [],
+            "credibility": "来自本地抽取",
+        },
+        "audience": {
+            "primary": facts.get("audience") or "",
+            "demographics": "",
+            "pain_points": [],
+            "secondary": "",
+        },
+        "page": {
+            "sections": list(h1) + list((page or {}).get("h2") or []),
+            "structure_note": "",
+            "conversion_path": "落地页 → 主 CTA 转化",
+            "primary_cta": (((page or {}).get("ctas") or ["—"])[0]
+                            if (page or {}).get("ctas") else "—"),
+            "tone": "",
+        },
+        "channel": channel,
+        "risk": {"items": [], "compliance": ""},
+        "gaps": {"missing": [], "confidence": "中"},
+        "next_steps": [],
+        "_source": "local",
+    }
+
+
+async def analyze_site(db, page, text, facts, url: str = "") -> dict:
+    """调用大模型产出完整网站核心内容（9 模块）。
+
+    真实模型可用时优先用真实模型；解析失败或无模型（走 Mock 兜底）时，
+    由 `_local_site_analysis` 用本地事实构造结构化结果，保证下游报告始终有内容。
+    """
+    prompt = build_site_prompt(page, text, facts, url)
+    llm = get_llm(db, "analysis")  # 真实模型（带 Mock 兜底）或 Mock
+    try:
+        resp = await llm.chat(SYS_SITE_ANALYSIS, prompt)
+        sa = parse_json(resp)
+        if isinstance(sa, dict) and sa.get("positioning"):
+            sa["_source"] = "llm" if has_real(db, "analysis") else "mock"
+            return sa
+    except Exception as e:
+        print("[analyze_site] llm failed:", str(e)[:140])
+    return _local_site_analysis(facts, page)
+
+
 async def analyze_landing_page(db, url, text, page=None) -> Framework:
     """抓取（无正文时）→ 本地抽取 → 可选模型润色 → 落库。
 
@@ -192,27 +320,27 @@ async def analyze_landing_page(db, url, text, page=None) -> Framework:
 
     facts = analyze_local(text or "", url or "")     # 永远先做本地抽取
     data = dict(facts)
-    if has_real(db, "analysis"):
-        llm = get_llm(db, "analysis")
-        prompt = (
-            f"落地页 URL: {url or '无'}\n"
-            f"页面结构: 标题={page.get('title') or '无'}；H1={page.get('h1') or '无'}；"
-            f"H2={page.get('h2') or '无'}；CTA={page.get('ctas') or '无'}\n"
-            f"正文:\n{(text or '')[:4000]}\n\n"
-            f"本地已抽取的事实（以此为准，不要编造）：\n"
-            f"产品: {facts['product']}\n品类: {facts['category']}\n"
-            f"卖点: {facts['selling_points']}\n指标: {facts['metrics']}\n"
-            "请产出推广框架 JSON。"
-        )
-        try:
-            refined = parse_json(await llm.chat(SYS_FRAMEWORK, prompt))
-            if refined.get("selling_points"):
-                data.update({k: refined[k] for k in
-                             ("product", "category", "audience", "geo", "languages",
-                              "selling_points", "platform_analysis") if refined.get(k)})
-                data["analyzer"] = "llm+local"
-        except Exception:
-            pass
+    # V4.0：调用大模型产出完整「网站核心内容」（9 模块），失败/未配置模型时回退本地结构化构造。
+    site = await analyze_site(db, page, text, facts, url or "")
+    if site.get("positioning"):
+        pos = site["positioning"]
+        if pos.get("product"):
+            data["product"] = pos["product"]
+        if pos.get("category"):
+            data["category"] = pos["category"]
+        if pos.get("category_key"):
+            data["domain"] = pos["category_key"]
+    if site.get("value", {}).get("points"):
+        sp = [p.get("point") for p in site["value"]["points"] if p.get("point")]
+        if sp:
+            data["selling_points"] = sp
+    if site.get("proof", {}).get("metrics"):
+        ms = [m.get("value") for m in site["proof"]["metrics"] if m.get("value")]
+        if ms:
+            data["metrics"] = ms
+    if site.get("audience", {}).get("primary"):
+        data["audience"] = site["audience"]["primary"]
+    data["analyzer"] = "llm+local" if has_real(db, "analysis") else "local"
 
     evidence = dict(data.get("evidence") or {})
     if page:
@@ -234,6 +362,7 @@ async def analyze_landing_page(db, url, text, page=None) -> Framework:
         brand_color=data.get("brand_color"),
         assets=data.get("assets"),
         analyzer=data.get("analyzer", "local"),
+        site_analysis=site,
     )
     db.add(fw); db.commit(); db.refresh(fw)
     lp.parsed_json = {**data, "page": page_slim} if page_slim else data

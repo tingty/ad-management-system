@@ -32,6 +32,8 @@ class Framework(Base):
     brand_color = Column(String(16), nullable=True)
     assets = Column(JSON, nullable=True)
     analyzer = Column(String(16), nullable=True)
+    # V4.0 网站核心内容：大模型按提示词产出的完整 9 模块结构化分析（落地页抓取与分析模块）
+    site_analysis = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=utcnow)
 
     @property

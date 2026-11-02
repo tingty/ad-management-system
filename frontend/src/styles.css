@@ -418,6 +418,9 @@ select {
 .plat-name { font-size: 12.8px; font-weight: 700; color: var(--primary); }
 .plat-role { font-weight: 400; font-size: 11.5px; color: var(--muted); margin-left: 8px; }
 .plat-note { font-size: 12.5px; line-height: 1.6; margin-top: 3px; color: #33414f; }
+.plat-sub { font-size: 12px; line-height: 1.55; margin-top: 4px; color: #475569; padding-left: 2px; border-left: 2px solid #e2e8f0; }
+.plat-sub b { color: var(--primary); font-weight: 600; }
+.plat-sub.warn { border-left-color: #f0b429; color: #8a5a00; }
 
 .hook-row { padding: 8px 0; border-top: 1px solid #f0f4f8; }
 .hook-row:first-of-type { border-top: none; }

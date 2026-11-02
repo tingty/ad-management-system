@@ -27,6 +27,7 @@ class FrameworkOut(BaseModel):
     brand_color: Optional[str] = None
     assets: Optional[Any] = None
     analyzer: Optional[str] = None
+    site_analysis: Optional[Any] = None
     evidence: Optional[Any] = None
     class Config:
         from_attributes = True

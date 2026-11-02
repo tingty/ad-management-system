@@ -237,7 +237,12 @@ def _price_frag(s: str, m, pad: int = 24) -> str:
 
 
 def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> dict:
-    """生成结构化推广产品分析报告。所有结论都来自 fw 的抽取结果，不补通用套话。"""
+    """生成结构化推广产品分析报告。
+
+    V4.0：当 fw.site_analysis（大模型按提示词产出的网站核心内容）存在时，优先用它渲染
+    9 大模块；缺失的维度回退到本地规则计算，并保留可信度评分 / 合规红线 / 缺口检测等
+    交叉校验，保证没有模型也能给出可用报告。
+    """
     page = page or (fw.evidence or {}).get("page") or {}
     chars = int(page.get("chars") or 0)
     fetched = bool(page.get("fetched")) if page else bool(fw.selling_points)
@@ -252,23 +257,63 @@ def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> d
         dmeta = {"label": fw.category or dmeta["label"], "task": dmeta.get("task", ""),
                  "audience_hint": dmeta.get("audience_hint", ""), "matched": dmeta.get("matched", [])}
 
+    site = fw.site_analysis or {}
+    site_val = site.get("value") or {}
+    site_prf = site.get("proof") or {}
+    site_aud = site.get("audience") or {}
+    site_pg = site.get("page") or {}
+    site_ch = site.get("channel") or {}
+    site_risk = site.get("risk") or {}
+    site_gap = site.get("gaps") or {}
+    site_ns = site.get("next_steps") or []
+    site_src = site.get("_source") or "local"
+
     score, score_label, reasons = _confidence(
         chars, points, metrics, audience_src,
         page.get("h1") or [], page.get("h2") or [], page.get("ctas") or [], fetched)
 
+    # ---------------- 核心价值主张 ----------------
     value_props = []
-    for i, p in enumerate(points, 1):
-        t = _prop_type(p)
-        value_props.append({
-            "rank": i, "point": p, "type": t, "strength": _prop_strength(p, t),
-            "evidence": "原文句子" if fetched else "用户输入/推断",
-        })
+    if site_val.get("points"):
+        for i, p in enumerate(site_val["points"], 1):
+            if not isinstance(p, dict):
+                continue
+            pt = (p.get("point") or "").strip()
+            if not pt:
+                continue
+            t = p.get("type") or _prop_type(pt)
+            st = p.get("strength") or _prop_strength(pt, t)
+            evd = p.get("evidence") or ("大模型分析" if site_src == "llm" else "本地抽取")
+            value_props.append({"rank": i, "point": pt, "type": t, "strength": st, "evidence": evd})
+    if not value_props:
+        for i, p in enumerate(points, 1):
+            t = _prop_type(p)
+            value_props.append({
+                "rank": i, "point": p, "type": t, "strength": _prop_strength(p, t),
+                "evidence": "原文句子" if fetched else "用户输入/推断",
+            })
+    value_summary = site_val.get("summary") or (
+        f"共 {len(value_props)} 条，按信息密度排序；强弱代表它能不能直接当素材标题用。")
 
-    metric_rows = [_metric_detail(m) for m in metrics]
+    # ---------------- 信任与量化背书 ----------------
+    metric_rows = []
+    if site_prf.get("metrics"):
+        for m in site_prf["metrics"]:
+            if not isinstance(m, dict) or not m.get("value"):
+                continue
+            d = _metric_detail(str(m["value"]))
+            metric_rows.append({
+                "value": str(m["value"]),
+                "kind": m.get("kind") or d["kind"],
+                "label": m.get("label") or d["label"],
+            })
+    if not metric_rows:
+        metric_rows = [_metric_detail(m) for m in metrics]
     rating = next((m for m in metric_rows if m["kind"] == "rating"), None)
     scale = [m for m in metric_rows if m["kind"] == "scale"]
     ratios = [m for m in metric_rows if m["kind"] == "ratio"]
     prices = [m for m in metric_rows if m["kind"] == "price"]
+    endorsements = [str(x) for x in (site_prf.get("endorsements") or []) if x]
 
     h1 = [x for x in (page.get("h1") or []) if x]
     title = page.get("title") or ""
@@ -279,7 +324,6 @@ def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> d
 
     # 价格行：metric 只认「数字 + 单位」，Try Calm for Free 这类纯免费表述抓不到，
     # 这里回查页面关键位置，避免「正文写了免费、背书却写未识别」自相矛盾。
-    # 优先取转化按钮原文——CTA 是最干净的免费信号，不会和别的小标题拼在一起。
     if prices:
         prices_text = " · ".join(m["value"] for m in prices)
         prices_note = "有价格才能做促销角标"
@@ -299,12 +343,78 @@ def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> d
             prices_text = "未识别"
             prices_note = "有价格才能做促销角标"
 
-    # 各平台读法：优先用框架里按品类生成的分析，再补平台角色
-    notes = dict(fw.platform_analysis or PLATFORM_NOTES.get(domain, PLATFORM_NOTES["app"]))
-    platform_rows = [{"platform": k, "note": v, "role": PLATFORM_ROLE.get(k, "")}
-                     for k, v in notes.items()]
+    proof_summary = (site_prf.get("summary") or site_prf.get("credibility") or
+                    ((f"识别到 {len(metrics)} 个量化指标" + ("，含评分 " + rating["value"] if rating else ""))
+                     if metrics else "页面没有给出可量化证明，这是当前最大的转化阻力。"))
 
-    gaps = _gaps(fw, page, chars, fetched)
+    # ---------------- 目标人群 ----------------
+    audience_primary = site_aud.get("primary") or audience
+    audience_demo = site_aud.get("demographics") or ""
+    audience_pain = [str(x) for x in (site_aud.get("pain_points") or []) if x]
+    audience_secondary = site_aud.get("secondary") or ""
+
+    # ---------------- 落地页结构与转化路径 ----------------
+    page_sections = site_pg.get("sections") or (list(h1) + list((page.get("h2") or [])[:6]))
+    conversion_path = site_pg.get("conversion_path") or ""
+    primary_cta = site_pg.get("primary_cta") or (
+        ((page.get("ctas") or ["—"])[0]) if page.get("ctas") else "—")
+    tone = site_pg.get("tone") or ""
+    structure_note = site_pg.get("structure_note") or ""
+
+    # ---------------- 各平台投放读法 ----------------
+    platform_rows = []
+    if site_ch:
+        for k, v in site_ch.items():
+            if not isinstance(v, dict):
+                continue
+            platform_rows.append({
+                "platform": k,
+                "note": v.get("tactics") or "",
+                "role": PLATFORM_ROLE.get(k, ""),
+                "hook": v.get("hook") or "",
+                "selling_point": v.get("selling_point") or "",
+                "compliance_note": v.get("compliance_note") or "",
+            })
+    if not platform_rows:
+        notes = dict(fw.platform_analysis or PLATFORM_NOTES.get(domain, PLATFORM_NOTES["app"]))
+        platform_rows = [{"platform": k, "note": v, "role": PLATFORM_ROLE.get(k, "")}
+                         for k, v in notes.items()]
+
+    # ---------------- 风险与合规（大模型 + 品类红线交叉校验）----------------
+    risks = []
+    for r in (site_risk.get("items") or []):
+        if not isinstance(r, dict) or not r.get("item"):
+            continue
+        risks.append({"level": r.get("level") or "warn", "item": r["item"],
+                      "detail": r.get("detail") or ""})
+    risks.extend(_compliance(domain, points))
+    _seen = set()
+    dedup_risks = []
+    for r in risks:
+        key = (r["level"], r["item"])
+        if key in _seen:
+            continue
+        _seen.add(key)
+        dedup_risks.append(r)
+    risks = dedup_risks
+
+    # ---------------- 信息缺口（大模型 + 规则检测）----------------
+    gaps = []
+    for g in (site_gap.get("missing") or []):
+        gaps.append({"level": "info", "item": "信息缺口", "impact": str(g)})
+    gaps.extend(_gaps(fw, page, chars, fetched))
+    _gseen = set()
+    dedup_gaps = []
+    for g in gaps:
+        key = (g["level"], g["item"])
+        if key in _gseen:
+            continue
+        _gseen.add(key)
+        dedup_gaps.append(g)
+    gaps = dedup_gaps
+
+    # ---------------- 下一步（大模型 + 规则补充）----------------
+    actions = list(site_ns) if site_ns else []
     angle_rows = []
     if angles:
         # 推荐方向：命中该品类常见瓶颈的排前面（缺失证明时优先 proof，等等）
@@ -318,13 +428,28 @@ def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> d
                 "insight": a.insight or "", "template": a.template or "",
                 "kpi": a.kpi or "", "recommended": a.key in prefer[:2],
             })
+    if not actions:
+        if angle_rows:
+            rec = [a["name"] for a in angle_rows if a["recommended"]][:2]
+            actions.append(f"先用「{' + '.join(rec)}」两个方向、每方向 2 个版位小预算测 CTR，"
+                           f"跑赢的再铺满版位。")
+        if gaps:
+            worst = [g for g in gaps if g["level"] in ("error", "warn")]
+            if worst:
+                actions.append(f"先补「{worst[0]['item']}」，否则相关方向的素材会缺依据。")
+        if metric_rows:
+            actions.append(f"数字类素材优先用 {metric_rows[0]['value']}（{metric_rows[0]['label']}），"
+                           f"但必须能回溯到落地页。")
+        actions.append("竖版 1080x1920 优先（Reels/Stories/激励视频），再补 4:5 与 1:1。")
 
-    risks = _compliance(domain, points)
-
+    # ---------------- 组装 9 模块 ----------------
+    pos_one_liner = site.get("positioning", {}).get("one_liner") or claim
+    pos_diff = site.get("positioning", {}).get("differentiators") or []
     sections = [
         {"key": "positioning", "title": "产品与定位",
-         "summary": f"{fw.product} 属于{dmeta.get('label', fw.category or '未分类')}；"
-                    f"页面主张是「{claim}」" if claim else f"{fw.product} 的定位未在页面上明确表达。",
+         "summary": (f"{fw.product} 属于{dmeta.get('label', fw.category or '未分类')}；"
+                     f"页面主张是「{pos_one_liner}」") if pos_one_liner
+                    else f"{fw.product} 的定位未在页面上明确表达。",
          "rows": [
              {"label": "产品", "value": fw.product, "note": f"来源：{(ev.get('product') or {}).get('source', '—')}"},
              {"label": "品类", "value": fw.category or "未识别",
@@ -332,15 +457,14 @@ def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> d
               if (ev.get("category") or {}).get("matched_words") else "按正文语义判断"},
              {"label": "主标题（H1）", "value": h1[0] if h1 else "页面无 H1", "note": "落地页第一视觉层级说的话"},
              {"label": "页面标题", "value": title or "—", "note": "浏览器标题，通常含品牌与品类词"},
-             {"label": "差异化线索", "value": "；".join(diffs[:2]) if diffs else "未发现明确的对比/差异化表述",
-              "note": "来自正文中的对比句；没有就说明产品靠品类共性卖，创意要自己造差异"},
+             {"label": "差异化线索", "value": ("；".join(pos_diff) if pos_diff else
+              ("；".join(diffs[:2]) if diffs else "未发现明确的对比/差异化表述")),
+              "note": "来自分析（差异化 / 对比句）；没有就说明产品靠品类共性卖，创意要自己造差异"},
          ]},
         {"key": "value", "title": "核心价值主张",
-         "summary": f"共 {len(value_props)} 条，按信息密度排序；强弱代表它能不能直接当素材标题用。",
-         "items": value_props},
+         "summary": value_summary, "items": value_props},
         {"key": "proof", "title": "信任与量化背书",
-         "summary": (f"识别到 {len(metrics)} 个量化指标" + ("，含评分 " + rating["value"] if rating else ""))
-         if metrics else "页面没有给出可量化证明，这是当前最大的转化阻力。",
+         "summary": proof_summary,
          "rows": [
              {"label": "评分", "value": rating["value"] if rating else "未识别",
               "note": "只有原文出现才会用于评分卡素材"},
@@ -349,46 +473,39 @@ def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> d
              {"label": "比例类", "value": " · ".join(m["value"] for m in ratios) or "未识别",
               "note": "提升幅度、留存率等，需确认统计口径"},
              {"label": "价格信息", "value": prices_text, "note": prices_note},
-         ]},
+         ] + ([{"label": "背书/媒体/认证", "value": "；".join(endorsements), "note": "来自页面真实出现的第三方证明"}]
+             if endorsements else [])},
         {"key": "audience", "title": "目标人群",
-         "summary": audience or "未识别到人群描述。",
-         "rows": [
-             {"label": "人群", "value": audience or "—", "note": f"来源：{audience_src}"},
+         "summary": audience_primary or "未识别到人群描述。",
+         "rows": ([
+             {"label": "人群", "value": audience_primary or "—", "note": f"来源：{audience_src}"},
+             {"label": "人口/心理特征", "value": audience_demo or "—", "note": "用于画像与定向包定制"},
+         ] + ([{"label": "痛点", "value": "；".join(audience_pain), "note": "创意钩子切入点"}] if audience_pain else [])
+             + ([{"label": "次要人群", "value": audience_secondary, "note": "可分流投放的人群"}] if audience_secondary else [])
+             + [
              {"label": "典型任务", "value": dmeta.get("task") or "—", "note": "该品类用户想解决的原始问题"},
              {"label": "地区", "value": fw.geo or "未识别", "note": "仅按原文提及判断，不代表实际投放地区"},
              {"label": "语言建议", "value": " / ".join(fw.languages or ["en"]), "note": "按原文语言推断"},
-         ]},
+         ])},
         {"key": "page", "title": "落地页结构与转化路径",
-         "summary": (f"页面 {chars:,} 字，{page.get('images', 0)} 张图"
-                     + ("，含视频" if page.get("has_video") else "")
-                     + (f"，主按钮「{(page.get('ctas') or ['—'])[0]}」" if page.get("ctas") else "，未识别到明确按钮"))
-         if fetched else "未抓到页面，结构分析不可用。",
-         "rows": [
+         "summary": (structure_note or
+                     (f"页面 {chars:,} 字，{page.get('images', 0)} 张图"
+                      + ("，含视频" if page.get("has_video") else "")
+                      + (f"，主按钮「{(page.get('ctas') or ['—'])[0]}」" if page.get("ctas") else "，未识别到明确按钮")))
+                     if fetched else "未抓到页面，结构分析不可用。",
+         "rows": ([
+             {"label": "信息区块", "value": " ｜ ".join(page_sections[:6]) or "无", "note": "落地页信息架构顺序"},
+             {"label": "转化路径", "value": conversion_path or "未识别", "note": "用户从进入到转化的主路径"},
+             {"label": "主 CTA", "value": primary_cta, "note": "素材 CTA 应与落地页按钮动作一致，避免点击后预期落差"},
+         ] + ([{"label": "语气", "value": tone, "note": "文案与素材的整体调性"}] if tone else []) + [
              {"label": "H1", "value": h1[0] if h1 else "—", "note": "首屏主张"},
-             {"label": "H2 分层", "value": " ｜ ".join((page.get("h2") or [])[:5]) or "无",
-              "note": "卖点是否分层表达"},
-             {"label": "转化按钮", "value": " · ".join(page.get("ctas") or []) or "未识别",
-              "note": "素材 CTA 应与落地页按钮动作一致，避免点击后预期落差"},
+             {"label": "H2 分层", "value": " ｜ ".join((page.get("h2") or [])[:5]) or "无", "note": "卖点是否分层表达"},
              {"label": "META 描述", "value": page.get("description") or "—", "note": "搜索引擎摘要"},
-         ]},
+         ])},
         {"key": "channel", "title": "各平台投放读法",
-         "summary": "同一产品在不同流量场的打法不一样，下面是按品类给出的差异，不是通用建议。",
+         "summary": "同一产品在不同流量场的打法不一样，下面是按品类/产品给出的差异，不是通用建议。",
          "items": platform_rows},
     ]
-
-    actions = []
-    if angle_rows:
-        rec = [a["name"] for a in angle_rows if a["recommended"]][:2]
-        actions.append(f"先用「{' + '.join(rec)}」两个方向、每方向 2 个版位小预算测 CTR，"
-                       f"跑赢的再铺满版位。")
-    if gaps:
-        worst = [g for g in gaps if g["level"] in ("error", "warn")]
-        if worst:
-            actions.append(f"先补「{worst[0]['item']}」，否则相关方向的素材会缺依据。")
-    if metric_rows:
-        actions.append(f"数字类素材优先用 {metric_rows[0]['value']}（{metric_rows[0]['label']}），"
-                       f"但必须能回溯到落地页。")
-    actions.append("竖版 1080x1920 优先（Reels/Stories/激励视频），再补 4:5 与 1:1。")
 
     return {
         "framework_id": fw.id,
@@ -409,10 +526,13 @@ def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> d
         "value_props": value_props,
         "proof": {"metrics": metric_rows, "rating": rating,
                   "scale": scale, "ratios": ratios, "prices": prices},
-        "audience": {"primary": audience, "source": audience_src,
-                     "geo": fw.geo or "", "languages": fw.languages or ["en"]},
+        "audience": {"primary": audience_primary, "source": audience_src,
+                     "geo": fw.geo or "", "languages": fw.languages or ["en"],
+                     "demographics": audience_demo,
+                     "pain_points": audience_pain,
+                     "secondary": audience_secondary},
         "creative": {"angles": angle_rows,
-                     "platform_notes": notes,
+                     "platform_notes": {r["platform"]: r["note"] for r in platform_rows},
                      "hooks": [a["hook"] for a in angle_rows if a.get("hook")][:4]},
         "risks": risks,
         "gaps": gaps,
@@ -440,9 +560,16 @@ def report_markdown(report: dict, product: str = "") -> str:
             lines.append(f"- **{r['label']}**：{r['value']}" + (f"（{r['note']}）" if r.get("note") else ""))
         for it in sec.get("items") or []:
             if "point" in it:
-                lines.append(f"{it['rank']}. {it['point']} —— 类型 {it['type']}，强度 {it['strength']}")
+                lines.append(f"{it['rank']}. {it['point']} —— 类型 {it['type']}，强度 {it['strength']}"
+                             + (f"（依据：{it['evidence']}）" if it.get("evidence") else ""))
             elif "platform" in it:
                 lines.append(f"- **{it['platform']}**：{it['note']}")
+                if it.get("hook"):
+                    lines.append(f"  - 前3秒钩子：{it['hook']}")
+                if it.get("selling_point"):
+                    lines.append(f"  - 主推卖点：{it['selling_point']}")
+                if it.get("compliance_note"):
+                    lines.append(f"  - 合规提示：{it['compliance_note']}")
             elif "hook" in it:
                 lines.append(f"- **{it['name']}**（{it['kpi']}）钩子：{it['hook']}｜{it['insight']}")
         lines.append("")
