@@ -381,7 +381,9 @@ def local_angles(fw, lang="en") -> list[dict]:
         out.append({
             "key": a["key"], "name": a["name"], "insight": a["insight"],
             "visual": a["visual"], "template": a["template"], "kpi": a["kpi"],
-            "platform_fit": a["platform_fit"], "hook": kit["headlines"][0], "sort": i,
+            "platform_fit": a["platform_fit"], "hook": kit["headlines"][0],
+            "hook_type": a.get("hook_type"), "storyboard": kit.get("storyboard"),
+            "sort": i,
         })
     return out
 
@@ -397,7 +399,7 @@ async def plan_angles(db, fw, platforms=None, extra=None, lang=None) -> list[Ang
             f"产品: {fw.product}\n品类: {fw.category}\n受众: {fw.audience}\n地区: {fw.geo}\n"
             f"卖点: {fw.selling_points}\n可量化指标: {fw.metrics}\n目标语言: {lang}\n"
             f"投放平台: {platforms or '未知'}\n额外要求: {extra or '无'}\n"
-            "给出 6 个创意方向，key 只能用 pain/benefit/proof/curiosity/ugc/promo。"
+            "给出 6-8 个创意方向，key 只能用 pain/benefit/proof/curiosity/ugc/promo/scenario/comparison。"
         )
         try:
             resp = parse_json(await llm.chat(SYS_ANGLE, prompt))

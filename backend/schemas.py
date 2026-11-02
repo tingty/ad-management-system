@@ -137,6 +137,8 @@ class AngleOut(BaseModel):
     visual: Optional[str] = None
     template: Optional[str] = None
     hook: Optional[str] = None
+    hook_type: Optional[str] = None
+    storyboard: Optional[Any] = None
     kpi: Optional[str] = None
     platform_fit: Optional[Any] = None
     sort: int = 0

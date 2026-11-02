@@ -59,6 +59,8 @@ export interface Angle {
   visual?: string
   template?: string
   hook?: string
+  hook_type?: string
+  storyboard?: Array<{ t?: string; visual?: string; copy?: string }>
   kpi?: string
   platform_fit?: string[]
   sort: number

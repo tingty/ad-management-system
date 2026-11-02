@@ -425,6 +425,7 @@ def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> d
         for a in ordered:
             angle_rows.append({
                 "key": a.key, "name": a.name, "hook": a.hook or "",
+                "hook_type": a.hook_type or "", "storyboard": a.storyboard or [],
                 "insight": a.insight or "", "template": a.template or "",
                 "kpi": a.kpi or "", "recommended": a.key in prefer[:2],
             })

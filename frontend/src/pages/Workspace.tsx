@@ -6,7 +6,7 @@ import {
 
 const TEMPLATE_LABEL: Record<string, string> = {
   bigtype: '纯字体版式', stat: '数字主体', rating: '评分卡', promo: '折扣角标',
-  ugc: 'UGC 手机框', compare: '前后对比',
+  ugc: 'UGC 手机框', compare: '前后对比', scenario: '场景叙事',
 }
 
 const TYPE_LABEL: Record<string, string> = { metric: '量化', proof: '背书', benefit: '价值' }
@@ -579,10 +579,24 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
                     <span className="ac-check">{on ? '✓' : ''}</span>
                     <b>{a.name}</b>
                     {rec && <span className="pill ok">推荐</span>}
+                    {a.hook_type && <span className="ac-tpl">{a.hook_type}</span>}
                     <span className="ac-tpl">{TEMPLATE_LABEL[a.template || ''] || a.template}</span>
                   </div>
                   <div className="ac-hook">{a.hook}</div>
                   <div className="ac-insight">{a.insight}</div>
+                  {a.storyboard && a.storyboard.length > 0 && (
+                    <div className="ac-sb">
+                      <div className="muted sb-title">分镜脚本</div>
+                      <ol className="sb-list">
+                        {a.storyboard.map((s, i) => (
+                          <li key={i}>
+                            <span className="sb-t">{s.t}</span>
+                            <span className="sb-c">{s.copy}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
                   <div className="ac-meta">
                     <span className="pill off">{a.kpi}</span>
                     {(a.platform_fit || []).slice(0, 3).map(p => <span key={p} className="pill off">{p}</span>)}

@@ -87,6 +87,8 @@ class Angle(Base):
     visual = Column(Text, nullable=True)
     template = Column(String(32), nullable=True)
     hook = Column(Text, nullable=True)
+    hook_type = Column(String(32), nullable=True)
+    storyboard = Column(JSON, nullable=True)
     kpi = Column(String(64), nullable=True)
     platform_fit = Column(JSON, nullable=True)
     sort = Column(Integer, default=0)
