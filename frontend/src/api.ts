@@ -232,6 +232,10 @@ export interface AnglePreview {
   template: string
   kpi: string
   recommended: boolean
+  /** 推荐分（由网站分析的受众/价值/背书/风险信号加权得出） */
+  score?: number
+  /** 命中了哪些信号，逐条可回溯 */
+  reasons?: string[]
 }
 
 export interface AnalysisReport {

@@ -531,3 +531,16 @@ select {
 .sb-list li { font-size: 11.5px; line-height: 1.5; color: var(--text); margin: 1px 0; }
 .sb-t { display: inline-block; min-width: 40px; color: var(--primary2); font-weight: 600; margin-right: 6px; }
 .sb-c { color: var(--muted); }
+
+/* 创意方向推荐依据（结合网站分析的受众/价值/背书/风险信号） */
+.ac-why {
+  display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap;
+  margin: 6px 0 2px; padding: 6px 8px; border-radius: 6px;
+  background: #eef6f1; font-size: 11.5px; line-height: 1.55; color: #2f6b4f;
+}
+.ac-why .pill { flex: none; }
+.hook-why {
+  margin-top: 6px; padding: 6px 8px; border-radius: 6px;
+  background: #eef6f1; font-size: 11.5px; line-height: 1.55; color: #2f6b4f;
+}
+.hook-why .pill { margin-left: 8px; }

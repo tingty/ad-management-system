@@ -133,6 +133,11 @@ function ReportItem({ it }: { it: any }) {
         </div>
         <div className="hook-text">“{it.hook}”</div>
         <div className="hook-ins">{it.insight}</div>
+        {it.recommended && it.reasons && it.reasons.length > 0 && (
+          <div className="hook-why">推荐依据：{it.reasons.join('；')}
+            {typeof it.score === 'number' && <span className="pill off">推荐分 {it.score}</span>}
+          </div>
+        )}
       </div>
     )
   }
@@ -571,7 +576,8 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
           <div className="angle-grid">
             {angles.map(a => {
               const on = picked.includes(a.key)
-              const rec = report?.creative.angles.find(x => x.key === a.key)?.recommended
+              const meta = report?.creative.angles.find(x => x.key === a.key)
+              const rec = meta?.recommended
               return (
                 <div key={a.key} className={'angle-card' + (on ? ' on' : '')}
                   onClick={() => setPicked(on ? picked.filter(x => x !== a.key) : [...picked, a.key])}>
@@ -584,6 +590,12 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
                   </div>
                   <div className="ac-hook">{a.hook}</div>
                   <div className="ac-insight">{a.insight}</div>
+                  {rec && meta?.reasons && meta.reasons.length > 0 && (
+                    <div className="ac-why">
+                      <span className="pill ok">推荐分 {meta?.score ?? 0}</span>
+                      <span>{meta.reasons.join('；')}</span>
+                    </div>
+                  )}
                   {a.storyboard && a.storyboard.length > 0 && (
                     <div className="ac-sb">
                       <div className="muted sb-title">分镜脚本</div>

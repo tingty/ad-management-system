@@ -194,8 +194,105 @@ def _gaps(fw, page, chars, fetched) -> list[dict]:
                     "impact": "说明卖点表达较散，素材需要自己重建信息层级（本工具会按方向重排）。"})
     if len(points) < 3:
         out.append({"level": "warn", "item": f"可用卖点只有 {len(points)} 条",
-                    "impact": "6 个方向的钩子会高度相似，建议先补充产品事实再批量出稿。"})
+                    "impact": "8 个方向的钩子会高度相似，建议先补充产品事实再批量出稿。"})
     return out
+
+
+# ---------------- 创意方向推荐排序 ----------------
+# 每个方向对不同信号的加减分；信号只来自 fw.site_analysis 与本地抽取事实，命中项会写进
+# angle.reasons，报告里可逐条回溯「为什么推荐它」，不做黑盒排序。
+_ANGLE_WEIGHTS = {
+    "pain":       {"pain_points": 3, "audience": 1, "no_proof": 2, "no_price": 2},
+    "scenario":   {"pain_points": 3, "audience": 2, "demographics": 1, "game": 1},
+    "benefit":    {"strong_points": 2, "metrics": 1, "value_summary": 1},
+    "proof":      {"metrics": 3, "endorsements": 2, "credibility": 1, "no_proof": -4},
+    "comparison": {"strong_points": 2, "metric_point": 2, "differentiators": 2, "metrics": 1},
+    "curiosity":  {"differentiators": 2, "strong_points": 1},
+    "ugc":        {"audience": 2, "endorsements": 1, "game": 1, "no_price": 1},
+    "promo":      {"high_risk": -3, "finance": -2},
+}
+
+_SIGNAL_LABELS = {
+    "pain_points": "页面给出明确痛点",
+    "audience": "识别到目标人群",
+    "demographics": "有人群画像特征",
+    "no_price": "页面未见价格",
+    "no_proof": "缺量化/第三方背书",
+    "strong_points": "有强卖点（含数字/背书）",
+    "metrics": "有可量化指标",
+    "metric_point": "卖点里带数字/证明",
+    "value_summary": "有明确价值主张",
+    "endorsements": "有媒体/认证背书",
+    "credibility": "有可信度表述",
+    "differentiators": "有差异化/对比线索",
+    "game": "游戏/休闲品类",
+    "high_risk": "存在合规高风险点",
+    "finance": "金融品类（承诺类表述敏感）",
+}
+
+
+def _angle_signals(site: dict, metrics: list, gaps: list) -> dict:
+    """把网站分析的受众/价值/背书/风险信号抽成布尔字典，供方向打分。"""
+    val = site.get("value") or {}
+    aud = site.get("audience") or {}
+    pos = site.get("positioning") or {}
+    prf = site.get("proof") or {}
+    risk = site.get("risk") or {}
+    points = [p for p in (val.get("points") or []) if isinstance(p, dict)]
+    missing = [str(m) for m in ((site.get("gaps") or {}).get("missing") or [])]
+    risk_items = [i for i in (risk.get("items") or []) if isinstance(i, dict)]
+    cat = (pos.get("category_key") or "").strip()
+    endorsements = [e for e in (prf.get("endorsements") or []) if e]
+    missing_proof = any(("背书" in m or "证明" in m or "指标" in m or "证据" in m)
+                        for m in missing)
+    return {
+        "pain_points": bool([p for p in (aud.get("pain_points") or []) if p]),
+        "audience": bool((aud.get("primary") or "").strip()),
+        "demographics": bool((aud.get("demographics") or "").strip()),
+        "no_price": any(g.get("item", "").startswith("未见价格") for g in gaps),
+        "no_proof": (not metrics and not endorsements) or missing_proof,
+        "strong_points": any(p.get("strength") == "强" for p in points),
+        "metrics": bool(metrics),
+        "metric_point": any(p.get("type") in ("metric", "proof") for p in points),
+        "value_summary": bool((val.get("summary") or "").strip()) or bool(points),
+        "endorsements": bool(endorsements),
+        "credibility": bool((prf.get("credibility") or "").strip()),
+        "differentiators": bool([d for d in (pos.get("differentiators") or []) if d]),
+        "game": cat == "game",
+        "high_risk": any(i.get("level") in ("error", "warn") for i in risk_items),
+        "finance": cat == "finance",
+    }
+
+
+def _rank_angles(angles, site: dict, metrics: list, gaps: list):
+    """按网站分析信号给方向打分排序，返回 [(angle, {score, reasons, recommended})]。
+
+    基础分沿用旧规则（有指标→benefit/proof/pain，无指标→pain/proof/benefit；
+    未见价格→pain/benefit/ugc），再叠加 audience/value/proof/risk 信号，
+    让 scenario（人群痛点/画像）与 comparison（强卖点/差异化）也能被推到前面。
+    """
+    sig = _angle_signals(site, metrics, gaps)
+    prefer = ["pain", "proof", "benefit"] if not metrics else ["benefit", "proof", "pain"]
+    if sig["no_price"]:
+        prefer = ["pain", "benefit", "ugc"]
+    base = {k: (3 - i) for i, k in enumerate(prefer)}
+
+    scored = []
+    for idx, a in enumerate(angles):
+        score = base.get(a.key, 0)
+        hits = []
+        for signal, weight in _ANGLE_WEIGHTS.get(a.key, {}).items():
+            if sig.get(signal):
+                score += weight
+                hits.append(f"{_SIGNAL_LABELS[signal]}{'+' if weight > 0 else ''}{weight}")
+        if score > 0 and not hits:
+            hits = ["基础推荐（指标/价格信号）"]
+        scored.append((idx, a, score, hits))
+
+    scored.sort(key=lambda t: (-t[2], t[0]))
+    top_keys = {t[1].key for t in scored[:2] if t[2] > 0}
+    return [(a, {"score": score, "reasons": hits, "recommended": a.key in top_keys})
+            for idx, a, score, hits in scored]
 
 
 def _compliance(domain: str, points: list[str]) -> list[dict]:
@@ -417,17 +514,16 @@ def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> d
     actions = list(site_ns) if site_ns else []
     angle_rows = []
     if angles:
-        # 推荐方向：命中该品类常见瓶颈的排前面（缺失证明时优先 proof，等等）
-        prefer = ["pain", "proof", "benefit"] if not metrics else ["benefit", "proof", "pain"]
-        if any(g["item"].startswith("未见价格") for g in gaps):
-            prefer = ["pain", "benefit", "ugc"]
-        ordered = sorted(angles, key=lambda a: (prefer.index(a.key) if a.key in prefer else 9))
-        for a in ordered:
+        # 推荐排序：基础规则（指标/价格缺口）+ 网站分析的受众、价值、背书、风险信号，
+        # 每个方向带 score 与 reasons，报告里可回溯「为什么推荐它」。
+        for a, meta in _rank_angles(angles, site, metrics, gaps):
             angle_rows.append({
                 "key": a.key, "name": a.name, "hook": a.hook or "",
                 "hook_type": a.hook_type or "", "storyboard": a.storyboard or [],
                 "insight": a.insight or "", "template": a.template or "",
-                "kpi": a.kpi or "", "recommended": a.key in prefer[:2],
+                "kpi": a.kpi or "",
+                "score": meta["score"], "reasons": meta["reasons"],
+                "recommended": meta["recommended"],
             })
     if not actions:
         if angle_rows:
@@ -572,7 +668,27 @@ def report_markdown(report: dict, product: str = "") -> str:
                 if it.get("compliance_note"):
                     lines.append(f"  - 合规提示：{it['compliance_note']}")
             elif "hook" in it:
-                lines.append(f"- **{it['name']}**（{it['kpi']}）钩子：{it['hook']}｜{it['insight']}")
+                flag = " ⭐推荐" if it.get("recommended") else ""
+                sc = f"（推荐分 {it['score']}）" if it.get("score") is not None else ""
+                lines.append(f"- **{it['name']}**{flag}{sc}（{it['kpi']}）钩子：{it['hook']}｜{it['insight']}")
+                if it.get("reasons"):
+                    lines.append(f"  - 推荐依据：{'；'.join(it['reasons'])}")
+        lines.append("")
+    # 创意方向不在 sections 里，单独存于 creative.angles；这里显式渲染，
+    # 否则 Markdown 导出会漏掉方向与推荐依据（旧版只留了 sections 内的分支，实为死代码）。
+    angles = (report.get("creative") or {}).get("angles") or []
+    if angles:
+        lines.append("## 创意方向（按推荐分排序）")
+        for a in angles:
+            flag = " ⭐推荐" if a.get("recommended") else ""
+            sc = f"（推荐分 {a['score']}）" if a.get("score") is not None else ""
+            lines.append(f"- **{a['name']}**{flag}{sc}（{a.get('kpi') or ''}）")
+            if a.get("hook"):
+                lines.append(f"  - 钩子：{a['hook']}")
+            if a.get("insight"):
+                lines.append(f"  - 洞察：{a['insight']}")
+            if a.get("reasons"):
+                lines.append(f"  - 推荐依据：{'；'.join(a['reasons'])}")
         lines.append("")
     if report["risks"]:
         lines.append("## 风险与合规")
