@@ -1,24 +1,22 @@
 import { useState } from 'react'
 import { api, setToken, User } from '../api'
 
-const DEMO = [
-  { u: 'admin', p: 'Admin@123', r: '管理员 · 全部权限' },
-  { u: 'manager', p: 'Manager@123', r: '投放经理 · 审阅/规格' },
-  { u: 'editor', p: 'Editor@123', r: '投放执行 · 生成/导出' },
-  { u: 'viewer', p: 'Viewer@123', r: '只读账号' },
-]
-
 export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('Admin@123')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault()
-    setBusy(true); setErr('')
+    setErr('')
+    if (!email.trim() || !password) {
+      setErr('请输入邮箱和密码')
+      return
+    }
+    setBusy(true)
     try {
-      const r = await api.login(username.trim(), password)
+      const r = await api.login(email.trim(), password)
       setToken(r.token)
       onLogin(r.user)
     } catch (e: any) {
@@ -34,10 +32,10 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
           落地页分析 → 多平台素材生成 → 素材库 → 批量 → 审阅协作
         </div>
         <form onSubmit={submit}>
-          <label>用户名</label>
-          <input type="text" value={username} onChange={e => setUsername(e.target.value)} autoFocus />
+          <label>邮箱</label>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="请输入登录邮箱" autoFocus />
           <label>密码</label>
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)} />
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="请输入密码" />
           <div style={{ marginTop: 16 }}>
             <button className="btn" type="submit" disabled={busy} style={{ width: '100%' }}>
               {busy ? '登录中…' : '登录'}
@@ -45,20 +43,6 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
           </div>
         </form>
         {err && <div className="alert err">{err}</div>}
-        <div style={{ marginTop: 18 }}>
-          <div className="muted" style={{ marginBottom: 6 }}>演示账号（点击填入）</div>
-          <table>
-            <tbody>
-              {DEMO.map(d => (
-                <tr key={d.u} style={{ cursor: 'pointer' }} onClick={() => { setUsername(d.u); setPassword(d.p) }}>
-                  <td><code>{d.u}</code></td>
-                  <td className="muted">{d.p}</td>
-                  <td className="muted">{d.r}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </div>
     </div>
   )

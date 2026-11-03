@@ -7,13 +7,14 @@ const ROLE_LABEL: Record<string, string> = {
 
 type EditorState = {
   id: number | null
+  email: string
   username: string
   password: string
   display_name: string
   role: string
 }
 
-const emptyForm: EditorState = { id: null, username: '', password: '', display_name: '', role: 'editor' }
+const emptyForm: EditorState = { id: null, email: '', username: '', password: '', display_name: '', role: 'editor' }
 
 export default function Accounts() {
   const [users, setUsers] = useState<User[]>([])
@@ -29,7 +30,7 @@ export default function Accounts() {
   const openCreate = () => { setErr(''); setOk(''); setModal({ ...emptyForm }) }
   const openEdit = (u: User) => {
     setErr(''); setOk('')
-    setModal({ id: u.id, username: u.username, password: '', display_name: u.display_name || '', role: u.role })
+    setModal({ id: u.id, email: u.email || '', username: u.username, password: '', display_name: u.display_name || '', role: u.role })
   }
 
   const save = async () => {
@@ -42,8 +43,8 @@ export default function Accounts() {
         await api.updateUser(modal.id, patch)
         setOk(`已更新账号 ${modal.username}`)
       } else {
-        await api.createUser({ username: modal.username, password: modal.password, display_name: modal.display_name, role: modal.role })
-        setOk(`已创建账号 ${modal.username}`)
+        await api.createUser({ email: modal.email.trim(), password: modal.password, display_name: modal.display_name, role: modal.role })
+        setOk(`已创建账号 ${modal.email.trim()}`)
       }
       setModal(null)
       await load()
@@ -57,7 +58,7 @@ export default function Accounts() {
     catch (e: any) { setErr(e.message) }
   }
 
-  const modalValid = !!modal && (modal.id ? true : (!!modal.username && modal.password.length >= 6))
+  const modalValid = !!modal && (modal.id ? true : (!!modal.email.trim() && modal.password.length >= 6))
 
   return (
     <div>
@@ -72,12 +73,12 @@ export default function Accounts() {
         {err && <div className="alert err">{err}</div>}
         {ok && <div className="alert ok">{ok}</div>}
         <table style={{ marginTop: 10 }}>
-          <thead><tr><th>ID</th><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>操作</th></tr></thead>
+          <thead><tr><th>ID</th><th>邮箱</th><th>显示名</th><th>角色</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>
             {users.map(u => (
               <tr key={u.id}>
                 <td>{u.id}</td>
-                <td>{u.username}</td>
+                <td>{u.email || u.username}</td>
                 <td className="muted">{u.display_name || '—'}</td>
                 <td>{ROLE_LABEL[u.role] || u.role}</td>
                 <td><span className={'pill ' + (u.active ? 'ok' : 'off')}>{u.active ? '启用' : '停用'}</span></td>
@@ -101,8 +102,14 @@ export default function Accounts() {
             <h3>{modal.id ? `编辑账号：${modal.username}` : '新建账号'}</h3>
             {!modal.id && (
               <>
-                <label>用户名</label>
-                <input type="text" value={modal.username} onChange={e => setModal({ ...modal, username: e.target.value })} />
+                <label>邮箱（登录账号，必填）</label>
+                <input type="email" value={modal.email} onChange={e => setModal({ ...modal, email: e.target.value })} placeholder="name@company.com" />
+              </>
+            )}
+            {modal.id && (
+              <>
+                <label>邮箱（登录账号）</label>
+                <input type="email" value={modal.email} disabled readOnly />
               </>
             )}
             <label>显示名</label>

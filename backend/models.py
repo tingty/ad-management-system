@@ -156,6 +156,7 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(64), unique=True, index=True)
+    email = Column(String(255), nullable=True, unique=True, index=True)   # 登录邮箱；历史账号由启动补填
     display_name = Column(String(64), nullable=True)
     password_hash = Column(String(256))
     salt = Column(String(64))

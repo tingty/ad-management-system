@@ -119,6 +119,24 @@ def seed_users():
     finally:
         db.close()
 
+
+def backfill_user_emails():
+    """历史账号（无邮箱）补填邮箱，使其可用邮箱登录：<username>@example.com。"""
+    db = SessionLocal()
+    try:
+        changed = []
+        for u in db.query(User).filter(User.email.is_(None)).all():
+            cand = f"{u.username}@example.com"
+            if db.query(User).filter(User.email == cand).first():
+                cand = f"{u.username}.{u.id}@example.com"
+            u.email = cand
+            changed.append(cand)
+        if changed:
+            db.commit()
+            print(f"[seed] 已为 {len(changed)} 个历史账号补填邮箱（用于邮箱登录）")
+    finally:
+        db.close()
+
 def seed_specs():
     db = SessionLocal()
     try:
@@ -161,6 +179,7 @@ def on_startup():
     normalize_data()  # 新列数据回填
     seed_specs()
     seed_users()
+    backfill_user_emails()
     seed_prompts()
     seed_default_model()
 

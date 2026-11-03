@@ -213,12 +213,13 @@ class SlotVersionsOut(BaseModel):
 
 # ----------------------------- V2.0 -----------------------------
 class LoginRequest(BaseModel):
-    username: str
+    email: str
     password: str
 
 class UserOut(BaseModel):
     id: int
     username: str
+    email: Optional[str] = None
     display_name: Optional[str] = None
     role: str
     active: bool = True
@@ -226,7 +227,8 @@ class UserOut(BaseModel):
         from_attributes = True
 
 class UserCreate(BaseModel):
-    username: str
+    email: str
+    username: Optional[str] = None
     password: str
     display_name: Optional[str] = None
     role: str = "editor"

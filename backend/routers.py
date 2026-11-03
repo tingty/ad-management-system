@@ -970,9 +970,9 @@ def _audit(db: Session, user, action: str, target: str = None, detail: dict = No
 
 @router.post("/auth/login")
 def login(req: LoginRequest, db: Session = Depends(get_db)):
-    u = db.query(User).filter_by(username=req.username).first()
+    u = db.query(User).filter((User.email == req.email) | (User.username == req.email)).first()
     if not u or not u.active or not verify_password(req.password, u.password_hash, u.salt):
-        raise HTTPException(401, "用户名或密码错误")
+        raise HTTPException(401, "邮箱或密码错误")
     return create_token(u)
 
 @router.get("/auth/me")
@@ -994,13 +994,23 @@ def create_user(req: UserCreate, db: Session = Depends(get_db),
         raise HTTPException(400, f"角色必须是 {ROLES}")
     if len(req.password) < 6:
         raise HTTPException(400, "密码至少 6 位")
-    if db.query(User).filter_by(username=req.username).first():
-        raise HTTPException(400, "用户名已存在")
+    email = (req.email or "").strip().lower()
+    local, sep, domain = email.partition("@")
+    if not (sep and local and "." in domain):
+        raise HTTPException(400, "请输入有效的邮箱地址")
+    if db.query(User).filter_by(email=email).first():
+        raise HTTPException(400, "该邮箱已注册")
+    # 用户名：优先用填写值，否则由邮箱本地部分派生并去重
+    username = (req.username or "").strip() or local
+    base, n = username, 1
+    while db.query(User).filter_by(username=username).first():
+        n += 1
+        username = f"{base}{n}"
     h, s = hash_password(req.password)
-    u = User(username=req.username, display_name=req.display_name or req.username,
+    u = User(email=email, username=username, display_name=req.display_name or local,
              role=req.role, password_hash=h, salt=s, active=True)
     db.add(u); db.commit(); db.refresh(u)
-    _audit(db, admin, "user.create", req.username, {"role": req.role})
+    _audit(db, admin, "user.create", email, {"role": req.role})
     return u
 
 @router.put("/users/{uid}", response_model=UserOut)

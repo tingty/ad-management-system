@@ -52,7 +52,7 @@ def decode_token(token: str) -> Optional[dict]:
 
 
 def _user_dict(u: User) -> dict:
-    return {"id": u.id, "username": u.username, "display_name": u.display_name,
+    return {"id": u.id, "username": u.username, "email": u.email, "display_name": u.display_name,
             "role": u.role, "active": bool(u.active)}
 
 # 对外别名

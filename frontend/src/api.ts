@@ -356,6 +356,7 @@ export interface Job {
 export interface User {
   id: number
   username: string
+  email?: string
   display_name?: string
   role: 'admin' | 'manager' | 'editor' | 'viewer'
   active: boolean
@@ -398,15 +399,15 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
 export const api = {
   meta: () => req<Meta>('/api/meta'),
   // 认证
-  login: (username: string, password: string) =>
+  login: (email: string, password: string) =>
     req<{ token: string; expires_in: number; user: User }>('/api/auth/login', {
-      method: 'POST', body: JSON.stringify({ username, password }),
+      method: 'POST', body: JSON.stringify({ email, password }),
     }),
   me: () => req<User>('/api/auth/me'),
   roles: () => req<{ roles: Record<string, string>; can_edit: string[]; can_review: string[] }>('/api/auth/roles'),
   // 用户管理
   users: () => req<User[]>('/api/users'),
-  createUser: (u: { username: string; password: string; display_name?: string; role: string }) =>
+  createUser: (u: { email: string; password: string; display_name?: string; role: string; username?: string }) =>
     req<User>('/api/users', { method: 'POST', body: JSON.stringify(u) }),
   updateUser: (id: number, u: Partial<User> & { password?: string }) =>
     req<User>(`/api/users/${id}`, { method: 'PUT', body: JSON.stringify(u) }),
