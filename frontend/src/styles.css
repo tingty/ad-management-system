@@ -224,10 +224,28 @@ code { background: #eef2f7; padding: 1px 5px; border-radius: 4px; font-size: 12p
   border-radius: 14px; padding: 26px 28px; box-shadow: 0 10px 30px rgba(31, 78, 121, .10);
 }
 .login-card h1 { margin: 0 0 6px; font-size: 20px; color: var(--primary); }
-.login-card input[type=password] {
-  width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
-  font-size: 14px; font-family: inherit; background: #fbfcfe;
+.login-card .field { margin-bottom: 4px; }
+.login-card label { margin: 14px 0 6px; color: var(--text); }
+.login-card input {
+  width: 100%; padding: 11px 13px; border: 1px solid var(--border); border-radius: 8px;
+  font-size: 14px; line-height: 1.4; font-family: inherit; color: var(--text);
+  background: #fbfcfe; box-sizing: border-box;
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
+.login-card input::placeholder { color: #aab4c0; }
+.login-card input:focus {
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(31, 78, 121, .12);
+}
+.login-card .pwd-wrap { position: relative; display: block; }
+.login-card .pwd-wrap input { padding-right: 44px; }
+.login-card .pwd-toggle {
+  position: absolute; top: 50%; right: 5px; transform: translateY(-50%);
+  width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--muted); cursor: pointer; border-radius: 6px;
+}
+.login-card .pwd-toggle:hover { color: var(--primary); background: #eef2f7; }
+.login-card .pwd-toggle:focus-visible { outline: 2px solid var(--primary2); outline-offset: 1px; }
 .login-card table { margin-top: 4px; }
 .login-card td { padding: 6px 8px; font-size: 12.5px; }
 
