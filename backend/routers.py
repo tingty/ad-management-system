@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import or_
 from datetime import datetime
-import io, zipfile, csv, json, os, time, re, asyncio
+import io, zipfile, csv, json, os, time, re, asyncio, shutil
 import httpx
 
 from database import get_db
@@ -314,6 +314,74 @@ def get_material(mid: int, db: Session = Depends(get_db)):
     if not m:
         raise HTTPException(404, "素材不存在")
     return m
+
+# ----------------------------- 批量删除 -----------------------------
+def _collect_campaign_files(c: Campaign):
+    """收集一个 Campaign 下所有素材的磁盘文件（图片 / 视频 / 关键帧 / 成片 / 封面）。
+
+    删除方案时必须一并清掉这些文件，否则 uploads 目录会残留孤立文件。
+    """
+    files: list[str] = []
+    dirs: set[str] = set()
+    for m in c.materials:
+        if m.file_path:
+            files.append(m.file_path)
+        content = m.content or {}
+        for kf in (content.get("keyframes") or []):
+            f = kf.get("file")
+            if f:
+                files.append(f)
+                dirs.add(os.path.dirname(f))
+        for k in ("video_file", "cover"):
+            v = content.get(k)
+            if v:
+                files.append(v)
+    return files, dirs
+
+
+@router.delete("/campaigns/batch", response_model=dict)
+def delete_campaigns_batch(body: dict, db: Session = Depends(get_db),
+                           user: User = Depends(require_roles("admin", "manager", "editor"))):
+    """批量删除历史方案（及其下全部素材与磁盘文件）。
+
+    请求体 {"ids": [int, ...]}；物理删除、不可恢复，前端须二次确认。
+    """
+    ids = body.get("ids") if isinstance(body, dict) else None
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(400, "请提供要删除的 campaign id 列表")
+    ids = [int(x) for x in ids if str(x).strip().isdigit()]
+    if not ids:
+        raise HTTPException(400, "请提供有效的 campaign id")
+    camps = db.query(Campaign).options(selectinload(Campaign.materials)).filter(Campaign.id.in_(ids)).all()
+    if not camps:
+        raise HTTPException(404, "未找到对应方案")
+    found = {c.id for c in camps}
+
+    deleted_files = 0
+    for c in camps:
+        files, dirs = _collect_campaign_files(c)
+        for f in files:
+            try:
+                if os.path.isfile(f):
+                    os.remove(f); deleted_files += 1
+            except OSError:
+                pass
+        for d in dirs:
+            try:
+                if os.path.isdir(d):
+                    shutil.rmtree(d); deleted_files += 1
+            except OSError:
+                pass
+
+    # 关联的审阅记录一并清理，避免留下孤儿行
+    db.query(ReviewRecord).filter(ReviewRecord.campaign_id.in_(found)).delete(synchronize_session=False)
+
+    mat_count = sum(len(c.materials) for c in camps)
+    for c in camps:
+        db.delete(c)  # Campaign.materials 配置了 ORM 级联删除
+    db.commit()
+    return {"ok": True, "deleted_campaigns": len(camps),
+            "deleted_materials": mat_count, "deleted_files": deleted_files}
 
 # ----------------------------- 导出 / 批量下载 -----------------------------
 def _material_text(m: Material) -> str:

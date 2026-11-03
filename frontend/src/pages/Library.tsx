@@ -52,6 +52,24 @@ export default function Library({ user, canReview, isEditor }: {
     } catch (e: any) { setErr(e.message) }
   }
 
+  const batchDelete = async () => {
+    if (selected.length === 0) return
+    const matCount = campaigns
+      .filter(c => selected.includes(c.id))
+      .reduce((n, c) => n + (c.materials?.length || 0), 0)
+    const ok = window.confirm(
+      `确认批量删除选中的 ${selected.length} 个方案？\n` +
+      `将一并删除其下约 ${matCount} 条素材（图片 / 视频 / 文案）及磁盘文件，且不可恢复。`
+    )
+    if (!ok) return
+    try {
+      const r = await api.deleteCampaigns(selected)
+      setSelected([])
+      await load()
+      alert(`已删除 ${r.deleted_campaigns} 个方案、${r.deleted_materials} 条素材、${r.deleted_files} 个文件。`)
+    } catch (e: any) { setErr(e.message) }
+  }
+
   const act = async (fn: () => Promise<any>) => {
     setErr('')
     try { await fn(); await load(); if (reviewFor) await loadRecords(reviewFor) }
@@ -102,6 +120,9 @@ export default function Library({ user, canReview, isEditor }: {
             <span className="muted">已选 {selected.length} 个</span>
             {selected.length > 0 && (
               <a className="btn small" href={api.batchExportUrl(selected)}>批量导出所选 ZIP</a>
+            )}
+            {selected.length > 0 && isEditor && (
+              <button className="btn small danger" onClick={batchDelete}>批量删除所选</button>
             )}
             {selected.length > 0 && (
               <button className="btn small ghost" onClick={() => setSelected([])}>清空选择</button>

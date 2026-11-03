@@ -468,6 +468,8 @@ export const api = {
   // 素材库
   campaigns: () => req<Campaign[]>('/api/campaigns'),
   material: (id: number) => req<Material>(`/api/materials/${id}`),
+  deleteCampaigns: (ids: number[]) =>
+    req<any>('/api/campaigns/batch', { method: 'DELETE', body: JSON.stringify({ ids }) }),
   // 审阅流
   reviews: (cid: number) => req<ReviewRecord[]>(`/api/campaigns/${cid}/reviews`),
   submitReview: (cid: number, comment?: string) =>

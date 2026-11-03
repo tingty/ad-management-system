@@ -491,3 +491,32 @@
 **已知边界**
 - 成片仍为无声 MP4（分镜旁白供后期配音用），不生成 TTS 音轨。
 - 建议字幕（`text`）只作为剪辑参考展示在图片旁，不烧进画面；如需上屏需在剪辑阶段叠加。
+
+## V4.8 素材库批量删除历史素材
+
+**需求**：在「素材库」增加批量删除操作，可一次性清理历史素材（方案 + 其下素材 + 磁盘文件）。
+
+**交付**
+- 后端新增 `DELETE /api/campaigns/batch`，请求体 `{"ids": [int...]}`：
+  - 角色门禁 `admin / manager / editor`（viewer 无权限，返回 403）。
+  - 先收集每个方案下所有素材的磁盘文件（图片 `file_path`、视频关键帧 `content.keyframes[].file`、
+    成片 `content.video_file`、封面 `content.cover`），逐个 `os.remove` 文件、`shutil.rmtree` 关键帧目录。
+  - 清理关联审阅记录（`review_records.campaign_id` 无 ORM 级联，手动删避免孤儿行）。
+  - 再 `db.delete(campaign)`，由 `Campaign.materials` 的 ORM 级联（`all, delete-orphan`）删除全部素材。
+  - 返回 `{ok, deleted_campaigns, deleted_materials, deleted_files}`。
+  - 边界：空 id 列表 → 400；全部 id 不存在 → 404；单条文件缺失不影响整体（逐条 try/except）。
+- 前端 `api.ts` 增加 `deleteCampaigns(ids)`（`DELETE` + JSON body）。
+- 素材库选择栏新增「批量删除所选」按钮（仅 `isEditor` 可见，与「批量导出所选 ZIP」并列）：
+  - 点击弹出二次确认，文案含「将删除 N 个方案、约 M 条素材及磁盘文件，且不可恢复」；
+  - 成功后 `alert` 回显删除数量并刷新列表、清空选择。
+
+**验收证据**
+- 隔离库端到端：植入 1 方案 / 2 素材（图片 PNG + 视频关键帧目录 + MP4），调用后
+  `deleted_campaigns=1, deleted_materials=2, deleted_files=4`，DB 中 campaign/material/review 行归零，
+  磁盘 PNG、MP4、关键帧目录全部移除。
+- 边界单测：空 ids → 400；不存在 ids → 404。
+- `py_compile` 通过，`npm run build` 44 modules。
+
+**已知边界**
+- 删除为物理删除、不可恢复，仅前端二次确认 + 角色门禁兜底，无回收站；如需要「软删除 / 回收站」可后续迭代。
+- 按方案维度批量删除（与「批量导出」同粒度），删除后该方案下所有素材一并清除，无法只删部分素材。
