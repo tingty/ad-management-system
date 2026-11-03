@@ -549,3 +549,19 @@
 **已知边界**
 - 历史账号邮箱为 `<username>@example.com` 占位（非真实邮箱），如需真实邮箱由管理员在账号页「编辑」暂不提供改邮箱入口（创建时设定）；如需编辑邮箱可后续在 `UserUpdate` 增加。
 - 登录同时接受用户名兜底，属兼容性设计；如要「严格仅邮箱」可移除 `OR username` 分支。
+
+## V4.9.2 默认管理员启动自愈（保证线上可登录）
+
+**问题**：线上部署环境（`info.rmdsp.com`）使用独立数据库，`seed_users()` 仅在库为空时执行一次，导致历史库里的 admin 仍是早期 `admin/Admin@123` 或邮箱被兜底为 `leson@example.com`，用统一账号 `leson@recomob.com / Tingty@123.com` 登录失败。
+
+**交付**
+- 新增 `ensure_default_admin()`：启动时**幂等**保证默认管理员（`leson@recomob.com` / `Tingty@123.com` / role=admin）存在且口令正确。
+  - 命中「仍处于默认/未初始化状态」才重置密码：密码为空、邮箱为 `<user>@example.com` 兜底值、或密码等于任一历史默认口令（`Admin@123` 等）。
+  - 若管理员已改为自定义密码，则**保留不动**，不被覆盖。
+  - 支持环境变量覆盖：`DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_USERNAME` / `DEFAULT_ADMIN_PASSWORD`。
+- 在 `on_startup` 中于 `backfill_user_emails()` 之后调用。
+- 同步更新 `DEPLOY.md` 默认账号表（旧文档写的 `admin/Admin@123` 已失效）。
+
+**验收证据**
+- 单元测试 4 场景：旧 `admin/Admin@123`（邮箱兜底 `admin@example.com`）、旧 `leson`+兜底邮箱、已正确（幂等）、已改自定义密码（保留不重置）——前三类登录 `leson@recomob.com/Tingty@123.com` 均 200，第四类按设计保留原密码。
+- 真实 HTTP E2E：以「脏库」（旧 `admin/Admin@123`）启动 uvicorn，`POST /api/auth/login` 用统一账号返回 200 + token；错密码 401。

@@ -8,7 +8,7 @@ from models import PlatformSpec, User, ModelConfig, PromptConfig
 from specs_data import PLATFORM_SPECS
 from migrations import ensure_schema, normalize_data
 from routers import router
-from auth import decode_token, hash_password
+from auth import decode_token, hash_password, verify_password
 from services import PROMPT_REGISTRY, sync_prompt_defaults
 
 app = FastAPI(title="广告管理系统", version="4.0.0")
@@ -140,6 +140,57 @@ def backfill_user_emails():
     finally:
         db.close()
 
+
+# 历史默认密码（早期版本/部署产生的默认口令）。命中这些值的账号视为“仍处于默认状态”，
+# 启动时会重置为当前统一默认管理员口令，从而保证重新部署后默认 admin 一定能登录。
+LEGACY_DEFAULT_PASSWORDS = {
+    "Admin@123", "admin123", "Admin@123.com", "123456",
+    "Tingty@123", "Tingty@123.com",
+}
+
+
+def ensure_default_admin():
+    """保证默认管理员账号始终可用（幂等）。
+
+    无论历史库里 admin 是什么状态（早期 admin/Admin@123、被兜底成 <user>@example.com、
+    或首启后从未登录），重新部署后都能用统一凭据登录：
+        邮箱：leson@recomob.com   密码：Tingty@123.com
+    仅当账号仍处于“默认/未初始化”状态时才重置密码；若管理员已改成自定义密码，则保留不动。
+    该账号为引导用默认管理员，首次登录后请尽快修改密码。
+    """
+    email = os.getenv("DEFAULT_ADMIN_EMAIL", "leson@recomob.com")
+    username = os.getenv("DEFAULT_ADMIN_USERNAME", "leson")
+    password = os.getenv("DEFAULT_ADMIN_PASSWORD", "Tingty@123.com")
+    db = SessionLocal()
+    try:
+        u = db.query(User).filter(User.email == email).first()
+        if not u:
+            u = db.query(User).filter(User.username == username).first()
+        if not u:
+            u = User(username=username)
+            db.add(u)
+        # 是否仍处于默认/未初始化状态？
+        is_legacy = (
+            u.password_hash is None
+            or (u.email or "").endswith("@example.com")
+            or any(verify_password(p, u.password_hash, u.salt) for p in LEGACY_DEFAULT_PASSWORDS)
+        )
+        u.username = username
+        u.email = email
+        u.display_name = "系统管理员"
+        u.role = "admin"
+        u.active = True
+        if is_legacy:
+            h, s = hash_password(password)
+            u.password_hash = h
+            u.salt = s
+            print(f"[ensure_admin] 默认管理员已重置为：{email}")
+        else:
+            print(f"[ensure_admin] 默认管理员已存在且非默认密码，保留当前口令：{email}")
+        db.commit()
+    finally:
+        db.close()
+
 def seed_specs():
     db = SessionLocal()
     try:
@@ -183,6 +234,7 @@ def on_startup():
     seed_specs()
     seed_users()
     backfill_user_emails()
+    ensure_default_admin()
     seed_prompts()
     seed_default_model()
 
