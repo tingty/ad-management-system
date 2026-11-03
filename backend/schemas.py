@@ -182,6 +182,7 @@ class ProduceRequest(BaseModel):
     sizes_per_platform: Optional[int] = None    # 旧字段，等价 sizes_per_angle
     sizes_per_angle: Optional[int] = None       # 每个方向、每个平台出几个版位
     video_mode: Optional[str] = "all"           # off / first / all
+    full_video: Optional[bool] = False          # 勾选后把关键帧合成为完整视频 MP4
 
 class EstimateRequest(BaseModel):
     framework_id: Optional[int] = None

@@ -123,7 +123,7 @@ export interface Campaign {
   framework_id: number
   platforms?: string[]
   angle_keys?: string[]
-  options?: { sizes_per_angle?: number; video_mode?: string; material_types?: string[]; languages?: string[] }
+  options?: { sizes_per_angle?: number; video_mode?: string; material_types?: string[]; languages?: string[]; full_video?: boolean }
   status: string
   owner_id?: number
   reviewer_id?: number
@@ -433,7 +433,7 @@ export const api = {
   produce: (payload: {
     framework_id: number; campaign_name: string; angle_keys: string[]; platforms: string[]
     material_types: string[]; languages: string[]; extra_prompt?: string
-    sizes_per_angle?: number; video_mode?: 'off' | 'first' | 'all'
+    sizes_per_angle?: number; video_mode?: 'off' | 'first' | 'all'; full_video?: boolean
   }) => req<Campaign>('/api/produce', { method: 'POST', body: JSON.stringify(payload) }),
   estimate: (payload: {
     angle_keys: string[]; platforms: string[]; material_types: string[]; languages: string[]

@@ -255,6 +255,7 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
   const [types, setTypes] = useState<string[]>(['image', 'copy'])
   const [sizes, setSizes] = useState(2)
   const [videoMode, setVideoMode] = useState<'off' | 'first' | 'all'>('off')
+  const [fullVideo, setFullVideo] = useState(false)
   const [brand, setBrand] = useState('#FFB020')
   const [productImg, setProductImg] = useState('')
   const [specs, setSpecs] = useState<PlatformSpec[]>([])
@@ -340,6 +341,14 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
     [types, videoMode],
   )
 
+  // 视频广告位支持：媒介规格里有 video_spec 才能投视频；「生成完整视频」开关仅在此时出现
+  const videoCapable = useMemo(
+    () => platforms.filter(p => (specs.find(s => s.platform === p)?.video_spec || '').trim().length > 0),
+    [platforms, specs],
+  )
+  const canFullVideo = videoMode !== 'off' && videoCapable.length > 0
+  useEffect(() => { if (!canFullVideo) setFullVideo(false) }, [canFullVideo])
+
   useEffect(() => {
     if (!picked.length || !platforms.length) { setEst(null); return }
     let alive = true
@@ -360,6 +369,7 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
         angle_keys: picked,
         platforms, material_types: materialTypes, languages: langs,
         sizes_per_angle: sizes, video_mode: videoMode,
+        full_video: canFullVideo && fullVideo,
       })
       setCampaign(c)
       setBusy('')
@@ -538,6 +548,21 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
             </select>
           </div>
         </div>
+        {videoMode !== 'off' && (
+          <div className="fv-box" style={{ marginTop: 10 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: videoCapable.length ? 'pointer' : 'not-allowed' }}>
+              <input type="checkbox" disabled={!videoCapable.length}
+                checked={fullVideo && videoCapable.length > 0}
+                onChange={e => setFullVideo(e.target.checked)} />
+              <b>生成完整视频（MP4 成片）</b>
+            </label>
+            <div className="muted" style={{ marginTop: 4 }}>
+              {videoCapable.length
+                ? `按媒介广告位类型判定，支持视频素材的媒介：${videoCapable.join('、')}；勾选后按分镜逐镜合成完整视频，可在线预览与下载。`
+                : '当前所选媒介均无视频广告位，无法生成视频。'}
+            </div>
+          </div>
+        )}
         <div className="setting-grid">
           <div>
             <label>品牌色（决定所有素材配色）</label>
@@ -771,8 +796,30 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
                   )}
                   {g.video && (
                     <div className="kf-block">
-                      <div className="kf-title">视频分镜（15s）· 关键帧可单独下载</div>
-                      <div className="kf-row">
+                      <div className="kf-title">
+                        视频（15s）· {g.video.content?.provider === 'llm_storyboard' ? 'AI 分镜脚本' : '内置分镜脚本'}
+                        {g.video.content?.video_file ? ' · 含完整视频' : ''}
+                      </div>
+                      {g.video.content?.video_file && (
+                        <div className="fv-player">
+                          <video
+                            controls
+                            playsInline
+                            poster={api.fileUrl(g.video.content?.cover || g.video.file_path)}
+                            src={api.fileUrl(g.video.content.video_file)}
+                            style={{ width: '100%', maxWidth: 360, maxHeight: 480, borderRadius: 10, background: '#000', display: 'block' }}
+                          />
+                          <div className="fv-actions" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                            <a className="btn" href={api.downloadUrl(g.video.id)}>下载完整视频 MP4</a>
+                            <a className="btn ghost" href={api.fileUrl(g.video.content.cover)} download>下载封面图</a>
+                            <span className="muted">{g.video.content?.video_note || '完整视频由关键帧逐镜合成（无声）'}</span>
+                          </div>
+                          {g.video.content?.video_error && (
+                            <div className="alert" style={{ marginTop: 6 }}>完整视频合成失败：{g.video.content.video_error}，已保留关键帧与分镜。</div>
+                          )}
+                        </div>
+                      )}
+                      <div className="kf-row" style={{ marginTop: 10 }}>
                         {(g.video.content?.keyframes || []).map((k: any) => (
                           <a key={k.index} href={api.fileUrl(k.file)} target="_blank" rel="noreferrer" className="kf">
                             <img src={api.fileUrl(k.file)} alt={k.scene} />
@@ -780,6 +827,18 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
                           </a>
                         ))}
                       </div>
+                      {(g.video.content?.shots || []).length > 0 && (
+                        <table className="tbl" style={{ marginTop: 10 }}>
+                          <thead><tr><th>时间</th><th>镜头</th><th>画面</th><th>字幕</th><th>旁白</th></tr></thead>
+                          <tbody>
+                            {(g.video.content.shots as any[]).map((s: any, i: number) => (
+                              <tr key={i}>
+                                <td>{s.t}</td><td>{s.shot}</td><td>{s.visual}</td><td>{s.text}</td><td>{s.vo || '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
                     </div>
                   )}
                 </div>

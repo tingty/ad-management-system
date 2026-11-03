@@ -11,6 +11,8 @@ import html as html_lib
 import json
 import os
 import re
+import shutil
+import subprocess
 
 import httpx
 
@@ -77,6 +79,15 @@ SYS_COPY = (
     "输出严格 JSON：{\"headlines\":[3条短标题],\"bodies\":[2条正文],\"cta\":\"按钮文案\"}。"
     "每条都必须能独立成立，且不超过给定字数上限。只输出 JSON。MARKER:COPY_JSON"
 )
+SYS_VIDEO = (
+    "你是效果广告视频导演，为信息流/激励视频写 15 秒可拍摄分镜脚本，画面必须具体可拍、"
+    "不使用夸大或无法证实的数字。输出严格 JSON："
+    '{"hook":"前 3 秒钩子（目标语言）","cta":"结尾行动指令（目标语言）",'
+    '"shots":[{"t":"0-3s","shot":"镜头名","visual":"画面内容（具体到景别/主体/动作）",'
+    '"text":"画面字幕（目标语言，≤20字符）","vo":"旁白/口播（目标语言，≤15词）"}]}。'
+    "shots 固定 4 镜，节奏 0-3s 钩子开场、3-8s 产品演示、8-12s 结果证明、12-15s CTA 收口；"
+    "text 与 vo 必须与创意方向和产品事实一致。只输出 JSON。MARKER:VIDEO_JSON"
+)
 
 # ----------------------------- 提示词管理（设置页可查可改，保存即生效） -----------------------------
 # 内置注册表：播种与「恢复默认」的唯一来源。编辑存 DB，调用时经 get_prompt 读取。
@@ -110,6 +121,17 @@ PROMPT_REGISTRY = [
             "注意：结尾的 MARKER:COPY_JSON 请保留。"
         ),
         "content": SYS_COPY,
+    },
+    {
+        "key": "video",
+        "name": "视频分镜脚本",
+        "module": "完整视频生成（创作工作台 投放设置「生成完整视频」/ 视频素材重生成）",
+        "description": (
+            "按创意方向与产品事实撰写 15 秒 4 镜分镜脚本（钩子/演示/证明/CTA），"
+            "驱动关键帧渲染与完整视频 MP4 合成；脚本失败时回退内置分镜。"
+            "注意：结尾的 MARKER:VIDEO_JSON 请保留。"
+        ),
+        "content": SYS_VIDEO,
     },
 ]
 
@@ -571,7 +593,7 @@ def _rating_from_metrics(metrics) -> tuple[str, str]:
 # ----------------------------- 生产 -----------------------------
 async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs,
                            extra=None, sizes_per_platform=None,
-                           video_mode="all") -> list[Material]:
+                           video_mode="all", full_video=False) -> list[Material]:
     keys = [k for k in (angle_keys or []) if k in ANGLE_MAP] or ["benefit"]
     # 版位数量可配：默认 4，最少 1、最多 8（超过平台实际版位数时后面的循环自然截断）
     max_sizes = max(1, min(int(sizes_per_platform or IMAGE_MAX_SIZES), 8))
@@ -664,7 +686,8 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
                 if not fields:
                     continue
                 data = _render_spec(fw, key, fields, lang, ANGLE_MAP[key]["template"])
-                vtasks.append(_make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra))
+                vtasks.append(_make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra,
+                                          full_video=full_video))
         for v in await asyncio.gather(*vtasks, return_exceptions=True):
             if isinstance(v, Material):
                 mats.append(v)
@@ -696,47 +719,151 @@ def _apply_dup_warnings(mats, copy_index):
                 [{"level": "warn", "field": "创意方向", "msg": w} for w in item["warnings"]])
 
 
-async def _make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra):
+def _shot_duration(tc: str, default: float = 3.75) -> float:
+    """从 '0-3s' / '3-8s' 之类的时间码解析镜头时长（秒），异常时给均分默认值。"""
+    m = re.search(r"(\d+(?:\.\d+)?)\s*[-~—]\s*(\d+(?:\.\d+)?)", tc or "")
+    if m:
+        d = float(m.group(2)) - float(m.group(1))
+        if 0.3 < d <= 20:
+            return round(d, 2)
+    return default
+
+
+def _ffmpeg_exe():
+    """优先 imageio-ffmpeg 自带静态二进制，其次系统 PATH 的 ffmpeg。"""
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return shutil.which("ffmpeg")
+
+
+def _stitch_mp4(frames: list, out_path: str, vw: int, vh: int):
+    """把关键帧按镜头时长合成完整视频（H.264/yuv420p 无声 MP4，各平台播放器兼容）。
+
+    返回 (ok, err)。ffmpeg 不可用或合成失败时返回 False，由调用方降级为关键帧交付。
+    """
+    exe = _ffmpeg_exe()
+    if not exe or not frames:
+        return False, "ffmpeg 不可用"
+    w, h = vw - (vw % 2), vh - (vh % 2)  # yuv420p 要求偶数尺寸
+    concat = out_path + ".txt"
+    esc = lambda p: p.replace("'", r"'\''")
+    lines = []
+    for f in frames:
+        lines.append(f"file '{esc(f['file'])}'")
+        lines.append(f"duration {f.get('duration', 3.75)}")
+    lines.append(f"file '{esc(frames[-1]['file'])}'")  # concat 最后需再补一帧否则时长缺失
+    with open(concat, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+    cmd = [exe, "-y", "-f", "concat", "-safe", "0", "-i", concat,
+           "-vf", (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                   f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p"),
+           "-c:v", "libx264", "-movflags", "+faststart", out_path]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=180)
+        return os.path.exists(out_path) and os.path.getsize(out_path) > 0, ""
+    except Exception as e:
+        return False, str(e)[:200]
+    finally:
+        try:
+            os.remove(concat)
+        except OSError:
+            pass
+
+
+async def _make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra, full_video=False):
+    """视频素材生产：LLM 分镜脚本 → 关键帧渲染 →（可选）合成完整视频 MP4。
+
+    分镜脚本走「提示词管理」的 video 提示词，失败回退内置 4 镜；完整视频依赖
+    ffmpeg（imageio-ffmpeg 自带），不可用时降级为关键帧 + 分镜交付，绝不阻断。
+    """
     from providers import StoryboardVideo
-    # 每一镜换一套版式，关键帧连起来能读出镜头推进，而不是同一张图复制四遍
-    scenes = [
-        ("痛点开场", "0-3s", "先给出问题现场，让用户认领", data.get("template")),
-        ("产品演示", "3-8s", "核心动作演示，两步内看到结果", "ugc"),
-        ("结果证明", "8-12s", "结果与口碑，降低决策风险", "rating"),
-        ("CTA 收口", "12-15s", "品牌 + 行动指令，端卡", "bigtype"),
+    angle = ANGLE_MAP.get(key) or {}
+
+    # 1) LLM 分镜脚本（文本用途模型，失败回退内置分镜）
+    user_prompt = (
+        f"产品: {fw.product}\n品类: {fw.category}\n受众: {fw.audience}\n地区: {fw.geo}\n"
+        f"创意方向: {angle.get('name', key)} —— {angle.get('insight', '')}\n语言: {lang}\n"
+        f"已验证卖点: {fw.selling_points}\n可用指标: {fw.metrics}\n"
+        f"文案: headline={data.get('headline')} sub={data.get('sub')} cta={data.get('cta')}\n"
+        f"平台视频规格: {(_spec_for(db, platform).video_spec if _spec_for(db, platform) else '') or '未知'}"
+    )
+    llm_shots, llm_meta = None, {}
+    llm = get_llm(db, "copy")
+    try:
+        parsed = parse_json(await llm.chat(get_prompt(db, "video"), user_prompt))
+        cand = parsed.get("shots") if isinstance(parsed, dict) else None
+        if isinstance(cand, list) and 2 <= len(cand) <= 6 and all(
+                isinstance(s, dict) and (s.get("visual") or s.get("text")) for s in cand):
+            llm_shots = cand[:VIDEO_KEYFRAMES]
+            llm_meta = {"hook": parsed.get("hook") or "", "cta": parsed.get("cta") or ""}
+    except Exception as e:
+        print("[video] storyboard llm failed:", str(e)[:120])
+
+    # 2) 关键帧渲染：每一镜换一套版式，连起来能读出镜头推进
+    scenes = llm_shots or [
+        {"t": "0-3s", "shot": "痛点开场", "text": "先给出问题现场，让用户认领", "visual": "问题现场"},
+        {"t": "3-8s", "shot": "产品演示", "text": "核心动作演示，两步内看到结果", "visual": "产品演示"},
+        {"t": "8-12s", "shot": "结果证明", "text": "结果与口碑，降低决策风险", "visual": "评分背书"},
+        {"t": "12-15s", "shot": "CTA 收口", "text": data.get("cta") or "Install now", "visual": "端卡"},
     ]
+    tpls = [data.get("template"), "ugc", "rating", "bigtype"]
     kf_dir = os.path.join(UPLOAD_DIR, f"{campaign.id}_{platform}_{key}_{lang}_kf")
     os.makedirs(kf_dir, exist_ok=True)
     frames = []
-    for i, (scene, tc, note, tpl) in enumerate(scenes[:VIDEO_KEYFRAMES], 1):
+    for i, sc in enumerate(scenes[:VIDEO_KEYFRAMES], 1):
+        tc = sc.get("t") or f"{(i-1)*15//4}-{i*15//4}s"
         d = dict(data)
-        d["template"] = tpl or data.get("template")
-        d["caption"] = note
-        if i == len(scenes):
+        d["template"] = tpls[(i - 1) % len(tpls)] or data.get("template")
+        d["caption"] = sc.get("text") or sc.get("visual") or ""
+        if i == len(scenes[:VIDEO_KEYFRAMES]):
             d["headline"] = data.get("cta") or data.get("headline")
             d["cta"] = ""
         elif d["template"] == "rating":
             d["sub"] = data.get("sub") or ""
         out = os.path.join(kf_dir, f"kf{i}.png")
-        await asyncio.to_thread(render_keyframe, out, vw, vh, d, i, VIDEO_KEYFRAMES, tc, scene)
-        frames.append({"index": i, "scene": scene, "timecode": tc, "note": note,
+        await asyncio.to_thread(render_keyframe, out, vw, vh, d, i, VIDEO_KEYFRAMES, tc, sc.get("shot") or f"镜头{i}")
+        frames.append({"index": i, "scene": sc.get("shot") or f"镜头{i}", "timecode": tc,
+                       "note": sc.get("visual") or "", "text": sc.get("text") or "",
+                       "vo": sc.get("vo") or "", "duration": _shot_duration(tc),
                        "file": out, "ref": f"{campaign.id}_{platform}_{key}_{lang}_kf/kf{i}.png"})
     cover = os.path.join(UPLOAD_DIR, f"{campaign.id}_{platform}_{key}_{lang}_cover.png")
     await asyncio.to_thread(render_creative, cover, vw, vh, data)
 
+    # 3) 分镜脚本元信息（平台规格 / 交付物说明）
     story = await StoryboardVideo().generate(
         f"{fw.product} · {platform} · {lang}", platform, "x.mp4",
         meta={"product": fw.product, "lang": lang, "headline": data.get("headline"),
               "sub": data.get("sub"), "cta": data.get("cta"),
               "aspect": "9:16" if vh > vw else "1:1", "duration": 15,
               "spec": (spec.video_spec if (spec := _spec_for(db, platform)) else "")})
+    if llm_shots:
+        story["shots"] = llm_shots
+        story["provider"] = "llm_storyboard"
+        if llm_meta.get("hook"):
+            story["hook"] = llm_meta["hook"]
+        if llm_meta.get("cta"):
+            story["cta"] = llm_meta["cta"]
     story["keyframes"] = frames
     story["cover"] = cover
-    story["note"] = ("未配置视频模型：已产出 4 张关键帧 + 首帧封面 + 逐镜脚本，"
-                     "剪辑可直接照此成片；配置视频模型后自动替换为真视频。")
+
+    # 4) 完整视频合成（投放设置勾选「生成完整视频」时）
+    if full_video:
+        mp4 = os.path.join(UPLOAD_DIR, f"{campaign.id}_{platform}_{key}_{lang}_full.mp4")
+        ok, err = await asyncio.to_thread(_stitch_mp4, frames, mp4, vw, vh)
+        if ok:
+            story["video_file"] = mp4
+            story["video_note"] = "完整视频由关键帧逐镜合成（无声，可直接上传投放或再配音）"
+            story["note"] = "已产出 AI 分镜脚本 + 关键帧 + 完整视频 MP4；分镜/旁白可用于重配音或剪辑改版。"
+        else:
+            story["video_error"] = err or "合成失败"
+            story["note"] = f"完整视频合成失败（{err or 'ffmpeg 不可用'}），已保留关键帧与分镜脚本。"
+
     return Material(
         campaign_id=campaign.id, type="video", platform=platform, language=lang,
-        angle_key=key, version=1, variant="A", content=story, file_path=cover,
+        angle_key=key, version=1, variant="A", content=story,
+        file_path=(story.get("video_file") if full_video and story.get("video_file") else cover),
         prompt_log=extra, validation=build_validation("video", story))
 
 
@@ -782,8 +909,11 @@ async def regenerate_material(db, material, extra):
         kit = await _angle_copy(db, fw_like, key, material.language or "en", extra)
         fields = map_to_platform(kit, material.platform, fw_like.product)["fields"]
         data = _render_spec(fw_like, key, fields, material.language or "en", ANGLE_MAP[key]["template"])
+        camp = db.query(Campaign).get(material.campaign_id)
+        fv = bool((camp.options or {}).get("full_video")) if camp else False
         vobj = await _make_video(db, type("C", (), {"id": material.campaign_id})(), fw_like,
-                                 key, material.platform, material.language or "en", data, 1080, 1920, extra)
+                                 key, material.platform, material.language or "en", data, 1080, 1920, extra,
+                                 full_video=fv)
         new.content = vobj.content
         new.file_path = vobj.file_path
         new.validation = vobj.validation

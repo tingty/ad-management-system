@@ -581,3 +581,11 @@ select {
   min-height: 320px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12.5px; line-height: 1.55; white-space: pre; overflow: auto;
 }
+
+/* ===================== 完整视频：投放设置开关与展示模块 ===================== */
+.fv-box {
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: #f8fafc; font-size: 13px;
+}
+.fv-box input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); }
+.fv-player video { outline: none; }

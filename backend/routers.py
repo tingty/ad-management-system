@@ -220,11 +220,12 @@ async def produce(req: ProduceRequest, db: Session = Depends(get_db),
                         angle_keys=keys, status="draft", owner_id=user.id,
                         options={"sizes_per_angle": plan["sizes_per_angle"],
                                  "video_mode": video_mode, "material_types": types,
-                                 "languages": langs})
+                                 "languages": langs, "full_video": bool(req.full_video)})
     db.add(campaign); db.commit(); db.refresh(campaign)
 
     await produce_campaign(db, fw, campaign, keys, req.platforms, types, langs,
-                           req.extra_prompt, plan["sizes_per_angle"], video_mode)
+                           req.extra_prompt, plan["sizes_per_angle"], video_mode,
+                           full_video=bool(req.full_video))
     db.refresh(campaign)
     _ = list(campaign.materials)
     return campaign
