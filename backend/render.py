@@ -669,6 +669,32 @@ def layout_kind(w, h):
 
 
 # ----------------------------- 文本块 -----------------------------
+_FILLER_TAIL = {"and", "or", "with", "for", "to", "of", "the", "a", "an", "in", "on",
+                "at", "by", "from", "as", "but", "so", "that", "your", "you", "our"}
+
+
+def _clip_line(draw, line: str, font, max_w: int) -> str:
+    """把被截断的一行收口成「整词 + 省略号」，不留下半句或悬空连词。"""
+    line = (line or "").rstrip()
+    if not line:
+        return line
+    suffix = "…"
+    text = line + suffix
+    while text and draw.textlength(text, font=font) > max_w:
+        if " " in line:
+            line = line.rsplit(" ", 1)[0]
+        else:
+            line = line[:-1]
+        if not line:                # 框窄到连省略号都放不下：返回空串，调用方不画即可
+            return ""
+        text = line + suffix
+    words = line.split()
+    while words and words[-1].strip(",.;:!?").lower() in _FILLER_TAIL:
+        words.pop()
+    line = " ".join(words) if words else line
+    return line + suffix
+
+
 def draw_text_block(c: Canvas, box, headline, sub, cta, design: dict | None = None):
     """在指定框内排版标题/副标/CTA，自动缩放，绝不溢出文本框。
 
@@ -716,6 +742,9 @@ def draw_text_block(c: Canvas, box, headline, sub, cta, design: dict | None = No
                 sub_lines = wrap_text(c.d, sub, sf, bw, 99)
             if len(sub_lines) > 2:      # 字号已到下限：只保留前两行，避免压到 CTA
                 sub_lines = sub_lines[:2]
+                # 直接砍行会留下 "…with guided tools for adults and" 这种半句话，
+                # 投出去一眼就是机器排版。末行收口到整词并补省略号。
+                sub_lines[-1] = _clip_line(c.d, sub_lines[-1], sf, bw)
         total = len(lines) * line_h
         if sub_lines:
             total += int(size * 0.26) + len(sub_lines) * int(sub_size * 1.32)
@@ -822,6 +851,11 @@ def render_creative(out_path, w, h, data: dict) -> str:
         return out_path
 
     kind, subject, text = _zones(c, design.get("layout"))
+    if data.get("video_frame"):
+        # 成片画面：竖版底部约 10% 会被平台 UI（行动按钮/文案/进度）压住，
+        # 文字区底边上收，避免投放后关键信息被遮。
+        x0, y0, x1, y1 = text
+        text = (x0, y0, x1, max(y0 + int(h * 0.10), min(y1, int(h * 0.88))))
 
     if template == "rating":
         # 浅色底 + 白色评分卡
@@ -969,43 +1003,16 @@ def _base_light_brand(c: Canvas, brand: str):
 
 
 # ----------------------------- 视频关键帧 -----------------------------
-def render_keyframe(out_path, w, h, data: dict, idx: int, total: int,
-                    timecode: str, scene: str) -> str:
-    """视频关键帧：上方是画面，下方预留信息条（镜头号 / 时间码 / 本镜说明 / 进度）。
+def render_keyframe(out_path, w, h, data: dict) -> str:
+    """视频关键帧：满画幅只画广告画面，像素即投放素材。
 
-    信息条单独占位，不压在画面上——叠在底部会把 CTA 挡住，那种帧交给剪辑没法用。
+    旧版在帧底部烧了一条信息带（镜号 / 时间码 / 本镜说明 / 进度条），合成的 MP4
+    带着内部标注，交给投放前必须二次裁切。现在这些说明只留在数据里，由素材墙在
+    图片旁边标注（Workspace「视频素材」逐帧说明），画面本身不含任何解释性文字。
+    逐镜差异由调用方通过 design._shot（背景风格轮换）、template（版式轮换）与
+    文案推进共同完成，不再依赖角标和说明行做区分。
     """
-    band = max(60, int(h * 0.125))
-    ch = h - band
-    tmp = out_path + ".base.png"
-    render_creative(tmp, w, ch, data)
-    canvas = Image.new("RGB", (w, h), (9, 11, 16))
-    canvas.paste(Image.open(tmp).convert("RGB"), (0, 0))
-    try:
-        os.remove(tmp)
-    except Exception:
-        pass
-    d = ImageDraw.Draw(canvas)
-
-    pad = int(w * 0.04)
-    f1 = _font(max(10, int(band * 0.26)), scene, True)
-    d.text((pad, ch + band * 0.14), f"{idx:02d}/{total:02d}  {scene}", font=f1, fill=(255, 255, 255))
-    ft = _font(max(10, int(band * 0.24)), timecode, True)
-    d.text((w - pad - d.textlength(timecode, font=ft), ch + band * 0.15), timecode,
-           font=ft, fill=(255, 176, 32))
-
-    cap = data.get("caption") or ""
-    if cap:
-        cf = _font(max(9, int(band * 0.21)), cap, False)
-        lines = wrap_text(d, cap, cf, w - pad * 2, 2)
-        y = ch + band * 0.50
-        for ln in lines:
-            d.text((pad, y), ln, font=cf, fill=(176, 189, 205))
-            y += int(cf.size * 1.34)
-
-    bar_y = h - max(4, int(h * 0.005))
-    d.rectangle([0, bar_y - 4, w, bar_y], fill=(255, 255, 255, 40))
-    d.rectangle([0, bar_y - 4, int(w * idx / max(1, total)), bar_y], fill=(255, 176, 32))
-
-    canvas.save(out_path, "PNG", optimize=True)
-    return out_path
+    d = dict(data)
+    d.pop("caption", None)      # 说明文案一律不进画面
+    d["video_frame"] = True     # 满画幅 + 底部安全区上收
+    return render_creative(out_path, w, h, d)

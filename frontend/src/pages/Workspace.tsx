@@ -831,25 +831,38 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
                         )}
                       </div>
                     )}
-                    <div className="kf-row" style={{ marginTop: 10 }}>
+                    <div className="kf-note">
+                      关键帧就是投放画面：镜号、时间码、画面说明与旁白只在这里标注，
+                      <b>不写入图片，也不进成片</b>，下载的 MP4 可直接上传投放。
+                    </div>
+                    <div className="kf-list">
                       {(g.video.content?.keyframes || []).map((k: any) => (
-                        <a key={k.index} href={api.fileUrl(k.file)} target="_blank" rel="noreferrer" className="kf">
-                          <img src={api.fileUrl(k.file)} alt={k.scene} />
-                          <span>{k.timecode}</span>
-                        </a>
+                        <article key={k.index} className="kf-item">
+                          <a className="kf-shot" href={api.fileUrl(k.file)} target="_blank" rel="noreferrer">
+                            <img src={api.fileUrl(k.file)} alt={k.scene} />
+                          </a>
+                          <div className="kf-meta">
+                            <div className="kf-meta-head">
+                              <span className="kf-no">{String(k.index ?? 0).padStart(2, '0')}</span>
+                              <b>{k.scene}</b>
+                              <span className="kf-tc">{k.timecode}{k.duration ? ` · ${k.duration}s` : ''}</span>
+                            </div>
+                            {k.note && <p className="kf-line"><em>画面</em><span>{k.note}</span></p>}
+                            {k.text && <p className="kf-line"><em>建议字幕</em><span>{k.text}</span></p>}
+                            {k.vo && <p className="kf-line"><em>旁白</em><span>{k.vo}</span></p>}
+                            <div className="kf-acts">
+                              <a className="btn ghost small" href={api.fileUrl(k.file)} target="_blank" rel="noreferrer">查看原图</a>
+                              <a className="btn ghost small" href={api.fileUrl(k.file)} download={`kf${k.index}.png`}>下载该帧</a>
+                            </div>
+                          </div>
+                        </article>
                       ))}
                     </div>
-                    {(g.video.content?.shots || []).length > 0 && (
-                      <table className="tbl" style={{ marginTop: 10 }}>
-                        <thead><tr><th>时间</th><th>镜头</th><th>画面</th><th>字幕</th><th>旁白</th></tr></thead>
-                        <tbody>
-                          {(g.video.content.shots as any[]).map((s: any, i: number) => (
-                            <tr key={i}>
-                              <td>{s.t}</td><td>{s.shot}</td><td>{s.visual}</td><td>{s.text}</td><td>{s.vo || '—'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    {(g.video.content?.hook || g.video.content?.cta) && (
+                      <div className="kf-extra">
+                        {g.video.content?.hook && <span><em>开场钩子</em>{g.video.content.hook}</span>}
+                        {g.video.content?.cta && <span><em>收口行动</em>{g.video.content.cta}</span>}
+                      </div>
                     )}
                   </section>
                 )}

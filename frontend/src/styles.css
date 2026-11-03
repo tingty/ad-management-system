@@ -299,10 +299,45 @@ code { background: #eef2f7; padding: 1px 5px; border-radius: 4px; font-size: 12p
 
 .kf-block { margin-top: 12px; }
 .kf-title { font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
-.kf-row { display: flex; gap: 8px; flex-wrap: wrap; }
-.kf { width: 74px; text-decoration: none; }
-.kf img { width: 100%; border-radius: 6px; border: 1px solid var(--border); display: block; }
-.kf span { display: block; text-align: center; font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+/* 视频关键帧：图片在左、说明在右。说明只活在 DOM 里，不进图片像素，
+   合成的 MP4 才是可直接投放的成片 */
+.kf-note { margin: 8px 0 10px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.kf-note b { color: var(--primary); }
+.kf-list { display: flex; flex-direction: column; gap: 10px; }
+.kf-item {
+  display: grid; grid-template-columns: 152px minmax(0, 1fr); gap: 12px; align-items: start;
+  padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: #fbfdff;
+}
+.kf-shot { display: block; }
+.kf-shot img {
+  width: 100%; display: block; border-radius: 8px;
+  border: 1px solid var(--border); background: #0b0f14;
+}
+.kf-meta { min-width: 0; }
+.kf-meta-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kf-no {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em; color: #fff;
+  background: var(--primary); border-radius: 5px; padding: 1px 6px;
+}
+.kf-meta-head b {
+  flex: 1 1 auto; min-width: 0; font-size: 13.5px; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.kf-tc { flex: 0 0 auto; margin-left: auto; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.kf-line { display: flex; gap: 8px; margin: 6px 0 0; font-size: 12.5px; line-height: 1.6; }
+.kf-line em {
+  flex: 0 0 60px; font-style: normal; color: var(--muted);
+  font-size: 11.5px; padding-top: 1px;
+}
+.kf-line span { min-width: 0; color: var(--text); word-break: break-word; }
+.kf-acts { display: flex; gap: 8px; margin-top: 9px; }
+.kf-extra { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; font-size: 12.5px; }
+.kf-extra em { font-style: normal; color: var(--muted); margin-right: 6px; font-size: 11.5px; }
+@media (max-width: 720px) {
+  .kf-item { grid-template-columns: 1fr; }
+  .kf-shot img { max-width: 200px; }
+  .kf-tc { margin-left: 0; }
+}
 
 .zoom-mask {
   position: fixed; inset: 0; background: rgba(10,16,24,.82); display: flex;

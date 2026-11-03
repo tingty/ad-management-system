@@ -9,7 +9,7 @@ from specs_data import PLATFORM_SPECS
 from migrations import ensure_schema, normalize_data
 from routers import router
 from auth import decode_token, hash_password
-from services import PROMPT_REGISTRY
+from services import PROMPT_REGISTRY, sync_prompt_defaults
 
 app = FastAPI(title="广告管理系统", version="4.0.0")
 
@@ -131,7 +131,11 @@ def seed_specs():
         db.close()
 
 def seed_prompts():
-    """播种系统提示词（key 唯一，已存在不覆盖）；用户可在「提示词管理」页编辑，保存即生效。"""
+    """播种系统提示词（key 唯一，已存在不覆盖）；用户可在「提示词管理」页编辑，保存即生效。
+
+    代码里升级了默认提示词时由 sync_prompt_defaults 同步：正文只在库里仍是旧默认时刷新，
+    用户编辑过的内容保留。
+    """
     db = SessionLocal()
     try:
         created = []
@@ -144,6 +148,9 @@ def seed_prompts():
         if created:
             db.commit()
             print(f"[seed] 系统提示词已初始化：{', '.join(created)}")
+        updated = sync_prompt_defaults(db)
+        if updated:
+            print(f"[seed] 系统提示词默认值已升级：{', '.join(updated)}")
     finally:
         db.close()
 
