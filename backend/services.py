@@ -88,6 +88,20 @@ SYS_VIDEO = (
     "shots 固定 4 镜，节奏 0-3s 钩子开场、3-8s 产品演示、8-12s 结果证明、12-15s CTA 收口；"
     "text 与 vo 必须与创意方向和产品事实一致。只输出 JSON。MARKER:VIDEO_JSON"
 )
+SYS_IMAGE_DESIGN = (
+    "你是效果广告视觉设计指导。基于产品与创意方向，为同一批素材的图片与视频关键帧"
+    "输出差异化视觉设计规范，避免所有素材共用同一个纯色渐变底与同一套排版。输出严格 JSON："
+    '{"styles":["背景风格，2-3 个，从 gradient/radial/split/wave/halftone/stripes/spotlight/'
+    'light_panel/vignette 中选，第一个用于图片，其余供视频分镜逐镜轮换"],'
+    '"layout":"default|side_left|bottom_stack|centered",'
+    '"font_scale":0.9-1.2,'
+    '"tone":"一句话设计意图（为什么这套视觉匹配该创意方向与受众情绪）"}。'
+    "约束：1. 风格必须契合创意方向的情绪（痛点→戏剧性聚光/暗角，证明→浅色可信，"
+    "促销→对撞色块，好奇→点阵/分割，UGC→斜纹真实感）；"
+    "2. layout 与风格搭配，竖版画幅不要选 side_left；"
+    "3. font_scale 控制在 0.9-1.2，促销可偏大、证明与场景可偏小；"
+    "4. 只输出 JSON，不要解释。结尾必须包含 MARKER:IMAGE_DESIGN_JSON"
+)
 
 # ----------------------------- 提示词管理（设置页可查可改，保存即生效） -----------------------------
 # 内置注册表：播种与「恢复默认」的唯一来源。编辑存 DB，调用时经 get_prompt 读取。
@@ -132,6 +146,17 @@ PROMPT_REGISTRY = [
             "注意：结尾的 MARKER:VIDEO_JSON 请保留。"
         ),
         "content": SYS_VIDEO,
+    },
+    {
+        "key": "image",
+        "name": "素材视觉设计指导",
+        "module": "图片渲染 / 视频关键帧（创作工作台 / 批量生成 / 重生成 / 素材优化）",
+        "description": (
+            "按创意方向输出差异化视觉规范：背景风格（9 种）、文字版式（4 种）、字号节奏、设计意图，"
+            "驱动图片与视频关键帧摆脱「纯色渐变 + 同一套排版」。字段值须在枚举范围内，"
+            "失败时回退按方向内置的设计预设。注意：结尾的 MARKER:IMAGE_DESIGN_JSON 请保留。"
+        ),
+        "content": SYS_IMAGE_DESIGN,
     },
 ]
 
@@ -531,7 +556,7 @@ async def _angle_copy(db, fw, angle_key, lang, extra):
     return kit
 
 
-def _render_spec(fw, angle_key, fields, lang, template, metric=None):
+def _render_spec(fw, angle_key, fields, lang, template, metric=None, design=None):
     angle = ANGLE_MAP.get(angle_key) or ANGLE_LIBRARY[0]
     headline = fields.get("headline") or fields.get("title") or fw.product
     if isinstance(headline, list):
@@ -556,7 +581,31 @@ def _render_spec(fw, angle_key, fields, lang, template, metric=None):
         "product_img": (fw.assets or {}).get("product"),
         "before_label": "BEFORE", "after_label": "AFTER",
         "rating_value": rating_value, "rating_label": rating_label,
+        "angle_key": angle_key, "design": design or {},
     }
+
+
+async def _design_spec(db, fw, key: str, template: str, lang: str) -> dict:
+    """按创意方向取差异化设计规范：大模型产出（提示词管理 image），失败回退内置预设。
+
+    返回的 spec 由 render.normalize_design 做二次校验与合并——即使模型只给了一部分字段，
+    也会用该方向的内置预设补齐（背景风格/版式/字号），保证不同方向的素材视觉确实不同。
+    """
+    angle = ANGLE_MAP.get(key) or {}
+    user_prompt = (
+        f"产品: {fw.product}\n品类: {fw.category}\n受众: {fw.audience}\n地区: {fw.geo}\n"
+        f"创意方向: {angle.get('name', key)} —— {angle.get('insight', '')}\n"
+        f"画面模板: {template}\n目标语言: {lang}\n"
+        f"卖点: {fw.selling_points}\n"
+        "请给出该方向的视觉设计规范 JSON。"
+    )
+    try:
+        parsed = parse_json(await get_llm(db, "copy").chat(get_prompt(db, "image"), user_prompt))
+        if isinstance(parsed, dict) and (parsed.get("styles") or parsed.get("style")):
+            return parsed
+    except Exception as e:
+        print("[design] llm failed:", str(e)[:120])
+    return {}
 
 
 def _num_tokens(text: str) -> set:
@@ -599,6 +648,13 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
     max_sizes = max(1, min(int(sizes_per_platform or IMAGE_MAX_SIZES), 8))
     video_keys = keys if video_mode == "all" else (keys[:1] if video_mode == "first" else [])
     mats, copy_index = [], []
+
+    # 设计规范：每个创意方向一份（LLM 生成，失败回退内置差异预设），图片与视频关键帧共用
+    design_map = {}
+    if "image" in types or ("video" in types and video_keys):
+        for k in dict.fromkeys(list(keys) + list(video_keys)):
+            design_map[k] = await _design_spec(
+                db, fw, k, ANGLE_MAP.get(k, {}).get("template", ""), langs[0])
 
     # 1) 先把文案算出来（模型调用串行，避免限流），再并行出图
     copy_jobs = []
@@ -644,7 +700,8 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
         if "image" in types:
             spec = _spec_for(db, platform)
             all_sizes = list(spec.image_sizes if spec else ["1080x1080"])
-            data = _render_spec(fw, key, fields, lang, ANGLE_MAP[key]["template"])
+            data = _render_spec(fw, key, fields, lang, ANGLE_MAP[key]["template"],
+                                design=design_map.get(key))
             for size in all_sizes[:max_sizes]:
                 w, h = _size_wh(size)
                 fn = f"{campaign.id}_{platform}_{key}_{lang}_{w}x{h}_v1.png"
@@ -667,7 +724,8 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
             campaign_id=campaign.id, type="image", platform=item["platform"],
             language=item["lang"], angle_key=item["angle"], version=1, variant="A",
             spec_json={"size": item["size"], "template": item["data"]["template"],
-                       "angle": item["angle"], "w": item["w"], "h": item["h"]},
+                       "angle": item["angle"], "w": item["w"], "h": item["h"],
+                       "design": item["data"].get("design") or {}},
             file_path=item["out"], prompt_log=extra,
             validation=build_validation("image", None,
                                         {"size": item["size"], "all_sizes": item["allowed"]})))
@@ -685,7 +743,8 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
                 fields = (src.content or {}).get("fields", {}) if src else {}
                 if not fields:
                     continue
-                data = _render_spec(fw, key, fields, lang, ANGLE_MAP[key]["template"])
+                data = _render_spec(fw, key, fields, lang, ANGLE_MAP[key]["template"],
+                                    design=design_map.get(key))
                 vtasks.append(_make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra,
                                           full_video=full_video))
         for v in await asyncio.gather(*vtasks, return_exceptions=True):
@@ -817,6 +876,10 @@ async def _make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra
         d = dict(data)
         d["template"] = tpls[(i - 1) % len(tpls)] or data.get("template")
         d["caption"] = sc.get("text") or sc.get("visual") or ""
+        # 分镜逐镜轮换背景风格，避免四帧像同一张图复制
+        base_design = dict(data.get("design") or {})
+        base_design["_shot"] = i - 1
+        d["design"] = base_design
         if i == len(scenes[:VIDEO_KEYFRAMES]):
             d["headline"] = data.get("cta") or data.get("headline")
             d["cta"] = ""
@@ -847,6 +910,7 @@ async def _make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra
             story["cta"] = llm_meta["cta"]
     story["keyframes"] = frames
     story["cover"] = cover
+    story["design"] = data.get("design") or {}
 
     # 4) 完整视频合成（投放设置勾选「生成完整视频」时）
     if full_video:
@@ -899,7 +963,9 @@ async def regenerate_material(db, material, extra):
         fw_like = fw or Framework(product="Ad", selling_points=["Ad"])
         kit = await _angle_copy(db, fw_like, key, material.language or "en", extra)
         fields = map_to_platform(kit, material.platform, fw_like.product)["fields"]
-        data = _render_spec(fw_like, key, fields, material.language or "en", ANGLE_MAP[key]["template"])
+        data = _render_spec(fw_like, key, fields, material.language or "en", ANGLE_MAP[key]["template"],
+                            design=await _design_spec(db, fw_like, key, ANGLE_MAP[key]["template"],
+                                                      material.language or "en"))
         await asyncio.to_thread(render_creative, os.path.join(UPLOAD_DIR, fn), w, h, data)
         new.file_path = os.path.join(UPLOAD_DIR, fn)
         new.spec_json = {**sj, "version": version}
@@ -908,7 +974,9 @@ async def regenerate_material(db, material, extra):
         fw_like = fw or Framework(product="Ad", selling_points=["Ad"])
         kit = await _angle_copy(db, fw_like, key, material.language or "en", extra)
         fields = map_to_platform(kit, material.platform, fw_like.product)["fields"]
-        data = _render_spec(fw_like, key, fields, material.language or "en", ANGLE_MAP[key]["template"])
+        data = _render_spec(fw_like, key, fields, material.language or "en", ANGLE_MAP[key]["template"],
+                            design=await _design_spec(db, fw_like, key, ANGLE_MAP[key]["template"],
+                                                      material.language or "en"))
         camp = db.query(Campaign).get(material.campaign_id)
         fv = bool((camp.options or {}).get("full_video")) if camp else False
         vobj = await _make_video(db, type("C", (), {"id": material.campaign_id})(), fw_like,
@@ -1036,11 +1104,13 @@ async def optimize_campaign(db, campaign, instruction, scope="all", angle_keys=N
         # 同一组的多个尺寸共用一个版本号，前端按版本切换时图文才对得上。
         if do_image and (not same_copy or look_changed):
             iv, made = maxv.get(("image", angle, platform, lang), 1) + 1, 0
+            # 设计规范按方向取一次，组内各尺寸共用（逐尺寸调模型只会拿到不一致的视觉）
+            opt_design = await _design_spec(db, fw, angle, res["template"], lang)
             for (ag, pf, lg, size), img in size_ver.items():
                 if (ag, pf, lg) != (angle, platform, lang):
                     continue
                 w, h = _size_wh(size)
-                spec = _render_spec(fw, angle, fields, lang, res["template"])
+                spec = _render_spec(fw, angle, fields, lang, res["template"], design=opt_design)
                 lm = last_metric.get((angle, platform, lang))
                 if lm is not None:
                     # 上一版主动去掉的量级/评分要沿用，否则每轮都从产品数据里重新捞回来

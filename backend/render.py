@@ -34,6 +34,54 @@ FONT_FALLBACK = [
 DEFAULT_ACCENT = (255, 176, 32)
 
 
+# ----------------------------- 差异化设计系统 -----------------------------
+# 每个创意方向有自己的视觉性格：背景风格、文字版式、字号节奏都不同，
+# 避免所有素材都是「同一个渐变底 + 同一种排版」换文案。
+STYLE_KEYS = ("gradient", "radial", "split", "wave", "halftone",
+              "stripes", "spotlight", "light_panel", "vignette")
+LAYOUT_KEYS = ("default", "side_left", "bottom_stack", "centered")
+
+ANGLE_DESIGN = {
+    "pain":       {"styles": ["spotlight", "vignette", "gradient"], "layout": "default",
+                   "font_scale": 1.08, "tone": "暗场聚光，痛点放大"},
+    "benefit":    {"styles": ["wave", "radial", "gradient"], "layout": "default",
+                   "font_scale": 1.00, "tone": "明快波浪，轻松受益"},
+    "proof":      {"styles": ["light_panel", "halftone"], "layout": "centered",
+                   "font_scale": 0.95, "tone": "浅色卡片，可信证明"},
+    "curiosity":  {"styles": ["halftone", "split", "gradient"], "layout": "side_left",
+                   "font_scale": 1.00, "tone": "点阵悬念，反差引导"},
+    "ugc":        {"styles": ["stripes", "gradient"], "layout": "default",
+                   "font_scale": 0.98, "tone": "斜纹质感，真实口吻"},
+    "promo":      {"styles": ["split", "stripes"], "layout": "centered",
+                   "font_scale": 1.12, "tone": "对撞色块，促销冲击"},
+    "scenario":   {"styles": ["vignette", "radial", "gradient"], "layout": "bottom_stack",
+                   "font_scale": 0.95, "tone": "暗角沉浸，场景代入"},
+    "comparison": {"styles": ["split", "halftone"], "layout": "side_left",
+                   "font_scale": 0.95, "tone": "分栏对比，左右对照"},
+}
+
+
+def normalize_design(design, angle_key: str = "") -> dict:
+    """合并设计规范与内置预设：LLM 输出缺失/非法的字段回退该创意方向的预设。"""
+    base = dict(ANGLE_DESIGN.get(angle_key) or ANGLE_DESIGN["benefit"])
+    if isinstance(design, dict):
+        st = design.get("styles") or design.get("style")
+        if isinstance(st, str):
+            st = [st]
+        if isinstance(st, list):
+            st = [s for s in st if isinstance(s, str) and s in STYLE_KEYS]
+            if st:
+                base["styles"] = st[:4]
+        if design.get("layout") in LAYOUT_KEYS:
+            base["layout"] = design["layout"]
+        fs = design.get("font_scale")
+        if isinstance(fs, (int, float)) and 0.8 <= float(fs) <= 1.3:
+            base["font_scale"] = round(float(fs), 2)
+        if isinstance(design.get("tone"), str) and design["tone"].strip():
+            base["tone"] = design["tone"].strip()[:60]
+    return base
+
+
 # ----------------------------- 颜色 -----------------------------
 def hex2rgb(s: str, default=DEFAULT_ACCENT):
     try:
@@ -220,6 +268,114 @@ class Canvas:
             else:
                 d.line([(i, 0), (i, h)], fill=col)
         self.img = base
+        self.d = ImageDraw.Draw(self.img)
+
+    def radial(self, c1, c2, cx=0.5, cy=0.40):
+        """中心径向渐变：小图绘制后放大，性能好且过渡平滑。"""
+        s = 96
+        small = Image.new("RGB", (s, s), c2)
+        d = ImageDraw.Draw(small)
+        for i in range(56, 0, -1):
+            t = i / 56
+            r = s * 0.85 * t
+            d.ellipse([s * cx - r, s * cy - r, s * cx + r, s * cy + r], fill=mix(c2, c1, 1 - t))
+        self.img = small.resize((self.w, self.h), Image.BICUBIC)
+        self.d = ImageDraw.Draw(self.img)
+
+    def split_bg(self, pal):
+        """对角双色分割 + 品牌色接缝：促销/对比的冲击构图。
+
+        两侧必须拉开明度差——bg1/bg2 本身只差几个色阶，直接对拼看不出分割。
+        """
+        self.img = Image.new("RGB", (self.w, self.h), mix(pal["bg2"], pal["accent"], 0.26))
+        d = ImageDraw.Draw(self.img)
+        d.polygon([(0, 0), (self.w * 0.62, 0), (self.w * 0.30, self.h), (0, self.h)],
+                  fill=shade(pal["bg1"], -0.30))
+        d.line([(self.w * 0.62, 0), (self.w * 0.30, self.h)],
+               fill=pal["accent"], width=max(3, int(self.s * 0.016)))
+        self.d = d
+
+    def wave(self, pal):
+        """底部正弦波浪：明快、轻松的受益感。"""
+        self.gradient(pal["bg1"], pal["bg2"], diagonal=False)
+        amp = self.h * 0.045
+        base_y = self.h * 0.80
+        pts = [(0, self.h)]
+        x = 0
+        while x <= self.w:
+            pts.append((x, base_y + amp * math.sin(x / max(1, self.w) * math.pi * 2.2)))
+            x += max(4, self.w // 64)
+        pts.append((self.w, self.h))
+        self.d.polygon(pts, fill=mix(pal["accent"], pal["bg2"], 0.5))
+
+    def halftone(self, color, region="tr"):
+        """角落半调点阵：杂志感装饰，好奇心/证明语境。
+
+        只铺上三分之一区域并快速渐隐——铺满半屏会和标题抢读。
+        """
+        r = max(2, int(self.s * 0.007))
+        gap = r * 4.2
+        cols = max(4, int((self.w * 0.42) // gap))
+        rows = max(3, int((self.h * 0.30) // gap))
+        x0 = (self.w - cols * gap) if region.endswith("r") else self.m
+        y0 = self.m if region.startswith("t") else (self.h - rows * gap)
+        for i in range(cols):
+            for j in range(rows):
+                fade = 0.25 + (i + j) / max(1.0, cols + rows) * 0.75
+                self.d.ellipse([x0 + i * gap - r, y0 + j * gap - r,
+                                x0 + i * gap + r, y0 + j * gap + r],
+                               fill=mix(color, self.pal["bg1"], fade))
+
+    def stripes(self, color, side="right"):
+        """斜纹带：UGC 的真实质感装饰。"""
+        band_w = int(self.w * (0.16 if self.w >= self.h else 0.30))
+        bx0 = self.w - band_w if side == "right" else 0
+        layer = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+        dl = ImageDraw.Draw(layer)
+        step = max(12, int(self.s * 0.055))
+        lw = max(3, int(step * 0.32))
+        for x in range(-self.h, self.w + self.h, step):
+            dl.line([(x, self.h + 40), (x + self.h + 80, -40)], fill=color + (64,), width=lw)
+        mask = Image.new("L", (self.w, self.h), 0)
+        ImageDraw.Draw(mask).rectangle([bx0, 0, bx0 + band_w, self.h], fill=255)
+        self.img = Image.composite(
+            Image.alpha_composite(self.img.convert("RGBA"), layer).convert("RGB"), self.img, mask)
+        self.d = ImageDraw.Draw(self.img)
+
+    def spotlight(self, pal, cy=0.42):
+        """暗场聚光：主体后方一团品牌色柔光，痛点/主角感。"""
+        self.gradient(pal["bg1"], shade(pal["bg2"], -0.12))
+        layer = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+        dl = ImageDraw.Draw(layer)
+        r = self.s * 0.58
+        dl.ellipse([self.w / 2 - r, self.h * cy - r, self.w / 2 + r, self.h * cy + r],
+                   fill=pal["accent"] + (78,))
+        r2 = self.s * 0.30
+        dl.ellipse([self.w / 2 - r2, self.h * cy - r2, self.w / 2 + r2, self.h * cy + r2],
+                   fill=pal["accent"] + (48,))
+        layer = layer.filter(ImageFilter.GaussianBlur(int(self.s * 0.09)))
+        self.img = Image.alpha_composite(self.img.convert("RGBA"), layer).convert("RGB")
+        self.d = ImageDraw.Draw(self.img)
+
+    def light_panel(self, pal):
+        """浅色底 + 中央白色柔光面板：评分/证明的可信语境。"""
+        self.img = Image.new("RGB", (self.w, self.h), mix(pal["accent"], (255, 255, 255), 0.90))
+        layer = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+        dl = ImageDraw.Draw(layer)
+        dl.rounded_rectangle([self.w * 0.06, self.h * 0.08, self.w * 0.94, self.h * 0.92],
+                             radius=int(self.s * 0.08), fill=(255, 255, 255, 200))
+        layer = layer.filter(ImageFilter.GaussianBlur(int(self.s * 0.03)))
+        self.img = Image.alpha_composite(self.img.convert("RGBA"), layer).convert("RGB")
+        self.d = ImageDraw.Draw(self.img)
+
+    def vignette(self, strength=86):
+        """四角暗角：场景沉浸/戏剧感。"""
+        mask = Image.new("L", (self.w, self.h), strength)
+        md = ImageDraw.Draw(mask)
+        cx, cy, r = self.w / 2, self.h / 2, self.s * 0.60
+        md.ellipse([cx - r, cy - r, cx + r, cy + r], fill=0)
+        mask = mask.filter(ImageFilter.GaussianBlur(int(self.s * 0.12)))
+        self.img = Image.composite(Image.new("RGB", (self.w, self.h), (0, 0, 0)), self.img, mask)
         self.d = ImageDraw.Draw(self.img)
 
     def blobs(self, color, n=3, alpha=26):
@@ -428,6 +584,76 @@ def draw_badge(c: Canvas, cx, cy, r, top, bottom, accent, on_accent, rotate=-8):
                  font=f2, fill=on_accent)
 
 
+# ----------------------------- 背景调度 -----------------------------
+def paint_background(c: Canvas, style: str, pal: dict, light: bool = False):
+    """按设计规范画背景；未知风格回退渐变。"""
+    if style == "radial":
+        c.radial(pal["bg1"], pal["bg2"])
+    elif style == "split":
+        c.split_bg(pal)
+    elif style == "wave":
+        c.wave(pal)
+    elif style == "halftone":
+        c.gradient(pal["bg1"], pal["bg2"])
+        c.halftone(pal["accent"], "tr")
+    elif style == "stripes":
+        c.gradient(pal["bg1"], pal["bg2"])
+        c.stripes(pal["accent"], "right")
+    elif style == "spotlight":
+        c.spotlight(pal)
+    elif style == "light_panel":
+        c.light_panel(pal)
+    elif style == "vignette":
+        c.gradient(pal["bg1"], pal["bg2"])
+        c.vignette()
+    else:
+        c.gradient(pal["bg1"], pal["bg2"])
+        c.blobs(pal["accent"], 2, 22)
+
+
+# ----------------------------- 版式判定 -----------------------------
+def _zones_base(c: Canvas):
+    """按版位返回 (主体框, 文本框)；横幅由调用方单独处理。"""
+    kind = layout_kind(c.w, c.h)
+    m = c.m
+    if kind == "landscape":
+        subject = (m, int(c.h * 0.12), int(c.w * 0.44), int(c.h * 0.88))
+        text = (int(c.w * 0.50), int(c.h * 0.16), c.w - m, int(c.h * 0.84))
+    elif kind == "square":
+        subject = (int(c.w * 0.16), int(c.h * 0.09), int(c.w * 0.84), int(c.h * 0.52))
+        text = (m, int(c.h * 0.57), c.w - m, c.h - m)
+    elif kind == "tall":
+        subject = (int(c.w * 0.10), int(c.h * 0.06), int(c.w * 0.90), int(c.h * 0.36))
+        text = (m, int(c.h * 0.40), c.w - m, int(c.h * 0.94))
+    else:  # portrait
+        subject = (int(c.w * 0.14), int(c.h * 0.08), int(c.w * 0.86), int(c.h * 0.47))
+        text = (m, int(c.h * 0.52), c.w - m, int(c.h * 0.93))
+    return kind, subject, text
+
+
+def _zones(c: Canvas, layout: str = "default"):
+    """带版式变体的分区：side_left 左右互换（横/方图），bottom_stack 上下分区，centered 居中构图。
+
+    竖版 9:16 不做 side_left——窄画幅的侧栏文字可读性差，自动落回 default。
+    """
+    kind, subject, text = _zones_base(c)
+    w, h, m = c.w, c.h, c.m
+    if layout == "side_left" and kind in ("landscape", "square"):
+        if kind == "landscape":
+            subject = (int(w * 0.56), int(h * 0.12), w - m, int(h * 0.88))
+            text = (m, int(h * 0.16), int(w * 0.50), int(h * 0.84))
+        else:
+            subject = (int(w * 0.54), int(h * 0.09), int(w * 0.90), int(h * 0.52))
+            text = (m, int(h * 0.57), int(w * 0.48), h - m)
+    elif layout == "bottom_stack" and kind in ("landscape", "square"):
+        subject = (int(w * 0.16), int(h * 0.09), int(w * 0.84), int(h * 0.54))
+        text = (m, int(h * 0.60), w - m, int(h * 0.93))
+    elif layout == "centered" and kind != "banner":
+        subject = (int(w * 0.24), int(h * 0.07), int(w * 0.76), int(h * 0.48))
+        text = (int(w * 0.10), int(h * 0.53), int(w * 0.90), int(h * 0.93))
+    return kind, subject, text
+
+
 # ----------------------------- 版位判定 -----------------------------
 def layout_kind(w, h):
     ratio = w / max(1, h)
@@ -443,65 +669,91 @@ def layout_kind(w, h):
 
 
 # ----------------------------- 文本块 -----------------------------
-def draw_text_block(c: Canvas, box, headline, sub, cta, sizes=(1.0, 1.0)):
-    """在指定框内排版标题/副标/CTA，自动缩放，不溢出。"""
+def draw_text_block(c: Canvas, box, headline, sub, cta, design: dict | None = None):
+    """在指定框内排版标题/副标/CTA，自动缩放，绝不溢出文本框。
+
+    design 支持：font_scale 全局字号节奏；layout=centered 时整块水平居中。
+    实现为「测量 → 放不下就整体缩字号 → 绘制」：标题/副标/CTA 三者的高度是叠加的，
+    只按标题算字号会出现 CTA 按钮被画到画布外面（投放图上等于废图）。
+    """
+    design = design or {}
+    base_scale = float(design.get("font_scale") or 1.0)
+    centered = design.get("layout") == "centered"
     x0, y0, x1, y1 = [int(v) for v in box]
     bw, bh = x1 - x0, y1 - y0
     if bw <= 8 or bh <= 8:
         return
-    cta_h = 0
-    cta_size = 0
-    if cta:
-        cta_size = max(9, int(min(bh * 0.17, bw * 0.062)))
-        cta_h = int(cta_size * 2.0)
-    sub_size = max(9, int(min(bh * 0.085, bw * 0.048)))
-    head_max_h = bh - cta_h - (bh * 0.05 if cta else 0) - (sub_size * 1.25 if sub else 0)
-    f, size, lines, line_h = fit_headline(
-        c.d, headline, bw, max(10, head_max_h),
-        size_max=min(bh * 0.30, bw * 0.19), size_min=max(8, int(min(bw, bh) * 0.05)),
-        max_lines=3 if bh > bw * 0.4 else 2)
 
-    sub_lines = []
-    if sub:
-        sf = _font(sub_size, sub, False)
-        sub_lines = wrap_text(c.d, sub, sf, bw, 99)
-        # 两行时若末行只剩一两个词（"...need it." 的 it.），把词数均分重排，
-        # 避免孤字行——信息流里这种细节一眼就能看出是模板自动生成的。
-        if len(sub_lines) == 2 and len(sub_lines[-1]) < len(sub_lines[0]) * 0.45:
-            words = sub.split()
-            if len(words) >= 4:
-                for cut in range(len(words) // 2, len(words) - 1):
-                    a, b = " ".join(words[:cut]), " ".join(words[cut:])
-                    if (text_w(c.d, a, sf) <= bw and text_w(c.d, b, sf) <= bw
-                            and min(len(a), len(b)) > len(sub_lines[-1])):
-                        sub_lines = [a, b]
-                        break
-        while len(sub_lines) > 2 and sub_size > 8:
-            sub_size -= 1
+    def measure(scale):
+        cta_size = max(9, int(min(bh * 0.17, bw * 0.062) * scale)) if cta else 0
+        cta_h = int(cta_size * 2.15) if cta else 0
+        gap = int(bh * 0.06) if cta else 0
+        sub_size = max(9, int(min(bh * 0.085, bw * 0.048) * scale))
+        head_max_h = bh - cta_h - gap - (sub_size * 1.35 if sub else 0)
+        f, size, lines, line_h = fit_headline(
+            c.d, headline, bw, max(10, head_max_h),
+            size_max=min(bh * 0.30, bw * 0.19) * scale,
+            size_min=max(8, int(min(bw, bh) * 0.05)),
+            max_lines=3 if bh > bw * 0.4 else 2)
+        sub_lines = []
+        if sub:
             sf = _font(sub_size, sub, False)
             sub_lines = wrap_text(c.d, sub, sf, bw, 99)
-        if len(sub_lines) > 2:      # 字号已到下限：只保留前两行，避免压到 CTA
-            sub_lines = sub_lines[:2]
+            # 两行时若末行只剩一两个词（"...need it." 的 it.），把词数均分重排，
+            # 避免孤字行——信息流里这种细节一眼就能看出是模板自动生成的。
+            if len(sub_lines) == 2 and len(sub_lines[-1]) < len(sub_lines[0]) * 0.45:
+                words = sub.split()
+                if len(words) >= 4:
+                    for cut in range(len(words) // 2, len(words) - 1):
+                        a, b = " ".join(words[:cut]), " ".join(words[cut:])
+                        if (text_w(c.d, a, sf) <= bw and text_w(c.d, b, sf) <= bw
+                                and min(len(a), len(b)) > len(sub_lines[-1])):
+                            sub_lines = [a, b]
+                            break
+            while len(sub_lines) > 2 and sub_size > 8:
+                sub_size -= 1
+                sf = _font(sub_size, sub, False)
+                sub_lines = wrap_text(c.d, sub, sf, bw, 99)
+            if len(sub_lines) > 2:      # 字号已到下限：只保留前两行，避免压到 CTA
+                sub_lines = sub_lines[:2]
+        total = len(lines) * line_h
+        if sub_lines:
+            total += int(size * 0.26) + len(sub_lines) * int(sub_size * 1.32)
+        if cta:
+            total += gap + cta_h
+        return dict(cta_size=cta_size, cta_h=cta_h, gap=gap, sub_size=sub_size,
+                    f=f, size=size, lines=lines, line_h=line_h,
+                    sub_lines=sub_lines, total=total)
 
-    total = len(lines) * line_h
-    if sub_lines:
-        total += int(size * 0.26) + len(sub_lines) * int(sub_size * 1.32)
-    if cta:
-        total += int(bh * 0.06) + cta_h
+    m = measure(base_scale)
+    scale = base_scale
+    for _ in range(4):                      # 最多缩 4 轮，保证极端文案也放得下
+        if m["total"] <= bh:
+            break
+        scale *= max(0.70, bh / m["total"])
+        m = measure(scale)
 
-    y = y0 + max(0, (bh - total) / 2)
+    cta_size, cta_h, gap = m["cta_size"], m["cta_h"], m["gap"]
+    sub_size, f, size, lines, line_h = m["sub_size"], m["f"], m["size"], m["lines"], m["line_h"]
+    sub_lines = m["sub_lines"]
+
+    y = y0 + max(0, (bh - m["total"]) / 2)
     for ln in lines:
-        c.d.text((x0, y), ln, font=f, fill=c.pal["fg"])
+        lx = x0 + (bw - text_w(c.d, ln, f)) / 2 if centered else x0
+        c.d.text((lx, y), ln, font=f, fill=c.pal["fg"])
         y += line_h
     if sub_lines:
         y += int(size * 0.26)
         sf = _font(sub_size, sub, False)
         for ln in sub_lines:
-            c.d.text((x0, y), ln, font=sf, fill=c.pal["sub"])
+            lx = x0 + (bw - text_w(c.d, ln, sf)) / 2 if centered else x0
+            c.d.text((lx, y), ln, font=sf, fill=c.pal["sub"])
             y += int(sub_size * 1.32)
     if cta:
-        y += int(bh * 0.06)
-        c.pill(x0, y, cta, cta_size)
+        y += gap
+        cx = x0 + (bw - (text_w(c.d, cta, _font(cta_size, cta, True)) + cta_size * 2.2)) / 2 \
+            if centered else x0
+        c.pill(cx, y, cta, cta_size)
 
 
 def draw_banner(c: Canvas, headline, cta, brand):
@@ -532,25 +784,6 @@ def draw_banner(c: Canvas, headline, cta, brand):
 
 
 # ----------------------------- 模板 -----------------------------
-def _zones(c: Canvas):
-    """按版位返回 (主体框, 文本框)；横幅由调用方单独处理。"""
-    kind = layout_kind(c.w, c.h)
-    m = c.m
-    if kind == "landscape":
-        subject = (m, int(c.h * 0.12), int(c.w * 0.44), int(c.h * 0.88))
-        text = (int(c.w * 0.50), int(c.h * 0.16), c.w - m, int(c.h * 0.84))
-    elif kind == "square":
-        subject = (int(c.w * 0.16), int(c.h * 0.09), int(c.w * 0.84), int(c.h * 0.52))
-        text = (m, int(c.h * 0.57), c.w - m, c.h - m)
-    elif kind == "tall":
-        subject = (int(c.w * 0.10), int(c.h * 0.06), int(c.w * 0.90), int(c.h * 0.36))
-        text = (m, int(c.h * 0.40), c.w - m, int(c.h * 0.94))
-    else:  # portrait
-        subject = (int(c.w * 0.14), int(c.h * 0.08), int(c.w * 0.86), int(c.h * 0.47))
-        text = (m, int(c.h * 0.52), c.w - m, int(c.h * 0.93))
-    return kind, subject, text
-
-
 def _base(c: Canvas, brand, light=False):
     c.gradient(c.pal["bg1"], c.pal["bg2"])
     c.blobs(c.pal["accent"], 3, 24)
@@ -573,19 +806,27 @@ def render_creative(out_path, w, h, data: dict) -> str:
     light = template in ("rating",)
     pal = make_palette(data.get("brand_color"), light=False)
     c = Canvas(w, h, pal)
+    # 差异化设计：styles[0] 用于图片；视频关键帧带 _shot 索引轮换 styles
+    design = normalize_design(data.get("design"), data.get("angle_key") or "")
+    shot_i = int((data.get("design") or {}).get("_shot") or 0)
+    dstyle = design["styles"][shot_i % len(design["styles"])]
+    # 浅底风格必须切到浅色文字方案，否则白字压白底直接不可读
+    light_bg = template == "rating" or dstyle == "light_panel"
+    if light_bg:
+        c.pal = make_palette(data.get("brand_color"), light=True)
 
     if kind == "banner":
-        c.gradient(pal["bg1"], pal["bg2"])
+        paint_background(c, dstyle, pal)
         draw_banner(c, headline, cta, brand)
         c.img.save(out_path, "PNG", optimize=True)
         return out_path
 
-    kind, subject, text = _zones(c)
+    kind, subject, text = _zones(c, design.get("layout"))
 
     if template == "rating":
         # 浅色底 + 白色评分卡
-        c.gradient((246, 247, 251), mix(pal["accent"], (255, 255, 255), 0.80))
-        c.blobs(pal["accent"], 2, 30)
+        lpal = make_palette(data.get("brand_color"), light=True)
+        paint_background(c, dstyle, lpal, light=True)
         _base_light_brand(c, brand)
         sx0, sy0, sx1, sy1 = subject
         card_h = min(sy1 - sy0, (sx1 - sx0) * 0.66)
@@ -613,11 +854,10 @@ def render_creative(out_path, w, h, data: dict) -> str:
             paste_product(c, data["product_img"], (sx0 + cw * 0.06, sy1 - ch * 0.24,
                                                     sx0 + cw * 0.26, sy1 - ch * 0.06), int(cw * 0.03))
         c.pal = make_palette(data.get("brand_color"), light=True)
-        draw_text_block(c, text, headline, sub, cta)
+        draw_text_block(c, text, headline, sub, cta, design)
 
     elif template == "promo":
-        c.gradient(pal["bg1"], pal["bg2"])
-        c.blobs(pal["accent"], 3, 30)
+        paint_background(c, dstyle, pal)
         if brand:
             c.brand_mark(c.m, c.m, max(14, int(c.s * 0.052)), brand)
         sx0, sy0, sx1, sy1 = subject
@@ -634,11 +874,10 @@ def render_creative(out_path, w, h, data: dict) -> str:
         if note:
             c.pill(c.m, text[1] - int(c.h * 0.045), note, max(9, int(c.h * 0.024)),
                    fill=shade(pal["accent"], -0.15), fg=pal["on_accent"])
-        draw_text_block(c, text, headline, sub, cta)
+        draw_text_block(c, text, headline, sub, cta, design)
 
     elif template == "ugc":
-        c.gradient((14, 16, 22), mix(pal["accent"], (10, 12, 18), 0.78))
-        c.blobs(pal["accent"], 2, 26)
+        paint_background(c, dstyle, pal)
         if brand:
             c.brand_mark(c.m, c.m, max(14, int(c.s * 0.052)), brand)
         sx0, sy0, sx1, sy1 = subject
@@ -650,11 +889,10 @@ def render_creative(out_path, w, h, data: dict) -> str:
         for i in range(3):
             cy_i = iy + i * rr * 6
             c.d.ellipse([ix - rr * 2, cy_i - rr, ix, cy_i + rr], outline=(240, 244, 250), width=max(1, int(rr * 0.5)))
-        draw_text_block(c, text, headline, sub, cta)
+        draw_text_block(c, text, headline, sub, cta, design)
 
     elif template == "compare":
-        c.gradient(pal["bg1"], pal["bg2"])
-        c.blobs(pal["accent"], 2, 22)
+        paint_background(c, dstyle, pal)
         if brand:
             c.brand_mark(c.m, c.m, max(14, int(c.s * 0.052)), brand)
         sx0, sy0, sx1, sy1 = subject
@@ -681,11 +919,10 @@ def render_creative(out_path, w, h, data: dict) -> str:
             ty = by0 + (by1 - by0) * (0.415 if bw_px else 0.58)
             c.d.text(((bx0 + bx1) / 2 - text_w(c.d, lab, lf) / 2, ty), lab, font=lf,
                      fill=(255, 255, 255) if ok else (188, 198, 214))
-        draw_text_block(c, text, headline, sub, cta)
+        draw_text_block(c, text, headline, sub, cta, design)
 
     elif template == "stat":
-        c.gradient(pal["bg1"], pal["bg2"])
-        c.blobs(pal["accent"], 3, 28)
+        paint_background(c, dstyle, pal)
         if brand:
             c.brand_mark(c.m, c.m, max(14, int(c.s * 0.052)), brand)
         sx0, sy0, sx1, sy1 = subject
@@ -705,20 +942,21 @@ def render_creative(out_path, w, h, data: dict) -> str:
             lb = data["metric_label"]
             c.d.text(((sx0 + sx1) / 2 - text_w(c.d, lb, lf) / 2, sy1 - int(c.h * 0.03)),
                      lb, font=lf, fill=pal["sub"])
-        draw_text_block(c, text, headline, sub, cta)
+        draw_text_block(c, text, headline, sub, cta, design)
 
     else:  # bigtype
-        c.gradient(pal["bg1"], pal["bg2"], diagonal=False)
-        c.blobs(pal["accent"], 2, 18)
-        # 强调斜带
-        c.d.polygon([(c.w * 0.62, c.h), (c.w, c.h * 0.72), (c.w, c.h)], fill=shade(pal["accent"], -0.55))
+        paint_background(c, dstyle, pal)
+        # 强调斜带：深底专属装饰，浅底/分割/波浪底上叠它只会糊成一块
+        if not light_bg and dstyle not in ("split", "wave", "light_panel"):
+            c.d.polygon([(c.w * 0.62, c.h), (c.w, c.h * 0.72), (c.w, c.h)],
+                        fill=shade(pal["accent"], -0.55))
         if brand:
             c.brand_mark(c.m, c.m, max(14, int(c.s * 0.052)), brand)
         full = (c.m, int(c.h * 0.18), c.w - c.m, int(c.h * 0.86))
         # 强调短线
         c.d.rectangle([full[0], full[1] - int(c.h * 0.045), full[0] + int((full[2] - full[0]) * 0.16),
                        full[1] - int(c.h * 0.038)], fill=pal["accent"])
-        draw_text_block(c, full, headline, sub, cta)
+        draw_text_block(c, full, headline, sub, cta, design)
 
     c.img.save(out_path, "PNG", optimize=True)
     return out_path

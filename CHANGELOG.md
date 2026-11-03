@@ -405,6 +405,44 @@
 - 提示词为全局生效（不分用户/工作区）；编辑质量由使用者把关，可随时「恢复默认」回退。
 - MARKER 校验只拦截「完全不含 MARKER 字样」的内容，若改动标记名称仍可能导致 Mock 兜底解析失败（回退本地构造，不报错）。
 
+## V4.6 素材墙上下布局 + 创意方向差异化视觉
+
+**交付**
+- **素材墙改为上下分区**（`.wg-body` 从 `1fr + 340px` 双栏改为纵向堆叠）：
+  「图片区 → 视频区 → 文案与关键词区」三段独立卡片，各带标签、标题与虚线分隔；
+  图片区浅灰底、视频区冷色底 + 深色边框、文案区白底，界限清晰；视频播放器最大宽度 360→420、
+  高度 560，不再被 340px 侧栏挤压，分镜表与关键帧也获得整行宽度。
+- **创意方向差异化视觉（新能力）**：
+  - 新增提示词 `image`「素材视觉设计指导」（注册进提示词管理，第 5 条）：LLM 按创意方向输出
+    `styles`（背景风格 2-3 个，枚举 9 种）/`layout`（4 种）/`font_scale`/`tone`（设计意图）。
+  - `render.py` 新增 9 种背景风格：`gradient / radial / split / wave / halftone / stripes /
+    spotlight / light_panel / vignette`；4 种文字版式：`default / side_left / bottom_stack / centered`
+    （centered 整块水平居中；竖版自动回退 default，避免窄幅侧栏不可读）。
+  - **按方向内置预设** `ANGLE_DESIGN`：pain→暗场聚光、benefit→波浪、proof→浅色面板+居中、
+    curiosity→点阵+侧栏、ugc→斜纹、promo→对撞分割+大字号、scenario→暗角+上下分区、
+    comparison→分割+侧栏；LLM 字段非法/缺失时自动合并预设，**无模型也保证方向间视觉不同**。
+  - 图片用 `styles[0]`；视频关键帧按分镜序号轮换 `styles`（`_shot`），四帧不再像同一张图复制。
+  - 设计规范落库可回溯：图片写入 `spec_json.design`，视频写入 `content.design`；
+    素材墙图片区展示「视觉：<tone> · <style>」标签。
+- **顺带修复两个真实缺陷**：
+  1. 浅底风格（light_panel / rating）仍用白字 → 切换浅色文字方案（白底白字不可读）。
+  2. 标题+副标+CTA 总高超文本框时 CTA 被画到画布外 → `draw_text_block` 改为「测量→整体缩字号→绘制」，
+     长文案压力场景验证不再裁切。
+
+**验收证据**
+- 全组合渲染回归：9 风格 × 4 版式 × 6 模板 × 4 尺寸 = **864 张 0 失败**。
+- 端到端（Calm / TikTok / pain+proof+promo+scenario，真实千问）：4 张图片 `design` 各不相同
+  （spotlight+centered / light_panel+centered / spotlight+split / vignette+light_panel），
+  文件哈希两两不同；`[design] llm failed` 计数 0。
+- 视频链路回归：pain / benefit 各 1 条视频，4 关键帧哈希全不同，MP4 250KB，下载 200 `video/mp4`。
+- 提示词播种日志 `site_analysis, angle, copy, video, image`；`py_compile` 通过、`npm run build` 44 modules。
+
+**已知边界**
+- 视觉差异化由「背景风格 + 版式 + 字号节奏」实现，字体族仍用系统字体（未内置多字体族）；
+  如需字体级差异需引入字体包并在 `_font()` 增加选择逻辑。
+- 背景为程序化绘制（渐变/几何/点阵/光效），非 AI 生成位图；接入 `image` 用途的图像生成模型后
+  可再叠加真实背景图。
+
 ## 全局技术改进
 
 - SQLite 开启 WAL + `busy_timeout=30000`，读写不互斥。

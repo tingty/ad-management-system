@@ -269,8 +269,7 @@ code { background: #eef2f7; padding: 1px 5px; border-radius: 4px; font-size: 12p
 .wg-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .wg-head b { font-size: 15px; color: var(--primary); }
 .wg-head .muted { font-size: 12.5px; }
-.wg-body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
-@media (max-width: 1000px) { .wg-body { grid-template-columns: 1fr; } }
+.wg-body { display: flex; flex-direction: column; gap: 12px; align-items: stretch; }
 
 .shot-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .shot {
@@ -589,3 +588,29 @@ select {
 }
 .fv-box input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); }
 .fv-player video { outline: none; }
+
+/* ===================== 素材墙：图片 / 视频 / 文案 上下分区 ===================== */
+.wg-sec {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px 14px;
+  background: #fff;
+}
+.wg-sec-img { background: #fbfcfe; }
+.wg-sec-video { background: #f7f9fc; border-color: #cfdae8; }
+.wg-sec-text { background: #fdfdfd; }
+.wg-sec-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 10px; padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border);
+  font-size: 13px;
+}
+.wg-sec-head b { color: var(--primary); }
+.wg-sec-tag {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  background: var(--primary); color: #fff; font-size: 11px; font-weight: 700;
+  letter-spacing: .5px;
+}
+.wg-sec-video .wg-sec-tag { background: #2f5d8f; }
+.wg-sec-text .wg-sec-tag { background: #6b7c93; }
+.fv-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }

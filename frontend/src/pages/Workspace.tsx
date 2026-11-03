@@ -771,77 +771,106 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
                 <span className="muted">{g.info!.insight}</span>
               </div>
               <div className="wg-body">
-                <div className="shot-row">
-                  {g.imgs.map(m => (
-                    <div key={m.id} className="shot">
-                      <img src={api.fileUrl(m.file_path)} alt={m.spec_json?.size} onClick={() => setZoom(api.fileUrl(m.file_path))} />
-                      <div className="shot-cap">
-                        <span>{m.spec_json?.size}</span>
-                        <span className="shot-actions">
-                          <span className={'dot ' + (m.validation?.valid === false ? 'bad' : 'good')} />
-                          <a href={api.downloadUrl(m.id)}>下载</a>
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                  {g.imgs.length === 0 && <div className="muted">该方向在当前版本下没有图片</div>}
-                </div>
-                <div className="wg-side">
-                  {g.copy ? <CopyBlock m={g.copy} /> : <div className="muted">没有文案素材</div>}
-                  {g.kw && (
-                    <div className="kw-block">
-                      <div className="kf-title">搜索关键词 · {plat}</div>
-                      <pre className="kw-pre">{g.kw.text_content}</pre>
-                    </div>
-                  )}
-                  {g.video && (
-                    <div className="kf-block">
-                      <div className="kf-title">
-                        视频（15s）· {g.video.content?.provider === 'llm_storyboard' ? 'AI 分镜脚本' : '内置分镜脚本'}
-                        {g.video.content?.video_file ? ' · 含完整视频' : ''}
-                      </div>
-                      {g.video.content?.video_file && (
-                        <div className="fv-player">
-                          <video
-                            controls
-                            playsInline
-                            poster={api.fileUrl(g.video.content?.cover || g.video.file_path)}
-                            src={api.fileUrl(g.video.content.video_file)}
-                            style={{ width: '100%', maxWidth: 360, maxHeight: 480, borderRadius: 10, background: '#000', display: 'block' }}
-                          />
-                          <div className="fv-actions" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
-                            <a className="btn" href={api.downloadUrl(g.video.id)}>下载完整视频 MP4</a>
-                            <a className="btn ghost" href={api.fileUrl(g.video.content.cover)} download>下载封面图</a>
-                            <span className="muted">{g.video.content?.video_note || '完整视频由关键帧逐镜合成（无声）'}</span>
-                          </div>
-                          {g.video.content?.video_error && (
-                            <div className="alert" style={{ marginTop: 6 }}>完整视频合成失败：{g.video.content.video_error}，已保留关键帧与分镜。</div>
-                          )}
+                {/* 图片区：占满整行宽度 */}
+                <section className="wg-sec wg-sec-img">
+                  <div className="wg-sec-head">
+                    <span className="wg-sec-tag">图片</span>
+                    <b>图片素材</b>
+                    <span className="muted">{g.imgs.length} 张 · 点击可放大</span>
+                    {g.imgs[0]?.spec_json?.design?.tone && (
+                      <span className="ac-tpl" title="该方向生效的视觉设计规范">
+                        视觉：{g.imgs[0].spec_json.design.tone}
+                        {g.imgs[0].spec_json.design.styles?.[0] ? ` · ${g.imgs[0].spec_json.design.styles[0]}` : ''}
+                      </span>
+                    )}
+                  </div>
+                  <div className="shot-row">
+                    {g.imgs.map(m => (
+                      <div key={m.id} className="shot">
+                        <img src={api.fileUrl(m.file_path)} alt={m.spec_json?.size} onClick={() => setZoom(api.fileUrl(m.file_path))} />
+                        <div className="shot-cap">
+                          <span>{m.spec_json?.size}</span>
+                          <span className="shot-actions">
+                            <span className={'dot ' + (m.validation?.valid === false ? 'bad' : 'good')} />
+                            <a href={api.downloadUrl(m.id)}>下载</a>
+                          </span>
                         </div>
-                      )}
-                      <div className="kf-row" style={{ marginTop: 10 }}>
-                        {(g.video.content?.keyframes || []).map((k: any) => (
-                          <a key={k.index} href={api.fileUrl(k.file)} target="_blank" rel="noreferrer" className="kf">
-                            <img src={api.fileUrl(k.file)} alt={k.scene} />
-                            <span>{k.timecode}</span>
-                          </a>
-                        ))}
                       </div>
-                      {(g.video.content?.shots || []).length > 0 && (
-                        <table className="tbl" style={{ marginTop: 10 }}>
-                          <thead><tr><th>时间</th><th>镜头</th><th>画面</th><th>字幕</th><th>旁白</th></tr></thead>
-                          <tbody>
-                            {(g.video.content.shots as any[]).map((s: any, i: number) => (
-                              <tr key={i}>
-                                <td>{s.t}</td><td>{s.shot}</td><td>{s.visual}</td><td>{s.text}</td><td>{s.vo || '—'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
+                    ))}
+                    {g.imgs.length === 0 && <div className="muted">该方向在当前版本下没有图片</div>}
+                  </div>
+                </section>
+
+                {/* 视频区：独立整行，播放器与分镜不再被侧栏挤压 */}
+                {g.video && (
+                  <section className="wg-sec wg-sec-video">
+                    <div className="wg-sec-head">
+                      <span className="wg-sec-tag">视频</span>
+                      <b>视频素材（15s）</b>
+                      <span className="muted">
+                        {g.video.content?.provider === 'llm_storyboard' ? 'AI 分镜脚本' : '内置分镜脚本'}
+                        {g.video.content?.video_file ? ' · 含完整视频' : ' · 仅关键帧与脚本'}
+                      </span>
                     </div>
-                  )}
-                </div>
+                    {g.video.content?.video_file && (
+                      <div className="fv-player">
+                        <video
+                          controls
+                          playsInline
+                          poster={api.fileUrl(g.video.content?.cover || g.video.file_path)}
+                          src={api.fileUrl(g.video.content.video_file)}
+                          style={{ width: '100%', maxWidth: 420, maxHeight: 560, borderRadius: 10, background: '#000', display: 'block' }}
+                        />
+                        <div className="fv-actions">
+                          <a className="btn" href={api.downloadUrl(g.video.id)}>下载完整视频 MP4</a>
+                          <a className="btn ghost" href={api.fileUrl(g.video.content.cover)} download>下载封面图</a>
+                          <span className="muted">{g.video.content?.video_note || '完整视频由关键帧逐镜合成（无声）'}</span>
+                        </div>
+                        {g.video.content?.video_error && (
+                          <div className="alert" style={{ marginTop: 6 }}>完整视频合成失败：{g.video.content.video_error}，已保留关键帧与分镜。</div>
+                        )}
+                      </div>
+                    )}
+                    <div className="kf-row" style={{ marginTop: 10 }}>
+                      {(g.video.content?.keyframes || []).map((k: any) => (
+                        <a key={k.index} href={api.fileUrl(k.file)} target="_blank" rel="noreferrer" className="kf">
+                          <img src={api.fileUrl(k.file)} alt={k.scene} />
+                          <span>{k.timecode}</span>
+                        </a>
+                      ))}
+                    </div>
+                    {(g.video.content?.shots || []).length > 0 && (
+                      <table className="tbl" style={{ marginTop: 10 }}>
+                        <thead><tr><th>时间</th><th>镜头</th><th>画面</th><th>字幕</th><th>旁白</th></tr></thead>
+                        <tbody>
+                          {(g.video.content.shots as any[]).map((s: any, i: number) => (
+                            <tr key={i}>
+                              <td>{s.t}</td><td>{s.shot}</td><td>{s.visual}</td><td>{s.text}</td><td>{s.vo || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </section>
+                )}
+
+                {/* 文案与关键词区 */}
+                {(g.copy || g.kw) && (
+                  <section className="wg-sec wg-sec-text">
+                    <div className="wg-sec-head">
+                      <span className="wg-sec-tag">文案</span>
+                      <b>文案与关键词</b>
+                      <span className="muted">{plat} · {lang}</span>
+                    </div>
+                    {g.copy ? <CopyBlock m={g.copy} /> : <div className="muted">没有文案素材</div>}
+                    {g.kw && (
+                      <div className="kw-block">
+                        <div className="kf-title">搜索关键词 · {plat}</div>
+                        <pre className="kw-pre">{g.kw.text_content}</pre>
+                      </div>
+                    )}
+                  </section>
+                )}
               </div>
             </div>
           ))}
