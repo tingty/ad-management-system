@@ -5,23 +5,28 @@ import Workspace from './pages/Workspace'
 import Batch from './pages/Batch'
 import Library from './pages/Library'
 import Login from './pages/Login'
-import Settings from './pages/Settings'
+import LLMSettings from './pages/LLMSettings'
+import Accounts from './pages/Accounts'
+import Logs from './pages/Logs'
+import Prompts from './pages/Prompts'
 import Specs from './pages/Specs'
 
-type Tab = 'workspace' | 'batch' | 'library' | 'specs' | 'settings'
+type Tab = 'workspace' | 'batch' | 'library' | 'specs'
+  | 'llm' | 'accounts' | 'logs' | 'prompts'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['workspace', 'batch', 'library', 'specs', 'settings']
+const TABS: Tab[] = ['workspace', 'batch', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts']
 const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
 
 type NavItem = { key: Tab; label: string; desc: string; icon: string }
+type NavGroup = { name: string; icon: string; items: NavItem[] }
 
-const GROUP_MATERIAL: { name: string; icon: string; items: NavItem[] } = {
+const GROUP_MATERIAL: NavGroup = {
   name: '素材管理',
   icon: 'layers',
   items: [
@@ -36,9 +41,19 @@ const GROUP_MATERIAL: { name: string; icon: string; items: NavItem[] } = {
   ],
 }
 
-const SETTINGS_ITEM: NavItem = {
-  key: 'settings', label: '设置', icon: 'gear',
-  desc: '按用途配置大模型接口（分析 / 文案 / 图片 / 视频），并管理账号与角色权限',
+const GROUP_SYSTEM: NavGroup = {
+  name: '系统设置',
+  icon: 'gear',
+  items: [
+    { key: 'llm', label: '大模型配置', icon: 'cpu',
+      desc: '按用途（分析 / 文案 / 图片 / 视频）配置大模型接口，保存即热切换，可测试连通性' },
+    { key: 'accounts', label: '账号', icon: 'user',
+      desc: '创建与管理账号、分配角色权限；创建或编辑在弹窗中完成' },
+    { key: 'logs', label: '日志', icon: 'filetext',
+      desc: '审计日志：登录、配置变更、账号操作、提示词修改等关键动作可追溯' },
+    { key: 'prompts', label: '提示词管理', icon: 'code',
+      desc: '统一查阅与编辑各功能模块的大模型提示词，保存即生效，支持恢复默认' },
+  ],
 }
 
 /* ---------------- 图标 ---------------- */
@@ -67,6 +82,14 @@ const PATHS: Record<string, ReactNode> = {
   caret: <path d="M6 9l6 6 6-6" />,
   logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></>,
   menu: <path d="M3 6h18M3 12h18M3 18h18" />,
+  cpu: <>
+    <rect x="5" y="5" width="14" height="14" rx="2" />
+    <rect x="9.5" y="9.5" width="5" height="5" rx="1" />
+    <path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" />
+  </>,
+  user: <><circle cx="12" cy="8" r="4" /><path d="M4 21c0-3.9 3.6-6.5 8-6.5s8 2.6 8 6.5" /></>,
+  filetext: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M9 13h6M9 17h6" /></>,
+  code: <path d="M16 18l6-6-6-6M8 6l-6 6 6 6" />,
 }
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -90,7 +113,7 @@ function allowedTabs(user: User): Tab[] {
   return [
     ...(canEdit ? (['workspace', 'batch'] as Tab[]) : []),
     'library', 'specs',
-    ...(user.role === 'admin' ? (['settings'] as Tab[]) : []),
+    ...(user.role === 'admin' ? (GROUP_SYSTEM.items.map(i => i.key)) : []),
   ]
 }
 
@@ -107,7 +130,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>(() => tabFromHash() || 'workspace')
   const [meta, setMeta] = useState<Meta | null>(null)
   const [collapsed, setCollapsed] = useState<boolean>(readCollapsed)
-  const [groupOpen, setGroupOpen] = useState(true)
+  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ material: true, system: true })
 
   useEffect(() => {
     const onUnauthorized = () => setUser(null)
@@ -170,7 +193,8 @@ export default function App() {
   const isAdmin = user?.role === 'admin'
 
   const visibleItems = GROUP_MATERIAL.items.filter(it => isEditor || ['library', 'specs'].includes(it.key))
-  const cur: NavItem = [...GROUP_MATERIAL.items, SETTINGS_ITEM].find(i => i.key === tab) || GROUP_MATERIAL.items[0]
+  const allItems: NavItem[] = [...GROUP_MATERIAL.items, ...GROUP_SYSTEM.items]
+  const cur: NavItem = allItems.find(i => i.key === tab) || GROUP_MATERIAL.items[0]
 
   useEffect(() => {
     if (user) document.title = `${cur.label} · 广告管理系统`
@@ -219,17 +243,17 @@ export default function App() {
         </div>
 
         <nav className="sb-nav">
-          <div className={`sb-group ${!collapsed && !groupOpen ? 'closed' : ''}`}>
+          <div className={`sb-group ${!collapsed && !groupOpen.material ? 'closed' : ''}`}>
             <button
               className="sb-group-head"
               title={collapsed ? GROUP_MATERIAL.name : '折叠 / 展开「素材管理」'}
-              onClick={() => (collapsed ? toggleSidebar(false) : setGroupOpen(v => !v))}
+              onClick={() => (collapsed ? toggleSidebar(false) : setGroupOpen(v => ({ ...v, material: !v.material })))}
             >
               <Icon name={GROUP_MATERIAL.icon} size={16} />
               {!collapsed && <span className="sb-gname">{GROUP_MATERIAL.name}</span>}
               {!collapsed && <span className="sb-caret"><Icon name="caret" size={14} /></span>}
             </button>
-            <div className="sb-items" hidden={!collapsed && !groupOpen}>
+            <div className="sb-items" hidden={!collapsed && !groupOpen.material}>
               {visibleItems.map(renderItem)}
             </div>
           </div>
@@ -237,7 +261,20 @@ export default function App() {
           {isAdmin && (
             <>
               <div className="sb-sep" />
-              {renderItem(SETTINGS_ITEM)}
+              <div className={`sb-group ${!collapsed && !groupOpen.system ? 'closed' : ''}`}>
+                <button
+                  className="sb-group-head"
+                  title={collapsed ? GROUP_SYSTEM.name : '折叠 / 展开「系统设置」'}
+                  onClick={() => (collapsed ? toggleSidebar(false) : setGroupOpen(v => ({ ...v, system: !v.system })))}
+                >
+                  <Icon name={GROUP_SYSTEM.icon} size={16} />
+                  {!collapsed && <span className="sb-gname">{GROUP_SYSTEM.name}</span>}
+                  {!collapsed && <span className="sb-caret"><Icon name="caret" size={14} /></span>}
+                </button>
+                <div className="sb-items" hidden={!collapsed && !groupOpen.system}>
+                  {GROUP_SYSTEM.items.map(renderItem)}
+                </div>
+              </div>
             </>
           )}
         </nav>
@@ -261,7 +298,7 @@ export default function App() {
         <div className="main-inner">
           <header className="page-head">
             <div className="ph-left">
-              <div className="page-kicker">{tab === 'settings' ? '系统' : '素材管理'}</div>
+              <div className="page-kicker">{GROUP_SYSTEM.items.some(i => i.key === tab) ? '系统' : '素材管理'}</div>
               <h1 className="page-title">{cur.label}</h1>
               <p className="page-desc">{cur.desc}</p>
             </div>
@@ -282,7 +319,10 @@ export default function App() {
           {tab === 'batch' && isEditor && <Batch meta={meta} />}
           {tab === 'library' && <Library user={user} canReview={canReview} isEditor={isEditor} />}
           {tab === 'specs' && <Specs canEdit={canReview} />}
-          {tab === 'settings' && isAdmin && <Settings />}
+          {tab === 'llm' && isAdmin && <LLMSettings />}
+          {tab === 'accounts' && isAdmin && <Accounts />}
+          {tab === 'logs' && isAdmin && <Logs />}
+          {tab === 'prompts' && isAdmin && <Prompts />}
         </div>
       </main>
     </div>

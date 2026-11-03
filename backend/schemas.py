@@ -95,6 +95,26 @@ class ModelConfigOut(BaseModel):
     class Config:
         from_attributes = True
 
+
+class PromptOut(BaseModel):
+    id: int
+    key: str
+    name: str
+    module: str
+    description: Optional[str] = None
+    content: str
+    is_active: bool = True
+    updated_at: Optional[Any] = None
+    class Config:
+        from_attributes = True
+
+
+class PromptUpdate(BaseModel):
+    content: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
 class RegenerateRequest(BaseModel):
     extra_prompt: str
 

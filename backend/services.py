@@ -14,7 +14,7 @@ import re
 
 import httpx
 
-from models import Framework, Campaign, Material, PlatformSpec, Angle, ModelConfig
+from models import Framework, Campaign, Material, PlatformSpec, Angle, ModelConfig, PromptConfig
 from providers import get_llm, get_image, get_video, parse_json
 from insight import analyze_local, detect_lang
 from creative import (ANGLE_LIBRARY, ANGLE_MAP, COPY_SCHEMA, build_copy_kit, map_to_platform,
@@ -77,6 +77,54 @@ SYS_COPY = (
     "输出严格 JSON：{\"headlines\":[3条短标题],\"bodies\":[2条正文],\"cta\":\"按钮文案\"}。"
     "每条都必须能独立成立，且不超过给定字数上限。只输出 JSON。MARKER:COPY_JSON"
 )
+
+# ----------------------------- 提示词管理（设置页可查可改，保存即生效） -----------------------------
+# 内置注册表：播种与「恢复默认」的唯一来源。编辑存 DB，调用时经 get_prompt 读取。
+PROMPT_REGISTRY = [
+    {
+        "key": "site_analysis",
+        "name": "网站核心内容分析",
+        "module": "落地页分析（创作工作台 / 批量生成 / 分析报告）",
+        "description": (
+            "输入落地页 URL/正文，输出 9 模块结构化 JSON（定位/价值/背书/人群/页面/渠道/风险/缺口/下一步），"
+            "落库 site_analysis 并驱动创意方向推荐排序与报告。注意：结尾的 MARKER:SITE_ANALYSIS_JSON 用于解析兜底路由，请保留。"
+        ),
+        "content": SYS_SITE_ANALYSIS,
+    },
+    {
+        "key": "angle",
+        "name": "创意方向规划",
+        "module": "创意方向生成（POST /api/angles/plan）",
+        "description": (
+            "基于产品事实润色 8 个创意方向（pain/benefit/proof/curiosity/ugc/promo/scenario/comparison），"
+            "仅覆盖 hook/insight/visual 三个字段，本地库兜底。注意：结尾的 MARKER:ANGLE_JSON 请保留。"
+        ),
+        "content": SYS_ANGLE,
+    },
+    {
+        "key": "copy",
+        "name": "按方向生产文案",
+        "module": "素材生产与重生成（标题/正文/CTA）",
+        "description": (
+            "按选定创意方向与语言撰写 headlines（3 条）与 bodies（2 条）及 CTA，输出后统一走字数对齐。"
+            "注意：结尾的 MARKER:COPY_JSON 请保留。"
+        ),
+        "content": SYS_COPY,
+    },
+]
+
+_PROMPT_FALLBACK = {p["key"]: p["content"] for p in PROMPT_REGISTRY}
+
+
+def get_prompt(db, key: str) -> str:
+    """读取当前生效的提示词：DB 中启用版本优先，未配置/停用/读取失败回退内置默认。"""
+    try:
+        row = db.query(PromptConfig).filter_by(key=key, is_active=True).first()
+        if row and (row.content or "").strip():
+            return row.content
+    except Exception:
+        pass
+    return _PROMPT_FALLBACK.get(key, "")
 
 
 def has_real(db, usage="analysis") -> bool:
@@ -293,7 +341,7 @@ async def analyze_site(db, page, text, facts, url: str = "") -> dict:
     prompt = build_site_prompt(page, text, facts, url)
     llm = get_llm(db, "analysis")  # 真实模型（带 Mock 兜底）或 Mock
     try:
-        resp = await llm.chat(SYS_SITE_ANALYSIS, prompt)
+        resp = await llm.chat(get_prompt(db, "site_analysis"), prompt)
         sa = parse_json(resp)
         if isinstance(sa, dict) and sa.get("positioning"):
             # 只有「确实调用了真实模型且成功」才标 llm；FallbackLLM 静默回退 Mock 时如实标 mock。
@@ -408,7 +456,7 @@ async def plan_angles(db, fw, platforms=None, extra=None, lang=None) -> list[Ang
             "给出 6-8 个创意方向，key 只能用 pain/benefit/proof/curiosity/ugc/promo/scenario/comparison。"
         )
         try:
-            resp = parse_json(await llm.chat(SYS_ANGLE, prompt))
+            resp = parse_json(await llm.chat(get_prompt(db, "angle"), prompt))
             got = {x.get("key"): x for x in (resp.get("angles") or []) if x.get("key") in ANGLE_MAP}
             for a in angles:
                 g = got.get(a["key"])
@@ -449,7 +497,7 @@ async def _angle_copy(db, fw, angle_key, lang, extra):
             "headlines 每条 ≤40 字符，bodies 每条 ≤90 字符。"
         )
         try:
-            resp = parse_json(await llm.chat(SYS_COPY, prompt))
+            resp = parse_json(await llm.chat(get_prompt(db, "copy"), prompt))
             if resp.get("headlines"):
                 kit = {
                     "headlines": [str(x) for x in resp["headlines"]][:3],

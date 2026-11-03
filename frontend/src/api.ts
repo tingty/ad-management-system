@@ -186,6 +186,17 @@ export interface ModelConfig {
   is_active: boolean
 }
 
+export interface PromptConfig {
+  id: number
+  key: string
+  name: string
+  module: string
+  description?: string
+  content: string
+  is_active: boolean
+  updated_at?: string | null
+}
+
 export interface Meta {
   platforms: string[]
   material_types: string[]
@@ -400,7 +411,7 @@ export const api = {
   updateUser: (id: number, u: Partial<User> & { password?: string }) =>
     req<User>(`/api/users/${id}`, { method: 'PUT', body: JSON.stringify(u) }),
   deactivateUser: (id: number) => req<any>(`/api/users/${id}`, { method: 'DELETE' }),
-  auditLogs: () => req<any[]>('/api/audit-logs'),
+  auditLogs: (limit = 100) => req<any[]>(`/api/audit-logs?limit=${limit}`),
   // 分析与生成
   analyze: (url: string, text: string) =>
     req<Framework>('/api/analyze', { method: 'POST', body: JSON.stringify({ url, text }) }),
@@ -478,6 +489,12 @@ export const api = {
   testModel: (m: Partial<ModelConfig>) =>
     req<{ ok: boolean; latency_ms?: number; reply?: string; error?: string }>(
       '/api/settings/models/test', { method: 'POST', body: JSON.stringify(m) }),
+  // 提示词管理
+  prompts: () => req<PromptConfig[]>('/api/settings/prompts'),
+  updatePrompt: (key: string, payload: { content: string; name?: string; description?: string; is_active?: boolean }) =>
+    req<PromptConfig>(`/api/settings/prompts/${key}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  resetPrompt: (key: string) =>
+    req<PromptConfig>(`/api/settings/prompts/${key}/reset`, { method: 'POST' }),
   // 规格库
   specs: () => req<PlatformSpec[]>('/api/platform-specs'),
   updateSpec: (id: number, patch: Partial<PlatformSpec>) =>

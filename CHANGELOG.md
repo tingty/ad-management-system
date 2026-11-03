@@ -349,6 +349,35 @@
   设置页 `GET /api/settings/models` 会明文返回 `api_key` 供编辑，属既有设计。
 - 默认只覆盖 `analysis` / `copy` 文本用途；`image` / `video` 不预置，可在设置页自行接入其它模型调试。
 
+## V4.4 设置菜单拆分 + 提示词管理
+
+**交付**
+- 左侧菜单「设置」拆分为独立的「系统设置」分组，含 4 个子页面：
+  - **大模型配置**：原 AI 模型 API 配置独立成页（按用途配置、热切换、连通性测试）。
+  - **账号**：账号与角色管理独立成页，创建/编辑改为**弹窗**（显示名、角色、密码重置），支持停用/启用。
+  - **日志**：审计日志独立成页，支持条数选择（50/100/300/1000）、关键词过滤、刷新。
+  - **提示词管理**（新增能力）：统一管理各功能模块的大模型提示词。
+- 后端提示词管理：
+  - 新增 `PromptConfig` 表（key/name/module/description/content/is_active/updated_at），启动播种 3 条系统提示词。
+  - `services.get_prompt(db, key)`：调用时优先读取 DB 中启用的提示词，未配置/停用/读取失败回退内置默认——**编辑保存即生效**，无需重启。
+  - 新接口：`GET /api/settings/prompts`（按注册表顺序，未落库以默认兜底展示）、`PUT /api/settings/prompts/{key}`（编辑，写入审计 `prompt.update`）、`POST /api/settings/prompts/{key}/reset`（恢复默认，写入审计 `prompt.reset`）。
+  - 编辑防护：内容为空拒绝；**删除 MARKER 标记拒绝保存**（Mock 兜底路由与日志定位依赖它）。
+  - 三处模型调用点（`analyze_site` / `plan_angles` / `_angle_copy`）全部改为 `get_prompt` 动态读取。
+- 前端提示词管理页：每条提示词展示**所属功能模块**、更新时间、用途说明、规范化内容预览（可展开全文），编辑在**宽弹窗**中完成（等宽字体编辑器），支持停用与恢复默认。
+- 移除旧的 `Settings.tsx` / `AdminUsers.tsx`（能力已拆入 4 个页面）。
+
+**验收证据**
+- 启动日志：`[seed] 系统提示词已初始化：site_analysis, angle, copy`。
+- `GET /api/settings/prompts` → 3 条，含 key/name/module/content（1680/337/144 字符）。
+- 编辑 site_analysis 注入「V99」标记 → `get_prompt` 运行时读回含标记；`/api/analyze` 主流程仍 200；reset 后标记消失。
+- 删除 MARKER 的内容 → `400 提示词需保留结尾 MARKER 标记…`。
+- 账号创建/编辑（含密码重置与角色变更）→ 200；审计日志记录 `user.create / user.update / prompt.update / prompt.reset`。
+- `py_compile` 全模块通过；`npm run build` 通过（44 modules）。
+
+**已知边界**
+- 提示词为全局生效（不分用户/工作区）；编辑质量由使用者把关，可随时「恢复默认」回退。
+- MARKER 校验只拦截「完全不含 MARKER 字样」的内容，若改动标记名称仍可能导致 Mock 兜底解析失败（回退本地构造，不报错）。
+
 ## 全局技术改进
 
 - SQLite 开启 WAL + `busy_timeout=30000`，读写不互斥。

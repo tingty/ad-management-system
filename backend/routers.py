@@ -8,16 +8,16 @@ import httpx
 
 from database import get_db
 from models import (Campaign, Material, Framework, ModelConfig, PlatformSpec, LandingPage, Job,
-                    User, ReviewRecord, AuditLog, Angle)
+                    User, ReviewRecord, AuditLog, Angle, PromptConfig)
 from schemas import (AnalyzeRequest, FrameworkOut, GenerateRequest, CampaignOut,
                      MaterialOut, ModelConfigIn, ModelConfigOut, RegenerateRequest,
                      JobCreate, JobOut, BatchParseRequest, SlotVersionsOut,
                      LoginRequest, UserOut, UserCreate, UserUpdate, ReviewRequest, SpecUpdate,
                      AngleOut, AnglePlanRequest, ProduceRequest, BrandUpdate, EstimateRequest,
-                     ReportRequest, OptimizeRequest)
+                     ReportRequest, OptimizeRequest, PromptOut, PromptUpdate)
 from services import (analyze_landing_page, generate_campaign_materials, regenerate_material,
                       plan_angles, produce_campaign, fetch_page, optimize_campaign,
-                      IMAGE_MAX_SIZES)
+                      IMAGE_MAX_SIZES, PROMPT_REGISTRY)
 from creative import COPY_SCHEMA, ANGLE_LIBRARY, ANGLE_MAP
 from report import build_report, report_markdown
 from batch import parse_csv, run_job, template_csv, CSV_HEADERS
@@ -492,8 +492,7 @@ def download_material(mid: int, db: Session = Depends(get_db)):
     return StreamingResponse(iter([_material_text(m)]), media_type="text/plain",
                              headers={"Content-Disposition": f"attachment; filename={base}"})
 
-# ----------------------------- 设置：AI 模型配置 -----------------------------
-@router.get("/settings/models", response_model=list[ModelConfigOut])
+# ----------------------------- 设置：AI 模型配置 -----------------------------@router.get("/settings/models", response_model=list[ModelConfigOut])
 def list_models(db: Session = Depends(get_db)):
     return db.query(ModelConfig).order_by(ModelConfig.usage).all()
 
@@ -550,6 +549,78 @@ async def test_model(req: ModelConfigIn):
         return {"ok": True, "latency_ms": int((time.time() - t0) * 1000), "reply": reply}
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
+
+
+# ----------------------------- 设置：提示词管理 -----------------------------
+def _prompt_reg(key: str):
+    return next((p for p in PROMPT_REGISTRY if p["key"] == key), None)
+
+
+@router.get("/settings/prompts", response_model=list[PromptOut])
+def list_prompts(db: Session = Depends(get_db), _: User = Depends(require_roles("admin"))):
+    """按注册表顺序输出全部提示词；未落库的用内置默认兜底展示（与运行时 get_prompt 行为一致）。"""
+    rows = {p.key: p for p in db.query(PromptConfig).all()}
+    out = []
+    for item in PROMPT_REGISTRY:
+        row = rows.get(item["key"])
+        if row:
+            out.append(row)
+        else:
+            out.append(PromptConfig(id=0, key=item["key"], name=item["name"], module=item["module"],
+                                    description=item["description"], content=item["content"],
+                                    is_active=True, updated_at=None))
+    return out
+
+
+@router.put("/settings/prompts/{key}", response_model=PromptOut)
+def update_prompt(key: str, req: PromptUpdate, db: Session = Depends(get_db),
+                  admin: User = Depends(require_roles("admin"))):
+    """编辑提示词正文；保存即生效（下一次调用该模块时使用新提示词）。"""
+    reg = _prompt_reg(key)
+    if not reg:
+        raise HTTPException(404, "提示词不存在")
+    content = (req.content or "").strip()
+    if not content:
+        raise HTTPException(400, "提示词内容不能为空")
+    if "MARKER" not in content:
+        raise HTTPException(400, "提示词需保留结尾 MARKER 标记（Mock 兜底与日志定位依赖它），请勿删除")
+    row = db.query(PromptConfig).filter_by(key=key).first()
+    if not row:
+        row = PromptConfig(key=key, name=reg["name"], module=reg["module"],
+                           description=reg["description"], content=reg["content"])
+        db.add(row)
+    row.content = req.content
+    if req.name is not None:
+        row.name = req.name
+    if req.description is not None:
+        row.description = req.description
+    if req.is_active is not None:
+        row.is_active = req.is_active
+    db.commit(); db.refresh(row)
+    _audit(db, admin, "prompt.update", key, {"name": row.name, "chars": len(row.content)})
+    return row
+
+
+@router.post("/settings/prompts/{key}/reset", response_model=PromptOut)
+def reset_prompt(key: str, db: Session = Depends(get_db),
+                 admin: User = Depends(require_roles("admin"))):
+    """恢复为内置默认提示词。"""
+    reg = _prompt_reg(key)
+    if not reg:
+        raise HTTPException(404, "提示词不存在")
+    row = db.query(PromptConfig).filter_by(key=key).first()
+    if not row:
+        row = PromptConfig(key=key, name=reg["name"], module=reg["module"],
+                           description=reg["description"], content=reg["content"], is_active=True)
+        db.add(row)
+    else:
+        row.content = reg["content"]
+        row.name = reg["name"]
+        row.description = reg["description"]
+        row.is_active = True
+    db.commit(); db.refresh(row)
+    _audit(db, admin, "prompt.reset", key, {"name": row.name})
+    return row
 
 
 # ----------------------------- V1.1 批量任务 -----------------------------

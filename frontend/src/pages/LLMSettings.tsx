@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { api, ModelConfig } from '../api'
-import AdminUsers from '../components/AdminUsers'
 
 const USAGES = [
   { v: 'analysis', label: '落地页分析 / 框架' },
@@ -10,7 +9,7 @@ const USAGES = [
 ]
 const empty = { usage: 'analysis', provider: 'openai', api_key: '', base_url: 'https://api.openai.com/v1', model: '', is_active: true }
 
-export default function Settings() {
+export default function LLMSettings() {
   const [list, setList] = useState<ModelConfig[]>([])
   const [form, setForm] = useState<any>({ ...empty })
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -35,6 +34,7 @@ export default function Settings() {
 
   const edit = (m: ModelConfig) => {
     setEditingId(m.id)
+    setTestMsg('')
     setForm({ usage: m.usage, provider: m.provider, api_key: m.api_key || '', base_url: m.base_url || '', model: m.model || '', is_active: m.is_active })
   }
 
@@ -55,14 +55,6 @@ export default function Settings() {
   return (
     <div>
       <div className="card">
-        <h2>AI 模型 API 配置</h2>
-        <div className="muted">
-          按用途（分析 / 文案 / 图片 / 视频）配置大模型接口。支持 OpenAI 兼容协议（含本地模型 / 第三方网关），
-          <b>保存即热切换</b>，无需重启后端。未配置 Key 时自动使用内置 Mock 兜底，保证工具可运行。
-        </div>
-      </div>
-
-      <div className="card">
         <h2>{editingId ? '编辑配置 #' + editingId : '新增配置'}</h2>
         <div className="row">
           <div>
@@ -72,18 +64,18 @@ export default function Settings() {
             </select>
           </div>
           <div>
-            <label>Provider</label>
-            <input type="text" value={form.provider} onChange={e => setForm({ ...form, provider: e.target.value })} placeholder="openai / anthropic / ollama" />
+            <label>模型名称</label>
+            <input type="text" value={form.provider} onChange={e => setForm({ ...form, provider: e.target.value })} placeholder="千问大模型 / openai / ollama" />
           </div>
         </div>
         <div className="row">
           <div>
             <label>Base URL</label>
-            <input type="text" value={form.base_url} onChange={e => setForm({ ...form, base_url: e.target.value })} placeholder="https://api.openai.com/v1" />
+            <input type="text" value={form.base_url} onChange={e => setForm({ ...form, base_url: e.target.value })} placeholder="https://dashscope-intl.aliyuncs.com/compatible-mode/v1" />
           </div>
           <div>
             <label>Model</label>
-            <input type="text" value={form.model} onChange={e => setForm({ ...form, model: e.target.value })} placeholder="gpt-4o-mini / qwen / ..." />
+            <input type="text" value={form.model} onChange={e => setForm({ ...form, model: e.target.value })} placeholder="qwen-plus / gpt-4o-mini / ..." />
           </div>
         </div>
         <label>API Key</label>
@@ -95,7 +87,7 @@ export default function Settings() {
           </label>
           <button className="btn" onClick={save}>{editingId ? '保存修改' : '创建配置'}</button>
           <button className="btn secondary" onClick={test} disabled={testing}>{testing ? '测试中…' : '测试连通性'}</button>
-          {editingId && <button className="btn ghost" onClick={() => { setEditingId(null); setForm({ ...empty }) }}>取消</button>}
+          {editingId && <button className="btn ghost" onClick={() => { setEditingId(null); setForm({ ...empty }); setTestMsg('') }}>取消</button>}
         </div>
         {testMsg && <div className={'alert ' + (testMsg.startsWith('✓') ? 'ok' : 'err')}>{testMsg}</div>}
         {err && <div className="alert err">{err}</div>}
@@ -104,8 +96,10 @@ export default function Settings() {
 
       <div className="card">
         <h2>已配置模型（{list.length}）</h2>
+        <div className="muted">按用途（分析 / 文案 / 图片 / 视频）配置大模型接口，保存即热切换，无需重启后端。
+          未配置 Key 时自动使用内置 Mock 兜底。DashScope 需使用 OpenAI 兼容端点（…/compatible-mode/v1）。</div>
         {list.length === 0 ? <div className="muted">暂无配置，将使用 Mock 兜底。</div> : (
-          <table>
+          <table style={{ marginTop: 10 }}>
             <thead><tr><th>用途</th><th>模型名称</th><th>Base URL</th><th>Model</th><th>状态</th><th>操作</th></tr></thead>
             <tbody>
               {list.map(m => (
@@ -127,8 +121,6 @@ export default function Settings() {
           </table>
         )}
       </div>
-
-      <AdminUsers />
     </div>
   )
 }

@@ -4,11 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from database import engine, Base, SessionLocal
-from models import PlatformSpec, User, ModelConfig
+from models import PlatformSpec, User, ModelConfig, PromptConfig
 from specs_data import PLATFORM_SPECS
 from migrations import ensure_schema, normalize_data
 from routers import router
 from auth import decode_token, hash_password
+from services import PROMPT_REGISTRY
 
 app = FastAPI(title="广告管理系统", version="4.0.0")
 
@@ -129,12 +130,31 @@ def seed_specs():
     finally:
         db.close()
 
+def seed_prompts():
+    """播种系统提示词（key 唯一，已存在不覆盖）；用户可在「提示词管理」页编辑，保存即生效。"""
+    db = SessionLocal()
+    try:
+        created = []
+        for item in PROMPT_REGISTRY:
+            if db.query(PromptConfig).filter_by(key=item["key"]).count() == 0:
+                db.add(PromptConfig(key=item["key"], name=item["name"], module=item["module"],
+                                    description=item["description"], content=item["content"],
+                                    is_active=True))
+                created.append(item["key"])
+        if created:
+            db.commit()
+            print(f"[seed] 系统提示词已初始化：{', '.join(created)}")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 def on_startup():
     ensure_schema()   # 建表 + 自动补齐缺失列（避免旧演示库与模型漂移）
     normalize_data()  # 新列数据回填
     seed_specs()
     seed_users()
+    seed_prompts()
     seed_default_model()
 
 @app.get("/api/health")
