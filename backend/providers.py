@@ -396,6 +396,60 @@ class OpenAICompatibleLLM(LLMProvider):
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"]
 
+class AnthropicLLM(LLMProvider):
+    """Anthropic Claude：自有 /v1/messages 协议（x-api-key 头 + anthropic-version）。"""
+    def __init__(self, api_key, base_url, model, params=None):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.params = params or {}
+
+    async def chat(self, system, user, **kw):
+        async with httpx.AsyncClient(timeout=90) as c:
+            r = await c.post(
+                self.base_url + "/v1/messages",
+                headers={"x-api-key": self.api_key, "anthropic-version": "2023-06-01",
+                         "Content-Type": "application/json"},
+                json={
+                    "model": self.model,
+                    "max_tokens": max(int(self.params.get("max_tokens", 4096)), 256),
+                    "temperature": self.params.get("temperature", 0.7),
+                    "system": system,
+                    "messages": [{"role": "user", "content": user}],
+                },
+            )
+            r.raise_for_status()
+            return r.json()["content"][0]["text"]
+
+
+class GeminiLLM(LLMProvider):
+    """Google Gemini：generateContent 协议（Key 以 ?key= 追加）。"""
+    def __init__(self, api_key, base_url, model, params=None):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.params = params or {}
+
+    async def chat(self, system, user, **kw):
+        url = self.base_url + f"/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+        async with httpx.AsyncClient(timeout=90) as c:
+            r = await c.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json={
+                    "systemInstruction": {"parts": [{"text": system}]},
+                    "contents": [{"role": "user", "parts": [{"text": user}]}],
+                    "generationConfig": {
+                        "maxOutputTokens": max(int(self.params.get("max_tokens", 4096)), 3000),
+                        "temperature": self.params.get("temperature", 0.7),
+                    },
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+
+
 class FallbackLLM(LLMProvider):
     """真实模型调用失败时自动回退 Mock，保证主流程不中断。
 
@@ -483,7 +537,16 @@ def get_llm(db, usage="analysis") -> LLMProvider:
     cfg = _active_config(db, usage)
     if cfg and cfg.api_key and cfg.base_url and cfg.model:
         try:
-            real = OpenAICompatibleLLM(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
+            # 按目录协议选择真实 provider；未知厂商按 OpenAI 兼容处理
+            from llm_catalog import get_preset
+            preset = get_preset(cfg.provider)
+            protocol = preset["protocol"] if preset else "openai"
+            if protocol == "anthropic":
+                real = AnthropicLLM(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
+            elif protocol == "gemini":
+                real = GeminiLLM(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
+            else:
+                real = OpenAICompatibleLLM(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
             return FallbackLLM(real, MockLLM())
         except Exception:
             pass

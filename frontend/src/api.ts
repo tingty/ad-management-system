@@ -186,6 +186,33 @@ export interface ModelConfig {
   is_active: boolean
 }
 
+export interface ModelPreset {
+  key: string
+  name: string
+  protocol: string
+  default_base_url: string
+  base_url_editable: boolean
+  models: string[]
+  api_key_label: string
+  api_key_placeholder: string
+  model_placeholder: string
+  docs_url: string
+  setup_guide: string
+  notes: string
+}
+
+export interface ModelTestResult {
+  ok: boolean
+  latency_ms?: number
+  reply?: string
+  error?: string
+  error_type?: string
+  message?: string
+  hint_url?: string
+  hint_url_label?: string
+  raw?: string
+}
+
 export interface PromptConfig {
   id: number
   key: string
@@ -483,6 +510,7 @@ export const api = {
     req<any>(`/api/campaigns/${cid}/comment`, { method: 'POST', body: JSON.stringify({ comment }) }),
   // 设置
   models: () => req<ModelConfig[]>('/api/settings/models'),
+  modelPresets: () => req<ModelPreset[]>('/api/settings/models/presets'),
   createModel: (m: Partial<ModelConfig>) =>
     req<ModelConfig>('/api/settings/models', { method: 'POST', body: JSON.stringify(m) }),
   updateModel: (id: number, m: Partial<ModelConfig>) =>
@@ -490,7 +518,7 @@ export const api = {
   deleteModel: (id: number) =>
     req<any>(`/api/settings/models/${id}`, { method: 'DELETE' }),
   testModel: (m: Partial<ModelConfig>) =>
-    req<{ ok: boolean; latency_ms?: number; reply?: string; error?: string }>(
+    req<ModelTestResult>(
       '/api/settings/models/test', { method: 'POST', body: JSON.stringify(m) }),
   // 提示词管理
   prompts: () => req<PromptConfig[]>('/api/settings/prompts'),

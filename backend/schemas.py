@@ -83,6 +83,14 @@ class ModelConfigIn(BaseModel):
     params: Optional[dict] = None
     is_active: bool = True
 
+class ModelTestIn(BaseModel):
+    """连通测试只需 provider + 连接信息，不依赖 usage（避免与创建校验耦合）。"""
+    provider: str = "custom"
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    protocol: Optional[str] = None
+
 class ModelConfigOut(BaseModel):
     id: int
     usage: str

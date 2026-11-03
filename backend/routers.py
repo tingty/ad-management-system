@@ -10,7 +10,7 @@ from database import get_db
 from models import (Campaign, Material, Framework, ModelConfig, PlatformSpec, LandingPage, Job,
                     User, ReviewRecord, AuditLog, Angle, PromptConfig)
 from schemas import (AnalyzeRequest, FrameworkOut, GenerateRequest, CampaignOut,
-                     MaterialOut, ModelConfigIn, ModelConfigOut, RegenerateRequest,
+                     MaterialOut, ModelConfigIn, ModelConfigOut, ModelTestIn, RegenerateRequest,
                      JobCreate, JobOut, BatchParseRequest, SlotVersionsOut,
                      LoginRequest, UserOut, UserCreate, UserUpdate, ReviewRequest, SpecUpdate,
                      AngleOut, AnglePlanRequest, ProduceRequest, BrandUpdate, EstimateRequest,
@@ -22,6 +22,7 @@ from creative import COPY_SCHEMA, ANGLE_LIBRARY, ANGLE_MAP
 from report import build_report, report_markdown
 from batch import parse_csv, run_job, template_csv, CSV_HEADERS
 from specs_data import PLATFORMS, MATERIAL_TYPES, LANGUAGES
+from llm_catalog import LLM_PRESETS, test_llm_connection
 from auth import (current_user, require_roles, verify_password, hash_password, create_token,
                   user_dict, ROLE_LABELS, CAN_EDIT, CAN_REVIEW, ROLES)
 
@@ -597,27 +598,40 @@ def delete_model(mid: int, db: Session = Depends(get_db),
     db.delete(m); db.commit()
     return {"ok": True}
 
+@router.get("/settings/models/presets")
+def list_model_presets():
+    """返回全球主流大模型配置目录（不含任何密钥），供前端「添加大模型」时选择并自动带出字段。"""
+    return [
+        {
+            "key": p["key"],
+            "name": p["name"],
+            "protocol": p["protocol"],
+            "default_base_url": p["default_base_url"],
+            "base_url_editable": p["base_url_editable"],
+            "models": p["models"],
+            "api_key_label": p["api_key_label"],
+            "api_key_placeholder": p["api_key_placeholder"],
+            "model_placeholder": p["model_placeholder"],
+            "docs_url": p["docs_url"],
+            "setup_guide": p["setup_guide"],
+            "notes": p["notes"],
+        }
+        for p in LLM_PRESETS
+    ]
+
+
 @router.post("/settings/models/test")
-async def test_model(req: ModelConfigIn):
-    """连通性测试：用给定配置发起一次最小真实调用，返回 ok/延迟/错误。"""
-    if not (req.api_key and req.base_url and req.model):
-        return {"ok": False, "error": "缺少 api_key / base_url / model"}
-    try:
-        t0 = time.time()
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(
-                req.base_url.rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {req.api_key}", "Content-Type": "application/json"},
-                json={"model": req.model,
-                      "messages": [{"role": "user", "content": "Reply with the single word: OK"}],
-                      "max_tokens": 8},
-            )
-            r.raise_for_status()
-            data = r.json()
-            reply = data["choices"][0]["message"]["content"][:60]
-        return {"ok": True, "latency_ms": int((time.time() - t0) * 1000), "reply": reply}
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:300]}
+async def test_model(req: ModelTestIn):
+    """协议感知连通测试：按 provider 查目录决定协议（OpenAI / Anthropic / Gemini），
+    发起一次最小真实调用，返回 ok/延迟/回包，或结构化错误（error_type/message/hint_url）。"""
+    result = await test_llm_connection({
+        "provider": req.provider,
+        "api_key": req.api_key,
+        "base_url": req.base_url,
+        "model": req.model,
+        "protocol": req.protocol,
+    })
+    return result
 
 
 # ----------------------------- 设置：提示词管理 -----------------------------

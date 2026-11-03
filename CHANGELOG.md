@@ -565,3 +565,25 @@
 **验收证据**
 - 单元测试 4 场景：旧 `admin/Admin@123`（邮箱兜底 `admin@example.com`）、旧 `leson`+兜底邮箱、已正确（幂等）、已改自定义密码（保留不重置）——前三类登录 `leson@recomob.com/Tingty@123.com` 均 200，第四类按设计保留原密码。
 - 真实 HTTP E2E：以「脏库」（旧 `admin/Admin@123`）启动 uvicorn，`POST /api/auth/login` 用统一账号返回 200 + token；错密码 401。
+
+## V4.10 全球主流大模型可配置化（目录 + 协议感知测试 + 引导）
+
+**需求**：用户可填写主要 API 配置即可完成大模型调用测试与配置；添加时选择大模型名称，选中后显示可配置字段，保存后首次调用并给出成败与具体错误引导。
+
+**交付**
+- 新增 `backend/llm_catalog.py`：覆盖 18 个主流厂商的预设目录（OpenAI / DeepSeek / 通义千问 / Kimi / 智谱GLM / 百川 / MiniMax / 硅基流动 / Groq / OpenRouter / Together / Perplexity / Mistral / Ollama / vLLM / Anthropic / Gemini / 自定义）。每项为：协议、默认 Base URL、常见 Model、必填字段标签/占位、官方文档链接、中文配置步骤、注意事项。
+- 协议感知连通测试 `test_llm_connection()`：按 provider 查目录决定协议，真正发起最小调用——
+  - `openai`：`/chat/completions`（覆盖绝大多数兼容网关）；
+  - `anthropic`：自有 `/v1/messages`（x-api-key 头）；
+  - `gemini`：`/v1beta/models/{model}:generateContent?key=`。
+  - 失败结构化诊断：`error_type`（auth/permission/not_found/rate_limit/network/bad_request/unknown）+ 中文引导 + 该厂商官方文档链接 + 原始错误（可折叠）。
+- 接口：`GET /api/settings/models/presets` 返回目录；`POST /api/settings/models/test` 改用 `ModelTestIn`（不强制 usage），返回结构化结果。
+- 运行期 `providers.get_llm` 按目录协议分发到 `AnthropicLLM` / `GeminiLLM` / `OpenAICompatibleLLM`，使配置的真实模型在分析/文案场景真正可用，失败时回退 Mock。
+- 前端 `LLMSettings.tsx`：「＋ 添加大模型」→ 目录选择（搜索 + 协议徽标）→ 自动带出默认 Base URL / Model 建议 / 字段标签 → 填 Key 即完成 →「保存并测试」先落库再首次真实调用 → 成功显示延迟与回包；失败显示错误类型、中文引导与官方文档链接。已配置列表按目录名称展示。
+- `api.ts` 增加 `modelPresets()` 与 `ModelPreset` / `ModelTestResult` 类型；`styles.css` 补充目录卡片、协议徽标、Model 建议 chip、配置引导、文档链接、原始错误等样式。
+
+**验收证据**
+- `py_compile` 全过；`import main` 64 路由正常。
+- 单元：目录完整性（18 项、协议映射正确）；错误分类 401/404/429/ConnectError 均产出正确 `error_type` 与文档标签。
+- HTTP E2E（token 鉴权后）：`/presets` 返回 18 项；`/test` 坏 Base URL → `network`+中文引导+文档链接；缺字段 → `bad_request`；`POST /settings/models` 创建成功。
+- `npm run build` 前端 44 模块通过。

@@ -666,4 +666,59 @@ select {
 }
 .wg-sec-video .wg-sec-tag { background: #2f5d8f; }
 .wg-sec-text .wg-sec-tag { background: #6b7c93; }
+
+/* ===================== 设置：大模型目录选择 + 测试引导 ===================== */
+.model-picker {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: #f8fafc; padding: 12px 14px; margin: 12px 0;
+}
+.filter-input {
+  width: 100%; padding: 9px 12px; border: 1px solid var(--border);
+  border-radius: 8px; font-size: 13px; font-family: inherit; box-sizing: border-box;
+  background: #fff; margin-bottom: 10px;
+}
+.filter-input:focus { outline: none; border-color: var(--primary); }
+.preset-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px; max-height: 320px; overflow: auto;
+}
+.preset-card {
+  text-align: left; border: 1px solid var(--border); border-radius: 10px;
+  background: #fff; padding: 10px 12px; cursor: pointer; transition: .15s;
+}
+.preset-card:hover { border-color: var(--primary); box-shadow: 0 4px 14px rgba(46,117,182,.12); }
+.preset-name { font-weight: 700; font-size: 13.5px; color: var(--text); }
+.preset-meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.proto {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; line-height: 1.7;
+}
+.proto-openai { background: #e8f0fb; color: #2e75b6; }
+.proto-anthropic { background: #fdeede; color: #b9651f; }
+.proto-gemini { background: #e6f3ec; color: #1f8a5b; }
+
+.provider-line { display: flex; align-items: center; gap: 8px; padding: 8px 0; flex-wrap: wrap; }
+.provider-name { font-weight: 700; font-size: 14px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 4px; }
+.chip {
+  border: 1px solid var(--border); background: #fff; color: var(--text);
+  border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer;
+}
+.chip:hover { border-color: var(--primary); color: var(--primary); }
+.guide {
+  margin: 10px 0 6px; padding: 10px 12px; border-radius: 8px;
+  background: #fff8ec; border: 1px solid #f0e0bf; color: #7a5a1e;
+  font-size: 12.5px; line-height: 1.6;
+}
+.doc-link {
+  display: inline-block; margin: 2px 0 4px; color: var(--primary);
+  font-size: 12.5px; text-decoration: none; font-weight: 600;
+}
+.doc-link:hover { text-decoration: underline; }
+.raw {
+  margin: 6px 0 0; padding: 8px 10px; border-radius: 8px;
+  background: #f6f8fa; border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px; white-space: pre-wrap; word-break: break-word; color: var(--text);
+}
 .fv-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
