@@ -100,22 +100,25 @@ def seed_default_model():
 
 
 DEFAULT_USERS = [
-    ("admin", "Admin@123", "系统管理员", "admin"),
-    ("manager", "Manager@123", "投放经理", "manager"),
-    ("editor", "Editor@123", "投放执行", "editor"),
-    ("viewer", "Viewer@123", "只读账号", "viewer"),
+    ("leson", "Tingty@123.com", "系统管理员", "admin", "leson@recomob.com"),
+    ("manager", "Manager@123", "投放经理", "manager", None),
+    ("editor", "Editor@123", "投放执行", "editor", None),
+    ("viewer", "Viewer@123", "只读账号", "viewer", None),
 ]
 
 def seed_users():
     db = SessionLocal()
     try:
         if db.query(User).count() == 0:
-            for username, pwd, name, role in DEFAULT_USERS:
+            for username, pwd, name, role, email in DEFAULT_USERS:
                 h, s = hash_password(pwd)
-                db.add(User(username=username, display_name=name, role=role,
-                            password_hash=h, salt=s, active=True))
+                u = User(username=username, display_name=name, role=role,
+                         password_hash=h, salt=s, active=True)
+                if email:
+                    u.email = email
+                db.add(u)
             db.commit()
-            print("[seed] 默认账号已创建：admin / manager / editor / viewer")
+            print("[seed] 默认账号已创建：leson(admin) / manager / editor / viewer")
     finally:
         db.close()
 
