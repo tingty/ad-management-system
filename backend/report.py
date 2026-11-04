@@ -333,6 +333,83 @@ def _price_frag(s: str, m, pad: int = 24) -> str:
     return (seg.strip() or m.group(0))[:60]
 
 
+def _positioning_deep_section(site: dict) -> dict:
+    """网站本质 + toC/toB 目标客户 + 吸引力亮点。
+
+    专门解决两类问题：(1) 落地页定位被误判（如把营销平台误判为教育）；
+    (2) 不总结广告主/渠道/流量商需求与产品亮点。模型在 site_analysis 里已给出
+    business_nature / target_clients / appeal_highlights，这里只负责渲染成报告行。
+    """
+    bn = site.get("business_nature") or {}
+    tc = site.get("target_clients") or {}
+    needs = tc.get("needs") or {}
+    hl = site.get("appeal_highlights") or []
+    return {
+        "key": "positioning_deep",
+        "title": "网站定位与目标客户",
+        "summary": (bn.get("note") or (
+            f"网站本质：{bn.get('nature') or '未识别'}"
+            + ("；这是面向广告主与渠道的营销/广告平台" if bn.get("is_marketing_platform") else ""))),
+        "rows": [
+            {"label": "网站本质", "value": bn.get("nature") or "—",
+             "note": "综合全站内容判断，而非单页关键词"},
+            {"label": "是否营销/广告平台", "value": "是（服务广告主/渠道/流量商）" if bn.get("is_marketing_platform") else "否"},
+            {"label": "终端用户需求", "value": tc.get("toc") or "—"},
+            {"label": "广告主需求", "value": needs.get("advertiser") or "—",
+             "note": "该网站面向的广告主核心诉求"},
+            {"label": "渠道/代理需求", "value": needs.get("channel") or "—",
+             "note": "该网站面向的渠道/代理核心诉求"},
+            {"label": "流量主/媒体需求", "value": needs.get("media") or "—",
+             "note": "该网站面向的流量主/媒体核心诉求"},
+            {"label": "吸引力亮点", "value": ("；".join(hl) if hl else "—"),
+             "note": "对目标客户最有吸引力的价值钩子（为什么该用它）"},
+        ],
+    }
+
+
+def _nine_elements_section(site: dict) -> dict:
+    """九要素结构化总结：行业/类型/品类/需求/方案/模式/优势/差异/目的。"""
+    ne = site.get("nine_elements") or {}
+    return {
+        "key": "nine_elements",
+        "title": "九要素结构化总结",
+        "summary": ne.get("purpose_summary") or "从行业/类型/品类/需求/方案/模式/优势/差异/目的九个维度看懂这个网站。",
+        "rows": [
+            {"label": "行业", "value": ne.get("industry") or "—"},
+            {"label": "类型", "value": ne.get("type") or "—",
+             "note": "网站/业务本质，如效果广告平台 / 消费品落地页 / SaaS"},
+            {"label": "品类", "value": ne.get("category") or "—"},
+            {"label": "满足需求", "value": ne.get("needs") or "—"},
+            {"label": "解决方案", "value": ne.get("solution") or "—"},
+            {"label": "商业模式", "value": ne.get("business_model") or "—",
+             "note": "如何赚钱：广告变现/订阅/SaaS/佣金/CPA 等"},
+            {"label": "优势对比", "value": ne.get("advantage_compare") or "—"},
+            {"label": "差异化特色", "value": ne.get("differentiation") or "—"},
+            {"label": "目的总结", "value": ne.get("purpose_summary") or "—",
+             "note": "一段话概括网站核心目的"},
+        ],
+    }
+
+
+def _extensions_section(site: dict) -> dict:
+    """延伸输出：行业/竞品/需求/差异化/优势 + 推荐媒体与人群。"""
+    ex = site.get("extensions") or {}
+    return {
+        "key": "extensions",
+        "title": "延伸输出 · 行业 / 竞品 / 需求与推荐",
+        "summary": "在九要素基础上延伸：行业趋势、竞品、市场需求、差异化打法、特色优势，并给出推荐媒体与人群。",
+        "rows": [
+            {"label": "行业分析", "value": ex.get("industry_insight") or "—"},
+            {"label": "竞品分析", "value": ex.get("competitors") or "—"},
+            {"label": "市场需求", "value": ex.get("market_demand") or "—"},
+            {"label": "差异化方案", "value": ex.get("diff_solution") or "—"},
+            {"label": "特色优势", "value": ex.get("edge_advantage") or "—"},
+            {"label": "推荐媒体", "value": "、".join(ex.get("recommended_media") or []) or "—"},
+            {"label": "推荐人群", "value": "、".join(ex.get("recommended_audience") or []) or "—"},
+        ],
+    }
+
+
 def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> dict:
     """生成结构化推广产品分析报告。
 
@@ -558,6 +635,8 @@ def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> d
               ("；".join(diffs[:2]) if diffs else "未发现明确的对比/差异化表述")),
               "note": "来自分析（差异化 / 对比句）；没有就说明产品靠品类共性卖，创意要自己造差异"},
          ]},
+        _positioning_deep_section(site),
+        _nine_elements_section(site),
         {"key": "value", "title": "核心价值主张",
          "summary": value_summary, "items": value_props},
         {"key": "proof", "title": "信任与量化背书",
@@ -602,6 +681,7 @@ def build_report(fw, angles=None, page: dict | None = None, text: str = "") -> d
         {"key": "channel", "title": "各平台投放读法",
          "summary": "同一产品在不同流量场的打法不一样，下面是按品类/产品给出的差异，不是通用建议。",
          "items": platform_rows},
+        _extensions_section(site),
     ]
 
     return {

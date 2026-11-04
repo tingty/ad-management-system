@@ -51,17 +51,32 @@ SYS_SITE_ANALYSIS = (
     '  "channel": {平台名: {"tactics": str, "hook": str, "selling_point": str, "compliance_note": str}},\n'
     '  "risk": {"items": [{"level": "error|warn|info", "item": str, "detail": str}], "compliance": str},\n'
     '  "gaps": {"missing": [str], "confidence": "高|中|低"},\n'
-    '  "next_steps": [str×2-4]\n'
+    '  "next_steps": [str×2-4],\n'
+    '  "business_nature": {"nature": str, "is_marketing_platform": bool, "note": str},\n'
+    '  "target_clients": {"toc": str, "tob": [str], '
+    '"needs": {"advertiser": str, "channel": str, "media": str}},\n'
+    '  "appeal_highlights": [str×2-3],\n'
+    '  "nine_elements": {"industry": str, "type": str, "category": str, "needs": str, '
+    '"solution": str, "business_model": str, "advantage_compare": str, '
+    '"differentiation": str, "purpose_summary": str},\n'
+    '  "extensions": {"industry_insight": str, "competitors": str, "market_demand": str, '
+    '"diff_solution": str, "edge_advantage": str, '
+    '"recommended_media": [str], "recommended_audience": [str]}\n'
     "}\n"
     "硬性约束：\n"
     "1. 所有结论必须来自给定的事实与正文，禁止编造；正文没有的信息写入 gaps.missing，不要猜测或补通用套话。\n"
     "2. 量化背书只摘录页面真实出现的数字/奖项/媒体名/认证；「免费」表述保留原文（如 \"Try X for Free\"），不要改写实价。\n"
-    "3. category_key 从固定集合选最贴切者：fitness/finance/game/commerce/education/app/tool/travel/photo_ai/other。\n"
+    "3. category_key 从固定集合选最贴切者：fitness/finance/game/commerce/education/app/tool/travel/photo_ai/adtech/marketing/other；若网站是广告/营销/变现/代理/媒体平台，用 adtech 或 marketing，category 写「效果广告平台/广告变现服务/媒体代理」等，不要因页面含教程/案例就误判为教育。\n"
     "4. value.points 每条都是一条可独立成立的卖点/主张；strength 按「能否直接当素材标题」判：有数字或权威背书为强，纯描述为中。\n"
     "5. channel 聚焦「素材打法」：创意形式、前 3 秒钩子、主推卖点、需规避的合规点；至少覆盖 Facebook/Google/TikTok/Unity/AppLovin/Moloco/Mintegral/Adsterra。\n"
     "6. risk 结合品类给真实拒登点（医疗宣称、收益承诺、虚构倒计时、未成年人定向、未授权数据等）；level 按严重度 error/warn/info。\n"
     "7. next_steps 给投放侧可执行动作（补素材、A/B 方向、合规改写、落地页优化）。\n"
-    "8. 输出前确认 JSON 合法，结尾必须包含 MARKER:SITE_ANALYSIS_JSON。"
+    "8. 输出前确认 JSON 合法，结尾必须包含 MARKER:SITE_ANALYSIS_JSON。\n"
+    "9. 先判断「网站本质属性」(business_nature)：它是 toC 产品落地页、toB 服务/平台、广告技术/流量/媒体平台、营销服务，还是其他。若网站用于「帮助广告主获客、对接渠道与流量、提供广告/营销/变现/代理服务」，必须标记为「效果广告/营销平台（服务广告主与渠道/流量商）」，不得仅因页面出现教程/案例/博客就误判为教育、媒体或其他无关品类；综合全部内容锁定真实定位与核心目标客户。\n"
+    "10. target_clients 必须区分两类：toc=终端用户及其需求；tob=它服务的企业/广告主/渠道方，并分别写出 advertiser(广告主)/channel(渠道或代理)/media(流量主或媒体)各自的核心诉求（如：需要更多优质广告主、需要稳定流量供给、需要更高的 eCPM/填充率）。\n"
+    "11. appeal_highlights 写 2-3 条「对目标客户最有吸引力的亮点/价值钩子」，是对方为什么该用它，而不是功能罗列。\n"
+    "12. nine_elements 是「看懂这个网站是什么」的核心总结：industry=所处行业；type=网站/业务类型；category=主营产品品类；needs=解决谁的什么问题；solution=怎么解决；business_model=如何赚钱（广告变现/订阅/SaaS/佣金/CPA 等）；advantage_compare=相比竞品或传统方式好在哪；differentiation=别人没有的特色；purpose_summary=用一段话概括这个网站的核心目的。\n"
+    "13. extensions 是延伸输出：industry_insight=行业趋势与机会；competitors=主要竞品及对比；market_demand=目标市场需求规模与痛点；diff_solution=可落地的差异化打法；edge_advantage=特色优势；recommended_media=推荐投放的媒体/平台（如 Google/Facebook/TikTok/行业垂直媒体）；recommended_audience=推荐的目标人群标签。"
 )
 
 # 旧版基础框架提示词（仅用于兼容，已被 SYS_SITE_ANALYSIS 取代）；保留常量避免引用断裂。
@@ -419,6 +434,37 @@ def _local_site_analysis(facts: dict, page: dict) -> dict:
         "risk": {"items": [], "compliance": ""},
         "gaps": {"missing": [], "confidence": "中"},
         "next_steps": [],
+        "business_nature": {
+            "nature": "（本地兜底未识别，建议改用模型分析以获得准确判断）",
+            "is_marketing_platform": False,
+            "note": "本地兜底未接入模型，请改用模型分析以识别网站本质与定位",
+        },
+        "target_clients": {
+            "toc": facts.get("audience") or "",
+            "tob": [],
+            "needs": {"advertiser": "", "channel": "", "media": ""},
+        },
+        "appeal_highlights": points[:2] or [],
+        "nine_elements": {
+            "industry": facts.get("category") or "",
+            "type": "（本地兜底未识别，建议改用模型分析）",
+            "category": facts.get("category") or "",
+            "needs": "",
+            "solution": claim or "",
+            "business_model": "",
+            "advantage_compare": "",
+            "differentiation": "；".join(points[:2]) if points else "",
+            "purpose_summary": claim or "",
+        },
+        "extensions": {
+            "industry_insight": "",
+            "competitors": "",
+            "market_demand": "",
+            "diff_solution": "",
+            "edge_advantage": "；".join(points[:2]) if points else "",
+            "recommended_media": [],
+            "recommended_audience": [],
+        },
         "_source": "local",
     }
 

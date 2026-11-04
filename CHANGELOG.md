@@ -621,6 +621,29 @@
 - 出图像素级冒烟：6 组 方向×风格×配色 组合（含浅色方案 C04、品牌同色系 C12）均成功渲染图片与视频关键帧，无异常；调色板覆盖确实改变画面主色。
 - `npm run build` 通过（47 模块）；`GET /api/settings/creative-presets` 路由可达（鉴权后）。
 
+## V4.14 落地页分析升级：准确定位 + 九要素结构化总结 + 延伸输出
+
+**需求**：「素材创作平台 → 素材创作」的落地页分析常把"在线营销/广告平台"误判为教育网站，且缺少对广告主/渠道/流量商需求的总结与吸引力亮点；需从通用报告升级为九要素结构化总结，并延伸输出行业/竞品/需求/差异化/优势与推荐媒体人群。
+
+**改动**
+- `backend/services.py` · `SYS_SITE_ANALYSIS` 提示词扩展：
+  - 新增 `business_nature`（网站本质，新增 `is_marketing_platform` 标记）、`target_clients`（区分 toC 终端用户 与 toB 广告主/渠道/流量主，并各自总结需求）、`appeal_highlights`（吸引力亮点）。
+  - 新增 `nine_elements`（行业/类型/品类/满足需求/解决方案/商业模式/优势对比/差异化特色/一段话目的总结）、`extensions`（行业分析/竞品/市场需求/差异化方案/特色优势/推荐媒体/推荐人群）。
+  - 硬约束新增 9–13 条：优先判断网站本质，营销/广告/代理平台用 `adtech`/`marketing` 分类，不得因页面含教程/案例误判为教育；必须区分 toC/toB 目标客户与各自需求；先九要素再延伸输出。
+  - `category_key` 集合扩至含 `adtech`/`marketing`。
+  - `_local_site_analysis` 回退函数补充以上新字段占位，保证无模型/解析失败时报告仍有两段内容。
+- `backend/report.py` · `build_report`：
+  - 新增三个 section（ReportView 数据驱动自动渲染）：
+    - `positioning_deep`（网站定位与目标客户）：网站本质、是否营销平台、终端用户/广告主/渠道/媒体四类需求、吸引力亮点；
+    - `nine_elements`（九要素结构化总结）；
+    - `extensions`（延伸输出 · 行业/竞品/需求与推荐）。
+  - 配套三个 helper：`_positioning_deep_section` / `_nine_elements_section` / `_extensions_section`。
+- `frontend/src/styles.css`：`.rv` 增加 `white-space: pre-wrap`、`.rk` 顶对齐，保证九要素/延伸输出的长文本可读。
+
+**验证**
+- `py_compile` 后端全模块通过；`build_report` 冒烟：mock 含九要素与延伸输出的 `site_analysis`，三个新 section 顺序与内容正确（定位→网站定位与目标客户→九要素→…→延伸输出）。
+- `npm run build` 通过（47 模块）。
+
 ## V4.10 全球主流大模型可配置化（目录 + 协议感知测试 + 引导）
 
 **需求**：用户可填写主要 API 配置即可完成大模型调用测试与配置；添加时选择大模型名称，选中后显示可配置字段，保存后首次调用并给出成败与具体错误引导。
