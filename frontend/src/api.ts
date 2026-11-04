@@ -224,6 +224,21 @@ export interface PromptConfig {
   updated_at?: string | null
 }
 
+/** 素材创作三大提示词库中的单条预设 */
+export interface CreativePreset {
+  id: string
+  name: string
+  desc: string
+  applies: string
+  prompt: string
+}
+
+export interface CreativePresets {
+  directions: CreativePreset[]
+  styles: CreativePreset[]
+  colors: CreativePreset[]
+}
+
 export interface Meta {
   platforms: string[]
   material_types: string[]
@@ -462,6 +477,8 @@ export const api = {
     framework_id: number; campaign_name: string; angle_keys: string[]; platforms: string[]
     material_types: string[]; languages: string[]; extra_prompt?: string
     sizes_per_angle?: number; video_mode?: 'off' | 'first' | 'all'; full_video?: boolean
+    creative_direction?: string | null; content_style?: string | null; color_scheme?: string | null
+    market_insight?: string | null
   }) => req<Campaign>('/api/produce', { method: 'POST', body: JSON.stringify(payload) }),
   estimate: (payload: {
     angle_keys: string[]; platforms: string[]; material_types: string[]; languages: string[]
@@ -511,6 +528,7 @@ export const api = {
   // 设置
   models: () => req<ModelConfig[]>('/api/settings/models'),
   modelPresets: () => req<ModelPreset[]>('/api/settings/models/presets'),
+  creativePresets: () => req<CreativePresets>('/api/settings/creative-presets'),
   createModel: (m: Partial<ModelConfig>) =>
     req<ModelConfig>('/api/settings/models', { method: 'POST', body: JSON.stringify(m) }),
   updateModel: (id: number, m: Partial<ModelConfig>) =>

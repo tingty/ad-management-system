@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  api, AnalysisReport, Angle, Campaign, Framework, Material, Meta, PlatformSpec,
+  api, AnalysisReport, Angle, Campaign, Framework, Material, Meta, PlatformSpec, CreativePreset,
 } from '../api'
 // 复用创作工作台的同一套分析视图与基础组件，保证“落地页综合分析”与创作工作台完全一致
 import { Chips, StepHead, CopyBlock, ReportView } from './Workspace'
+// 三大提示词库：优先从后端接口拉取（单一数据源），失败回退本地内置常量
+import { DIRECTIONS, STYLES, COLORS, appliesTo } from '../materialPresets'
 
 const TEMPLATE_LABEL: Record<string, string> = {
   bigtype: '纯字体版式', stat: '数字主体', rating: '评分卡', promo: '折扣角标',
@@ -37,6 +39,46 @@ function angleGroups(campaign: Campaign, angles: Angle[]) {
   return Array.from(map.values()).filter(g => g.imgs.length || g.copy || g.video || g.kw)
 }
 
+/* 单个提示词库选择器：单选 + 可清除，沿用全局 .chip 统一风格 */
+function PresetSelect({ label, hint, options, value, onPick, scope }: {
+  label: string
+  hint?: string
+  options: CreativePreset[]
+  value: string | null
+  onPick: (id: string | null) => void
+  scope?: 'image' | 'video'
+}) {
+  return (
+    <div className="mc-preset">
+      <div className="mc-preset-head">
+        <b>{label}</b>
+        {value && (
+          <span className="pill off" style={{ cursor: 'pointer' }}
+            onClick={() => onPick(null)} title="清除选择">
+            已选 {value} · 清除
+          </span>
+        )}
+      </div>
+      {hint && <div className="mc-preset-hint">{hint}</div>}
+      <div className="chip-row">
+        {options.map(o => {
+          const dim = scope ? !appliesTo(o, scope) : false
+          return (
+            <button
+              key={o.id}
+              className={'chip' + (value === o.id ? ' on' : '') + (dim ? ' dim' : '')}
+              title={o.desc}
+              onClick={() => onPick(value === o.id ? null : o.id)}
+            >
+              <span className="mc-chip-id">{o.id}</span> {o.name}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export default function MaterialCreation({ meta }: { meta: Meta | null }) {
   // ---------------- 共享：落地页综合分析 ----------------
   const [url, setUrl] = useState('')
@@ -66,7 +108,31 @@ export default function MaterialCreation({ meta }: { meta: Meta | null }) {
   const [imgBusy, setImgBusy] = useState('')
   const [vidBusy, setVidBusy] = useState('')
 
+  // 「素材创作」三大提示词库（方向 / 风格 / 配色）选择 —— 图片与视频共用同一份风格设定
+  const [directions, setDirections] = useState<CreativePreset[]>(DIRECTIONS)
+  const [styles, setStyles] = useState<CreativePreset[]>(STYLES)
+  const [colors, setColors] = useState<CreativePreset[]>(COLORS)
+  const [directionId, setDirectionId] = useState<string | null>(null)
+  const [styleId, setStyleId] = useState<string | null>(null)
+  const [colorId, setColorId] = useState<string | null>('C12') // 默认品牌同色系（跟随品牌色）
+  const [marketOn, setMarketOn] = useState(false)
+  const [marketText, setMarketText] = useState('')
+
   useEffect(() => { api.specs().then(setSpecs).catch(() => {}) }, [])
+
+  // 从后端拉取三大提示词库（单一数据源）；失败保留本地内置常量
+  useEffect(() => {
+    let alive = true
+    api.creativePresets()
+      .then(res => {
+        if (!alive) return
+        setDirections(res.directions as CreativePreset[])
+        setStyles(res.styles as CreativePreset[])
+        setColors(res.colors as CreativePreset[])
+      })
+      .catch(() => { /* 保留本地回退 */ })
+    return () => { alive = false }
+  }, [])
 
   // 支持视频广告位的媒介（用于决定是否生成完整视频）
   const videoCapable = useMemo(
@@ -123,18 +189,22 @@ export default function MaterialCreation({ meta }: { meta: Meta | null }) {
     const isImg = kind === 'image'
     setErr('')
     if (isImg) setImgBusy('正在生成图片素材…'); else setVidBusy('正在生成视频素材…')
-    try {
-      const c = await api.produce({
-        framework_id: fw.id,
-        campaign_name: `${fw.product} · ${isImg ? '图片创作' : '视频创作'}`,
-        angle_keys: picked,
-        platforms,
-        material_types: isImg ? ['image', 'copy', 'keyword'] : ['video', 'copy'],
-        languages: langs,
-        sizes_per_angle: sizes,
-        video_mode: isImg ? 'off' : 'all',
-        full_video: !isImg && videoCapable.length > 0,
-      })
+      try {
+        const c = await api.produce({
+          framework_id: fw.id,
+          campaign_name: `${fw.product} · ${isImg ? '图片创作' : '视频创作'}`,
+          angle_keys: picked,
+          platforms,
+          material_types: isImg ? ['image', 'copy', 'keyword'] : ['video', 'copy'],
+          languages: langs,
+          sizes_per_angle: sizes,
+          video_mode: isImg ? 'off' : 'all',
+          full_video: !isImg && videoCapable.length > 0,
+          creative_direction: directionId,
+          content_style: styleId,
+          color_scheme: colorId,
+          market_insight: !isImg && marketOn ? marketText : null,
+        })
       if (isImg) setImageCampaign(c); else setVideoCampaign(c)
     } catch (e: any) {
       setErr(e.message)
@@ -311,6 +381,34 @@ export default function MaterialCreation({ meta }: { meta: Meta | null }) {
           title="素材创作"
           desc="两个独立子模块共享同一份分析、品牌与方向。先完成上方分析与方向选择，再分别进入图片或视频创作。"
         />
+
+        {/* ===== 创意风格设定（方向 / 风格 / 配色，图片与视频共用） ===== */}
+        <div className="mc-style">
+          <div className="mc-style-grid">
+            <PresetSelect label="创意方向（D01–D20）" hint="决定文案调性与画面叙事母题" options={directions} value={directionId} onPick={setDirectionId} />
+            <PresetSelect label="内容风格（S01–S26）" hint="决定画面美术风格与背景处理" options={styles} value={styleId} onPick={setStyleId} />
+            <PresetSelect label="配色方案（C01–C16）" hint="C12 品牌同色系=跟随品牌色" options={colors} value={colorId} onPick={setColorId} />
+          </div>
+          <div className="mc-style-summary">
+            已选：方向 <b>{directionId ? directions.find(d => d.id === directionId)?.name : '默认（沿用创意方向）'}</b>
+            · 风格 <b>{styleId ? styles.find(s => s.id === styleId)?.name : '默认'}</b>
+            · 配色 <b>{colorId ? colors.find(c => c.id === colorId)?.name : '默认'}</b>
+          </div>
+          <div className="mc-insight">
+            <label className="switch">
+              <input type="checkbox" checked={marketOn} onChange={e => setMarketOn(e.target.checked)} />
+              <span>视频「借鉴市场总结再创作」<span className="muted">（将延伸输出注入视频分镜脚本）</span></span>
+            </label>
+            {marketOn && (
+              <textarea
+                rows={3}
+                value={marketText}
+                onChange={e => setMarketText(e.target.value)}
+                placeholder="粘贴 / 填写市场总结：行业、竞品、市场需求、差异化方案、特色优势……（仅对视频创作生效）"
+              />
+            )}
+          </div>
+        </div>
 
         <div className="mc-tabs">
           <button className={'mc-tab' + (sub === 'image' ? ' on' : '')} onClick={() => setSub('image')}>

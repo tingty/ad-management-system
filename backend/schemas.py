@@ -191,6 +191,12 @@ class ProduceRequest(BaseModel):
     sizes_per_angle: Optional[int] = None       # 每个方向、每个平台出几个版位
     video_mode: Optional[str] = "all"           # off / first / all
     full_video: Optional[bool] = False          # 勾选后把关键帧合成为完整视频 MP4
+    # 「素材创作」三大提示词库：创意方向 / 内容风格 / 配色（编号，如 D01 / S09 / C13）
+    creative_direction: Optional[str] = None
+    content_style: Optional[str] = None
+    color_scheme: Optional[str] = None
+    # 视频子模块「借鉴市场总结再创作」开关注入的延伸输出文本
+    market_insight: Optional[str] = None
 
 class EstimateRequest(BaseModel):
     framework_id: Optional[int] = None

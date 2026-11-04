@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Fragment } from 'react'
 import type { ReactNode } from 'react'
 import { api, clearToken, getToken, Meta, User } from './api'
 import Workspace from './pages/Workspace'
 import MaterialCreation from './pages/MaterialCreation'
+import MaterialPrompts from './pages/MaterialPrompts'
 import Batch from './pages/Batch'
 import Library from './pages/Library'
 import Login from './pages/Login'
@@ -12,14 +13,14 @@ import Logs from './pages/Logs'
 import Prompts from './pages/Prompts'
 import Specs from './pages/Specs'
 
-type Tab = 'workspace' | 'batch' | 'creation' | 'library' | 'specs'
+type Tab = 'workspace' | 'batch' | 'creation' | 'mprompts' | 'library' | 'specs'
   | 'llm' | 'accounts' | 'logs' | 'prompts'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['workspace', 'batch', 'creation', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts']
+const TABS: Tab[] = ['workspace', 'batch', 'creation', 'mprompts', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts']
 const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
@@ -35,12 +36,21 @@ const GROUP_MATERIAL: NavGroup = {
       desc: '粘贴落地页链接 → 分析产品 → 定投放平台 → 生成素材 → 按指令优化 → 下载投放包' },
     { key: 'batch', label: '批量生成', icon: 'grid',
       desc: 'CSV 一次导入多个产品与投放组合，后台异步产出，适合批量上新与批量测试' },
-    { key: 'creation', label: '素材创作', icon: 'sparkles',
-      desc: '新增独立模块：统一落地页分析后，在「图片创作 / 视频创作」两个子模块间切换，共享同一品牌与方向，保证素材风格一致' },
     { key: 'library', label: '素材库', icon: 'image',
       desc: '按产品名 / 平台检索历史批次，查看每个方向的最新版本、校验结果与审阅状态' },
     { key: 'specs', label: '规格库', icon: 'ruler',
       desc: '各平台广告位的图片尺寸、文案字数红线与校验规则，直接约束生成结果' },
+  ],
+}
+
+const GROUP_CREATION: NavGroup = {
+  name: '素材创作平台',
+  icon: 'wand',
+  items: [
+    { key: 'creation', label: '素材创作', icon: 'sparkles',
+      desc: '统一落地页分析后，在「图片创作 / 视频创作」两个子模块间切换，共享同一品牌与方向，保证素材风格一致，一键生成直接投放级素材' },
+    { key: 'mprompts', label: '素材提示词管理', icon: 'tags',
+      desc: '集中展示「素材创作」使用的提示词库：创意方向库、内容风格库、配色方案库，含适用画像与提示词指令，便于查阅与后续运营扩充' },
   ],
 }
 
@@ -94,6 +104,8 @@ const PATHS: Record<string, ReactNode> = {
   filetext: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M9 13h6M9 17h6" /></>,
   code: <path d="M16 18l6-6-6-6M8 6l-6 6 6 6" />,
   sparkles: <><path d="M12 3l1.8 4.8L18.6 9.6 13.8 11.4 12 16.2 10.2 11.4 5.4 9.6 10.2 7.8z" /><path d="M19 14l.9 2.3 2.3.9-2.3.9L19 21l-.9-2.3-2.3-.9 2.3-.9z" /></>,
+  wand: <><path d="M5.5 18.5 14 10" /><path d="M15 4l1 2 2 1-2 1-1 2-1-2-2-1 2-1z" /></>,
+  tags: <><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0l-7.2-7.2A2 2 0 0 1 3 11.8V5a2 2 0 0 1 2-2h6.8a2 2 0 0 1 1.4.6l7.4 7.4a2 2 0 0 1 0 2.8z" /><circle cx="7.5" cy="7.5" r="1.5" /></>,
 }
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -115,7 +127,7 @@ function tabFromHash(): Tab | null {
 function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   return [
-    ...(canEdit ? (['workspace', 'batch', 'creation'] as Tab[]) : []),
+    ...(canEdit ? (['workspace', 'batch', 'creation', 'mprompts'] as Tab[]) : []),
     'library', 'specs',
     ...(user.role === 'admin' ? (GROUP_SYSTEM.items.map(i => i.key)) : []),
   ]
@@ -134,7 +146,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>(() => tabFromHash() || 'workspace')
   const [meta, setMeta] = useState<Meta | null>(null)
   const [collapsed, setCollapsed] = useState<boolean>(readCollapsed)
-  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ material: true, system: true })
+  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ material: true, creation: true, system: true })
 
   useEffect(() => {
     const onUnauthorized = () => setUser(null)
@@ -196,9 +208,15 @@ export default function App() {
   const canReview = !!user && ['admin', 'manager'].includes(user.role)
   const isAdmin = user?.role === 'admin'
 
-  const visibleItems = GROUP_MATERIAL.items.filter(it => isEditor || ['library', 'specs'].includes(it.key))
-  const allItems: NavItem[] = [...GROUP_MATERIAL.items, ...GROUP_SYSTEM.items]
+  const allGroups = [GROUP_MATERIAL, GROUP_CREATION, GROUP_SYSTEM]
+  const visibleGroups = allGroups.filter(g =>
+    g === GROUP_MATERIAL ? true : g === GROUP_CREATION ? isEditor : isAdmin,
+  )
+  const visibleNavItems = (g: NavGroup) =>
+    g.items.filter(it => isEditor || ['library', 'specs'].includes(it.key))
+  const allItems: NavItem[] = allGroups.flatMap(g => g.items)
   const cur: NavItem = allItems.find(i => i.key === tab) || GROUP_MATERIAL.items[0]
+  const curGroup = allGroups.find(g => g.items.some(i => i.key === tab))
 
   useEffect(() => {
     if (user) document.title = `${cur.label} · 广告管理系统`
@@ -247,40 +265,28 @@ export default function App() {
         </div>
 
         <nav className="sb-nav">
-          <div className={`sb-group ${!collapsed && !groupOpen.material ? 'closed' : ''}`}>
-            <button
-              className="sb-group-head"
-              title={collapsed ? GROUP_MATERIAL.name : '折叠 / 展开「素材管理」'}
-              onClick={() => (collapsed ? toggleSidebar(false) : setGroupOpen(v => ({ ...v, material: !v.material })))}
-            >
-              <Icon name={GROUP_MATERIAL.icon} size={16} />
-              {!collapsed && <span className="sb-gname">{GROUP_MATERIAL.name}</span>}
-              {!collapsed && <span className="sb-caret"><Icon name="caret" size={14} /></span>}
-            </button>
-            <div className="sb-items" hidden={!collapsed && !groupOpen.material}>
-              {visibleItems.map(renderItem)}
-            </div>
-          </div>
-
-          {isAdmin && (
-            <>
-              <div className="sb-sep" />
-              <div className={`sb-group ${!collapsed && !groupOpen.system ? 'closed' : ''}`}>
-                <button
-                  className="sb-group-head"
-                  title={collapsed ? GROUP_SYSTEM.name : '折叠 / 展开「系统设置」'}
-                  onClick={() => (collapsed ? toggleSidebar(false) : setGroupOpen(v => ({ ...v, system: !v.system })))}
-                >
-                  <Icon name={GROUP_SYSTEM.icon} size={16} />
-                  {!collapsed && <span className="sb-gname">{GROUP_SYSTEM.name}</span>}
-                  {!collapsed && <span className="sb-caret"><Icon name="caret" size={14} /></span>}
-                </button>
-                <div className="sb-items" hidden={!collapsed && !groupOpen.system}>
-                  {GROUP_SYSTEM.items.map(renderItem)}
+          {visibleGroups.map((g, i) => {
+            const openKey = g === GROUP_MATERIAL ? 'material' : g === GROUP_CREATION ? 'creation' : 'system'
+            return (
+              <Fragment key={openKey}>
+                {i > 0 && <div className="sb-sep" />}
+                <div className={`sb-group ${!collapsed && !groupOpen[openKey] ? 'closed' : ''}`}>
+                  <button
+                    className="sb-group-head"
+                    title={collapsed ? g.name : `折叠 / 展开「${g.name}」`}
+                    onClick={() => (collapsed ? toggleSidebar(false) : setGroupOpen(v => ({ ...v, [openKey]: !v[openKey] })))}
+                  >
+                    <Icon name={g.icon} size={16} />
+                    {!collapsed && <span className="sb-gname">{g.name}</span>}
+                    {!collapsed && <span className="sb-caret"><Icon name="caret" size={14} /></span>}
+                  </button>
+                  <div className="sb-items" hidden={!collapsed && !groupOpen[openKey]}>
+                    {visibleNavItems(g).map(renderItem)}
+                  </div>
                 </div>
-              </div>
-            </>
-          )}
+              </Fragment>
+            )
+          })}
         </nav>
 
         <div className="sb-foot">
@@ -302,7 +308,7 @@ export default function App() {
         <div className="main-inner">
           <header className="page-head">
             <div className="ph-left">
-              <div className="page-kicker">{GROUP_SYSTEM.items.some(i => i.key === tab) ? '系统' : '素材管理'}</div>
+              <div className="page-kicker">{curGroup?.name || '素材管理'}</div>
               <h1 className="page-title">{cur.label}</h1>
               <p className="page-desc">{cur.desc}</p>
             </div>
@@ -321,6 +327,7 @@ export default function App() {
             <Workspace meta={meta} onOpenLibrary={() => go('library')} />
           )}
           {tab === 'creation' && isEditor && <MaterialCreation meta={meta} />}
+          {tab === 'mprompts' && isEditor && <MaterialPrompts />}
           {tab === 'batch' && isEditor && <Batch meta={meta} />}
           {tab === 'library' && <Library user={user} canReview={canReview} isEditor={isEditor} />}
           {tab === 'specs' && <Specs canEdit={canReview} />}

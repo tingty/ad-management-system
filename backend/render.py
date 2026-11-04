@@ -38,7 +38,9 @@ DEFAULT_ACCENT = (255, 176, 32)
 # 每个创意方向有自己的视觉性格：背景风格、文字版式、字号节奏都不同，
 # 避免所有素材都是「同一个渐变底 + 同一种排版」换文案。
 STYLE_KEYS = ("gradient", "radial", "split", "wave", "halftone",
-              "stripes", "spotlight", "light_panel", "vignette")
+              "stripes", "spotlight", "light_panel", "vignette",
+              "solid", "ink", "oil", "cyber", "retro", "vapor",
+              "pixel", "paper", "neon", "glitch", "geo")
 LAYOUT_KEYS = ("default", "side_left", "bottom_stack", "centered")
 
 ANGLE_DESIGN = {
@@ -129,6 +131,24 @@ def make_palette(brand_hex: str | None, light: bool = False) -> dict:
         "card": (255, 255, 255),
         "on_accent": on_accent,
     }
+
+
+def _apply_palette(pal: dict, override: dict | None) -> dict:
+    """用配色方案覆盖（presets.COLOR_TO_PALETTE）改写调色板。
+
+    override 字段可为十六进制字符串或 (r,g,b) 元组；其余字段沿用原 pal。
+    `light` 标记不参与调色板，由调用方依据模板/风格决定是否切浅色文字方案。
+    """
+    if not isinstance(override, dict):
+        return pal
+    out = dict(pal)
+    for k in ("accent", "bg1", "bg2", "fg", "sub", "card", "on_accent"):
+        v = override.get(k)
+        if isinstance(v, str) and v.strip():
+            out[k] = hex2rgb(v)
+        elif isinstance(v, (tuple, list)) and len(v) == 3:
+            out[k] = tuple(int(x) for x in v)
+    return out
 
 
 def phone_box(box, aspect: float = 0.52):
@@ -392,6 +412,165 @@ class Canvas:
         self.img = Image.alpha_composite(self.img.convert("RGBA"), layer).convert("RGB")
         self.d = ImageDraw.Draw(self.img)
 
+    # ----------------------------- 新增：内容风格对应背景 -----------------------------
+    # 这些风格由 presets.CONTENT_STYLES → STYLE_TO_BG 映射而来，全部以 self.pal
+    # （已含配色方案覆盖）为取色来源，确保「风格 × 配色」组合生效。
+    def solid(self, pal):
+        """纯色背景：单一平涂，主体居中突出（S01 纯色背景图）。"""
+        self.img = Image.new("RGB", (self.w, self.h), mix(pal["bg1"], pal["bg2"], 0.5))
+        self.d = ImageDraw.Draw(self.img)
+
+    def ink(self, pal):
+        """水墨：纸底 + 柔墨晕（S05 国画水墨 / S19 新中式）。"""
+        base = mix(pal["bg1"], (250, 248, 240), 0.18)
+        self.img = Image.new("RGB", (self.w, self.h), base)
+        layer = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+        dl = ImageDraw.Draw(layer)
+        for (fx, fy, fr) in [(0.30, 0.34, 0.40), (0.74, 0.30, 0.30), (0.58, 0.78, 0.46)]:
+            r = int(self.s * fr)
+            dl.ellipse([fx * self.w - r, fy * self.h - r, fx * self.w + r, fy * self.h + r],
+                       fill=mix(pal["bg2"], pal["accent"], 0.25) + (70,))
+        layer = layer.filter(ImageFilter.GaussianBlur(int(self.s * 0.10)))
+        self.img = Image.alpha_composite(self.img.convert("RGBA"), layer).convert("RGB")
+        self.d = ImageDraw.Draw(self.img)
+
+    def oil(self, pal):
+        """油画：厚涂笔触底 + 几道透明笔刷（S06 油画古典）。"""
+        self.gradient(pal["bg1"], pal["bg2"], diagonal=False)
+        layer = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+        dl = ImageDraw.Draw(layer)
+        for i in range(5):
+            y = int(self.h * (0.15 + i * 0.17))
+            dl.line([(0, y), (self.w, y + int(self.s * 0.05) * (1 if i % 2 else -1))],
+                    fill=pal["accent"] + (40,), width=max(8, int(self.s * 0.03)))
+        layer = layer.filter(ImageFilter.GaussianBlur(int(self.s * 0.02)))
+        self.img = Image.alpha_composite(self.img.convert("RGBA"), layer).convert("RGB")
+        self.d = ImageDraw.Draw(self.img)
+
+    def cyber(self, pal):
+        """赛博朋克：暗底 + 霓虹透视网格 + 地平线辉光（S09 赛博朋克）。"""
+        self.img = Image.new("RGB", (self.w, self.h), pal["bg1"])
+        d = ImageDraw.Draw(self.img)
+        hz = int(self.h * 0.55)
+        d.line([(0, hz), (self.w, hz)], fill=pal["accent"] + ((255,) if False else (200,)), width=max(2, int(self.s * 0.006)))
+        step = max(20, int(self.w / 14))
+        for i in range(-1, int(self.w / step) + 2):
+            x = i * step
+            d.line([(x, hz), (self.w / 2 + (x - self.w / 2) * 2.4, self.h)],
+                   fill=pal["accent"] + (70,), width=max(1, int(self.s * 0.004)))
+        # 地平线辉光
+        glow = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        gd.ellipse([self.w * 0.30, hz - self.s * 0.10, self.w * 0.70, hz + self.s * 0.02],
+                   fill=pal["accent"] + (120,))
+        glow = glow.filter(ImageFilter.GaussianBlur(int(self.s * 0.07)))
+        self.img = Image.alpha_composite(self.img.convert("RGBA"), glow).convert("RGB")
+        self.d = ImageDraw.Draw(self.img)
+
+    def retro(self, pal):
+        """复古胶片：暖调渐变 + 颗粒（S10 复古胶片）。"""
+        self.gradient(pal["bg1"], pal["bg2"], diagonal=True)
+        layer = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+        dl = ImageDraw.Draw(layer)
+        import random
+        rnd = random.Random(7)
+        g = max(2, int(self.s * 0.004))
+        for _ in range(int(self.w * self.h / (g * g * 6))):
+            x = rnd.randint(0, self.w - 1)
+            y = rnd.randint(0, self.h - 1)
+            dl.point((x, y), fill=pal["sub"] + (rnd.randint(18, 46),))
+        self.img = Image.alpha_composite(self.img.convert("RGBA"), layer).convert("RGB")
+        self.d = ImageDraw.Draw(self.img)
+
+    def vapor(self, pal):
+        """蒸汽波：粉紫渐变 + 网格 + 落日圆盘与立柱（S03 动漫 / S15 蒸汽波）。"""
+        self.gradient(pal["bg1"], pal["bg2"], diagonal=False)
+        d = ImageDraw.Draw(self.img)
+        # 落日
+        r = int(self.s * 0.16)
+        cx, cy = self.w * 0.5, self.h * 0.38
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=mix(pal["accent"], (255, 255, 255), 0.15))
+        # 网格地平线
+        hz = int(self.h * 0.62)
+        gap = max(18, int(self.w / 16))
+        for i in range(int(self.h * 0.4) // gap + 1):
+            y = hz + i * gap
+            d.line([(0, y), (self.w, y)], fill=pal["accent"] + (70,), width=max(1, int(self.s * 0.003)))
+        # 立柱（古典雕塑意象）
+        pw = int(self.s * 0.05)
+        for px in (self.w * 0.30, self.w * 0.70):
+            d.rectangle([px - pw / 2, hz - self.s * 0.22, px + pw / 2, hz], fill=pal["sub"])
+        self.d = d
+
+    def pixel(self, pal):
+        """像素风：块面马赛克（S17 像素风）。"""
+        n = 9
+        cw, ch = max(1, self.w // n), max(1, self.h // n)
+        self.img = Image.new("RGB", (self.w, self.h), pal["bg1"])
+        d = ImageDraw.Draw(self.img)
+        palette = [pal["bg1"], pal["bg2"], pal["accent"], pal["sub"]]
+        import random
+        rnd = random.Random(11)
+        for i in range(n):
+            for j in range(n):
+                col = palette[rnd.randint(0, len(palette) - 1)]
+                d.rectangle([i * cw, j * ch, (i + 1) * cw - 1, (j + 1) * ch - 1], fill=col)
+        self.d = d
+
+    def paper(self, pal):
+        """剪纸 / 手绘：色块拼贴（S13 手绘涂鸦 / S24 剪纸风）。"""
+        self.img = Image.new("RGB", (self.w, self.h), pal["bg1"])
+        d = ImageDraw.Draw(self.img)
+        blocks = [(0.08, 0.10, 0.55, 0.55, pal["accent"]), (0.40, 0.35, 0.92, 0.90, pal["bg2"]),
+                  (0.18, 0.62, 0.70, 0.96, mix(pal["accent"], pal["bg2"], 0.4))]
+        for (x0, y0, x1, y1, col) in blocks:
+            d.polygon([(self.w * x0, self.h * y0), (self.w * x1, self.h * (y0 + 0.02)),
+                       (self.w * x1, self.h * y1), (self.w * x0, self.h * (y1 - 0.02))], fill=col)
+        self.d = d
+
+    def neon(self, pal):
+        """霓虹光影：暗底 + 霓虹辉光团（S25 霓虹光影 / C13 荧光）。"""
+        self.img = Image.new("RGB", (self.w, self.h), pal["bg1"])
+        layer = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+        dl = ImageDraw.Draw(layer)
+        for (fx, fy, fr) in [(0.28, 0.30, 0.34), (0.76, 0.66, 0.40), (0.66, 0.22, 0.22)]:
+            r = int(self.s * fr)
+            dl.ellipse([fx * self.w - r, fy * self.h - r, fx * self.w + r, fy * self.h + r],
+                       fill=pal["accent"] + (150,))
+        layer = layer.filter(ImageFilter.GaussianBlur(int(self.s * 0.085)))
+        self.img = Image.alpha_composite(self.img.convert("RGBA"), layer).convert("RGB")
+        self.d = ImageDraw.Draw(self.img)
+
+    def glitch(self, pal):
+        """故障艺术：RGB 错位色块（S26 故障艺术）。"""
+        self.img = Image.new("RGB", (self.w, self.h), pal["bg1"])
+        d = ImageDraw.Draw(self.img)
+        teal = mix((0, 229, 255), pal["bg2"], 0.5)
+        mag = mix((255, 0, 128), pal["bg2"], 0.5)
+        import random
+        rnd = random.Random(3)
+        for _ in range(10):
+            y = rnd.randint(0, self.h - 1)
+            h = rnd.randint(int(self.s * 0.02), int(self.s * 0.10))
+            off = rnd.randint(-int(self.s * 0.08), int(self.s * 0.08))
+            col = rnd.choice([pal["accent"], teal, mag])
+            d.rectangle([0, y, self.w, y + h], fill=col)
+            # 错位重影
+            d.rectangle([off, y, self.w + off, y + h], fill=col)
+        self.d = d
+
+    def geo(self, pal):
+        """几何：低多边形 / 孟菲斯色块（S07/S11/S14/S16）。"""
+        self.img = Image.new("RGB", (self.w, self.h), pal["bg1"])
+        d = ImageDraw.Draw(self.img)
+        # 大三角
+        d.polygon([(0, 0), (self.w * 0.6, 0), (0, self.h * 0.7)], fill=pal["bg2"])
+        d.polygon([(self.w, self.h), (self.w, self.h * 0.3), (self.w * 0.4, self.h)], fill=mix(pal["accent"], pal["bg2"], 0.3))
+        # 圆形点缀
+        r = int(self.s * 0.12)
+        d.ellipse([self.w * 0.7 - r, self.h * 0.18 - r, self.w * 0.7 + r, self.h * 0.18 + r], fill=pal["accent"])
+        self.d = d
+
     def rrect(self, box, r, fill=None, outline=None, width=2):
         self.d.rounded_rectangle(box, radius=max(0, int(r)), fill=fill, outline=outline, width=width)
 
@@ -606,6 +785,28 @@ def paint_background(c: Canvas, style: str, pal: dict, light: bool = False):
     elif style == "vignette":
         c.gradient(pal["bg1"], pal["bg2"])
         c.vignette()
+    elif style == "solid":
+        c.solid(pal)
+    elif style == "ink":
+        c.ink(pal)
+    elif style == "oil":
+        c.oil(pal)
+    elif style == "cyber":
+        c.cyber(pal)
+    elif style == "retro":
+        c.retro(pal)
+    elif style == "vapor":
+        c.vapor(pal)
+    elif style == "pixel":
+        c.pixel(pal)
+    elif style == "paper":
+        c.paper(pal)
+    elif style == "neon":
+        c.neon(pal)
+    elif style == "glitch":
+        c.glitch(pal)
+    elif style == "geo":
+        c.geo(pal)
     else:
         c.gradient(pal["bg1"], pal["bg2"])
         c.blobs(pal["accent"], 2, 22)
@@ -833,16 +1034,23 @@ def render_creative(out_path, w, h, data: dict) -> str:
         # "数字主体"模板没有数字就没有主体，硬画会变成空壳手机框，退回纯字体
         template = "bigtype"
     light = template in ("rating",)
+    raw_design = data.get("design") or {}
+    palette_override = raw_design.get("palette")
     pal = make_palette(data.get("brand_color"), light=False)
+    if palette_override:
+        pal = _apply_palette(pal, palette_override)
     c = Canvas(w, h, pal)
     # 差异化设计：styles[0] 用于图片；视频关键帧带 _shot 索引轮换 styles
-    design = normalize_design(data.get("design"), data.get("angle_key") or "")
-    shot_i = int((data.get("design") or {}).get("_shot") or 0)
+    design = normalize_design(raw_design, data.get("angle_key") or "")
+    shot_i = int(raw_design.get("_shot") or 0)
     dstyle = design["styles"][shot_i % len(design["styles"])]
     # 浅底风格必须切到浅色文字方案，否则白字压白底直接不可读
     light_bg = template == "rating" or dstyle == "light_panel"
     if light_bg:
-        c.pal = make_palette(data.get("brand_color"), light=True)
+        lpal = make_palette(data.get("brand_color"), light=True)
+        if palette_override:
+            lpal = _apply_palette(lpal, palette_override)
+        c.pal = lpal
 
     if kind == "banner":
         paint_background(c, dstyle, pal)
@@ -860,6 +1068,8 @@ def render_creative(out_path, w, h, data: dict) -> str:
     if template == "rating":
         # 浅色底 + 白色评分卡
         lpal = make_palette(data.get("brand_color"), light=True)
+        if palette_override:
+            lpal = _apply_palette(lpal, palette_override)
         paint_background(c, dstyle, lpal, light=True)
         _base_light_brand(c, brand)
         sx0, sy0, sx1, sy1 = subject
@@ -888,6 +1098,8 @@ def render_creative(out_path, w, h, data: dict) -> str:
             paste_product(c, data["product_img"], (sx0 + cw * 0.06, sy1 - ch * 0.24,
                                                     sx0 + cw * 0.26, sy1 - ch * 0.06), int(cw * 0.03))
         c.pal = make_palette(data.get("brand_color"), light=True)
+        if palette_override:
+            c.pal = _apply_palette(c.pal, palette_override)
         draw_text_block(c, text, headline, sub, cta, design)
 
     elif template == "promo":

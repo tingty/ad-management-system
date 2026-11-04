@@ -629,11 +629,14 @@ def _render_spec(fw, angle_key, fields, lang, template, metric=None, design=None
     }
 
 
-async def _design_spec(db, fw, key: str, template: str, lang: str) -> dict:
+async def _design_spec(db, fw, key: str, template: str, lang: str, ctx: str = "") -> dict:
     """按创意方向取差异化设计规范：大模型产出（提示词管理 image），失败回退内置预设。
 
     返回的 spec 由 render.normalize_design 做二次校验与合并——即使模型只给了一部分字段，
     也会用该方向的内置预设补齐（背景风格/版式/字号），保证不同方向的素材视觉确实不同。
+
+    ctx：来自「素材创作」三大提示词库的风格/配色约束（presets.build_directives 的
+    design_prompt），追加到提示词骨架，使大模型在 tone/layout 上呼应所选风格与配色。
     """
     angle = ANGLE_MAP.get(key) or {}
     user_prompt = (
@@ -643,6 +646,8 @@ async def _design_spec(db, fw, key: str, template: str, lang: str) -> dict:
         f"卖点: {fw.selling_points}\n"
         "请给出该方向的视觉设计规范 JSON。"
     )
+    if ctx and ctx.strip():
+        user_prompt += f"\n\n【素材创作风格约束】请在上述规范中呼应以下方向与风格要求：{ctx.strip()}"
     try:
         parsed = parse_json(await get_llm(db, "copy").chat(get_prompt(db, "image"), user_prompt))
         if isinstance(parsed, dict) and (parsed.get("styles") or parsed.get("style")):
@@ -686,19 +691,32 @@ def _rating_from_metrics(metrics) -> tuple[str, str]:
 # ----------------------------- 生产 -----------------------------
 async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs,
                            extra=None, sizes_per_platform=None,
-                           video_mode="all", full_video=False) -> list[Material]:
+                           video_mode="all", full_video=False, directives=None) -> list[Material]:
     keys = [k for k in (angle_keys or []) if k in ANGLE_MAP] or ["benefit"]
     # 版位数量可配：默认 4，最少 1、最多 8（超过平台实际版位数时后面的循环自然截断）
     max_sizes = max(1, min(int(sizes_per_platform or IMAGE_MAX_SIZES), 8))
     video_keys = keys if video_mode == "all" else (keys[:1] if video_mode == "first" else [])
     mats, copy_index = [], []
 
+    # 「素材创作」三大提示词库：方向 / 风格 / 配色 解析为生成链路指令
+    directives = directives or {}
+    design_overrides = directives.get("design_overrides") or {}
+    design_ctx = directives.get("design_prompt") or ""
+    extra_full = " ".join(filter(None, [extra, directives.get("extra_prompt")])).strip()
+    extra = extra_full  # 后续文案生成、prompt_log、视频调用统一使用增强后的提示词
+    video_ctx = directives.get("video_prompt") or extra
+
     # 设计规范：每个创意方向一份（LLM 生成，失败回退内置差异预设），图片与视频关键帧共用
+    # 用户所选「内容风格 / 配色」覆盖（styles 背景键 + palette 调色板）优先生效，
+    # 大模型只负责在其基础上补全 tone / layout 等未指定项。
     design_map = {}
     if "image" in types or ("video" in types and video_keys):
         for k in dict.fromkeys(list(keys) + list(video_keys)):
-            design_map[k] = await _design_spec(
-                db, fw, k, ANGLE_MAP.get(k, {}).get("template", ""), langs[0])
+            llm_design = await _design_spec(
+                db, fw, k, ANGLE_MAP.get(k, {}).get("template", ""), langs[0], ctx=design_ctx)
+            base = dict(llm_design) if isinstance(llm_design, dict) else {}
+            base.update(design_overrides)
+            design_map[k] = base
 
     # 1) 先把文案算出来（模型调用串行，避免限流），再并行出图
     copy_jobs = []
@@ -790,7 +808,7 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
                 data = _render_spec(fw, key, fields, lang, ANGLE_MAP[key]["template"],
                                     design=design_map.get(key))
                 vtasks.append(_make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra,
-                                          full_video=full_video))
+                                          full_video=full_video, video_ctx=video_ctx))
         for v in await asyncio.gather(*vtasks, return_exceptions=True):
             if isinstance(v, Material):
                 mats.append(v)
@@ -925,7 +943,7 @@ def _stitch_mp4(frames: list, out_path: str, vw: int, vh: int):
         shutil.rmtree(seg_dir, ignore_errors=True)
 
 
-async def _make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra, full_video=False):
+async def _make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra, full_video=False, video_ctx: str = ""):
     """视频素材生产：LLM 分镜脚本 → 关键帧渲染 →（可选）合成完整视频 MP4。
 
     分镜脚本走「提示词管理」的 video 提示词，失败回退内置 4 镜；完整视频依赖
@@ -942,6 +960,8 @@ async def _make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra
         f"文案: headline={data.get('headline')} sub={data.get('sub')} cta={data.get('cta')}\n"
         f"平台视频规格: {(_spec_for(db, platform).video_spec if _spec_for(db, platform) else '') or '未知'}"
     )
+    if video_ctx and video_ctx.strip():
+        user_prompt += f"\n\n【素材创作风格约束】务必遵循以下方向与风格要求生成分镜：{video_ctx.strip()}"
     llm_shots, llm_meta = None, {}
     llm = get_llm(db, "copy")
     try:

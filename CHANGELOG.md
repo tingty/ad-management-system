@@ -580,6 +580,47 @@
 - `styles.css`：补充 `.mc-banner`（一致性说明）、`.mc-tabs/.mc-tab`（子模块切换）、`.mc-pane`、`.wall` 样式。
 - 验证：`npm run build` 通过（45 模块）。
 
+## V4.12 素材创作平台（一级菜单重构 + 素材提示词管理）
+
+**需求**（来源：《素材创作模块功能优化说明书》V2.1）：① 新增一级菜单「素材创作平台」；②「素材创作」作为「素材创作平台」的二级菜单；③ 新增二级菜单「素材提示词管理」，集中展示「素材创作」功能模块的全部提示词内容；④ 不改动账号权限相关功能。
+
+**交付**
+- `App.tsx` 菜单重构：
+  - 新增一级菜单分组 `GROUP_CREATION`（素材创作平台，图标 wand），其下挂两个二级菜单：**素材创作**（`creation`）、**素材提示词管理**（`mprompts`，图标 tags）。
+  - 将「素材创作」从原「素材管理」一级菜单移出，归入新的「素材创作平台」。
+  - 侧边栏改为数据驱动（`allGroups` / `visibleGroups` / `visibleNavItems`），三组（素材管理 / 素材创作平台 / 系统设置）统一渲染、各自独立折叠。
+  - 页面标题 kicker 改为按当前 tab 自动匹配所属一级菜单。
+  - 权限沿用既有规则：`mprompts` 与 `creation` 同属「编辑及以上角色可见」，未触碰角色定义、鉴权与账号管理逻辑。
+- 新增 `frontend/src/materialPresets.ts`：按《说明书》V2.1 第 6.2/6.3/6.4 节内置三大提示词库——**创意方向库（D01–D20，20 项）**、**创意内容风格库（S01–S26，26 项）**、**配色方案库（C01–C16，16 项）**。每项含编号、名称、说明、适用画像（图片/视频/通用）与注入生成时的「提示词指令」。P0 阶段为内置常量，与说明书 Q-M3 默认一致。
+- 新增 `frontend/src/pages/MaterialPrompts.tsx`：素材提示词管理页。顶部说明 + 「创意方向库 / 内容风格库 / 配色方案库」三 Tab + 搜索框 + 适用画像筛选（全部/图片可用/视频可用/通用）；每条以卡片展示，可展开查看提示词指令；风格沿用既有设计令牌（`.card`/`.pill`/`.chip`），新增 `.mp-*` 样式。
+- 验证：`npm run build` 通过（47 模块）；无账号权限逻辑改动。
+
+## V4.13 三大提示词库接入实际生成流程（说明书 7.2 / 7.3）
+
+**需求**（来源：《素材创作模块功能优化说明书》V2.1 第 7.2 / 7.3 节）：将创意方向库（D01–D20）、内容风格库（S01–S26）、配色方案库（C01–C16）接入「素材创作」的真实生成链路，使图片 / 视频创作**真正按所选方向 / 风格 / 配色产出**，而非仅作展示。
+
+**后端**
+- 新增 `backend/presets.py`：三大提示词库的单一数据源（与前端 `materialPresets.ts` 内容一致）；提供 `STYLE_TO_BG`（内容风格 → 渲染层背景键）、`COLOR_TO_PALETTE`（配色 → 调色板覆盖）映射，以及 `build_directives()` 把所选 方向/风格/配色/视频市场洞察 解析为 `extra_prompt`（注入文案）、`design_prompt`（注入视觉设计规范 LLM）、`design_overrides`（styles 背景键 + palette 调色板覆盖）、`video_prompt`（注入视频分镜）。
+- `render.py`：
+  - `render_creative` 读取 `design.palette` 覆盖 `accent/bg1/bg2/fg/sub/card/on_accent`，使配色方案真正落地到出图（验证：C13 霓虹绿均值 RGB (10,24,12) vs C15 朱红 (38,7,9) 明显不同）。
+  - `STYLE_KEYS` 扩展 11 个新背景风格：`solid/ink/oil/cyber/retro/vapor/pixel/paper/neon/glitch/geo`，并在 `Canvas` 与 `paint_background` 实现对应绘制；`make_palette` 旁新增 `_apply_palette` 覆盖工具。
+  - `normalize_design` 透传 palette（styles 经 STYLE_KEYS 校验）。
+- `services.py`：`produce_campaign` 新增 `directives` 参数——文案生成 extra 拼接方向/风格/配色指令；设计规范以「用户所选风格/配色覆盖优先、LLM 补全 tone/layout」合并；`_design_spec` 追加 `ctx`（风格/配色约束）到提示词骨架；`_make_video` 将 `video_prompt`（含可选「借鉴市场总结再创作」）注入分镜脚本提示词。
+- `schemas.py`：`ProduceRequest` 新增 `creative_direction` / `content_style` / `color_scheme` / `market_insight`。
+- `routers.py`：新增 `GET /api/settings/creative-presets` 返回三库（供前端拉取，便于后续运营扩充）；`/api/produce` 接收四参数并经 `build_directives` 传入生成。
+
+**前端**
+- `api.ts`：新增 `creativePresets()` 接口与 `CreativePreset(s)` 类型；`produce` 入参扩展四字段。
+- `MaterialCreation.tsx`：步骤④「素材创作」内新增「创意风格设定」区块——方向 / 风格 / 配色 三组选择器（单选 + 可清除，沿用 `.chip` 统一风格，适用画像非匹配项置灰），图片与视频共用同一份风格设定；视频子模块「借鉴市场总结再创作」开关 + 文本输入；默认配色 C12 品牌同色系（跟随品牌色，向后兼容）。选择随 `produce` 一并提交。
+- `MaterialPrompts.tsx`：改为从后端 `/api/settings/creative-presets` 拉取（单一数据源），失败回退本地 `materialPresets.ts`。
+- `materialPresets.ts`：`appliesTo` 参数放宽为 `{ applies: string }`，消除与后端类型的冲突。
+- `styles.css`：新增 `.mc-style / .mc-style-grid / .mc-preset / .chip-row / .mc-style-summary / .mc-insight` 等，统一输入框/选项/按钮风格。
+
+**验证**
+- `py_compile` 后端全模块通过；`routers/services/presets/render` 导入正常。
+- 出图像素级冒烟：6 组 方向×风格×配色 组合（含浅色方案 C04、品牌同色系 C12）均成功渲染图片与视频关键帧，无异常；调色板覆盖确实改变画面主色。
+- `npm run build` 通过（47 模块）；`GET /api/settings/creative-presets` 路由可达（鉴权后）。
+
 ## V4.10 全球主流大模型可配置化（目录 + 协议感知测试 + 引导）
 
 **需求**：用户可填写主要 API 配置即可完成大模型调用测试与配置；添加时选择大模型名称，选中后显示可配置字段，保存后首次调用并给出成败与具体错误引导。

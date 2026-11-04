@@ -23,6 +23,7 @@ from report import build_report, report_markdown
 from batch import parse_csv, run_job, template_csv, CSV_HEADERS
 from specs_data import PLATFORMS, MATERIAL_TYPES, LANGUAGES
 from llm_catalog import LLM_PRESETS, test_llm_connection
+from presets import build_directives, creative_presets_payload
 from auth import (current_user, require_roles, verify_password, hash_password, create_token,
                   user_dict, ROLE_LABELS, CAN_EDIT, CAN_REVIEW, ROLES)
 
@@ -226,10 +227,26 @@ async def produce(req: ProduceRequest, db: Session = Depends(get_db),
 
     await produce_campaign(db, fw, campaign, keys, req.platforms, types, langs,
                            req.extra_prompt, plan["sizes_per_angle"], video_mode,
-                           full_video=bool(req.full_video))
+                           full_video=bool(req.full_video),
+                           directives=build_directives(
+                               creative_direction=req.creative_direction,
+                               content_style=req.content_style,
+                               color_scheme=req.color_scheme,
+                               market_insight=req.market_insight,
+                               lang=langs[0] if langs else "en"))
     db.refresh(campaign)
     _ = list(campaign.materials)
     return campaign
+
+
+@router.get("/settings/creative-presets")
+def creative_presets():
+    """返回「素材创作」三大提示词库：创意方向（D01-D20）/ 内容风格（S01-S26）/ 配色（C01-C16）。
+
+    前端「素材提示词管理」与「素材创作」生成均从此处取数，便于后续在后台扩充。
+    """
+    return creative_presets_payload()
+
 
 @router.post("/estimate")
 def estimate(req: EstimateRequest, db: Session = Depends(get_db)):
