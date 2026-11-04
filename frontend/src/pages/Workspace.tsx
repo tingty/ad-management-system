@@ -18,7 +18,7 @@ function scrollTo(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-function Chips({ options, value, onChange, hint }: {
+export function Chips({ options, value, onChange, hint }: {
   options: string[]; value: string[]; onChange: (v: string[]) => void
   hint?: (o: string) => string
 }) {
@@ -45,7 +45,7 @@ function CharBar({ len, max }: { len: number; max: number }) {
   )
 }
 
-function CopyBlock({ m }: { m: Material }) {
+export function CopyBlock({ m }: { m: Material }) {
   const rows = (m.content?.char_table || []) as { field: string; text: string; len: number; max: number; over: boolean }[]
   const problems = (m.validation?.problems || []) as { level: string; field: string; msg: string }[]
   const ok = m.validation?.valid !== false
@@ -78,7 +78,7 @@ function CopyBlock({ m }: { m: Material }) {
   )
 }
 
-function StepHead({ no, title, desc, extra }: {
+export function StepHead({ no, title, desc, extra }: {
   no: string; title: string; desc?: string; extra?: React.ReactNode
 }) {
   return (
@@ -144,7 +144,7 @@ function ReportItem({ it }: { it: any }) {
   return null
 }
 
-function ReportView({ report, fw, onDownload }: {
+export function ReportView({ report, fw, onDownload }: {
   report: AnalysisReport; fw: Framework; onDownload: () => void
 }) {
   const r = report

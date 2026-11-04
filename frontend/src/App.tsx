@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { api, clearToken, getToken, Meta, User } from './api'
 import Workspace from './pages/Workspace'
+import MaterialCreation from './pages/MaterialCreation'
 import Batch from './pages/Batch'
 import Library from './pages/Library'
 import Login from './pages/Login'
@@ -11,14 +12,14 @@ import Logs from './pages/Logs'
 import Prompts from './pages/Prompts'
 import Specs from './pages/Specs'
 
-type Tab = 'workspace' | 'batch' | 'library' | 'specs'
+type Tab = 'workspace' | 'batch' | 'creation' | 'library' | 'specs'
   | 'llm' | 'accounts' | 'logs' | 'prompts'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['workspace', 'batch', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts']
+const TABS: Tab[] = ['workspace', 'batch', 'creation', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts']
 const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
@@ -34,6 +35,8 @@ const GROUP_MATERIAL: NavGroup = {
       desc: '粘贴落地页链接 → 分析产品 → 定投放平台 → 生成素材 → 按指令优化 → 下载投放包' },
     { key: 'batch', label: '批量生成', icon: 'grid',
       desc: 'CSV 一次导入多个产品与投放组合，后台异步产出，适合批量上新与批量测试' },
+    { key: 'creation', label: '素材创作', icon: 'sparkles',
+      desc: '新增独立模块：统一落地页分析后，在「图片创作 / 视频创作」两个子模块间切换，共享同一品牌与方向，保证素材风格一致' },
     { key: 'library', label: '素材库', icon: 'image',
       desc: '按产品名 / 平台检索历史批次，查看每个方向的最新版本、校验结果与审阅状态' },
     { key: 'specs', label: '规格库', icon: 'ruler',
@@ -90,6 +93,7 @@ const PATHS: Record<string, ReactNode> = {
   user: <><circle cx="12" cy="8" r="4" /><path d="M4 21c0-3.9 3.6-6.5 8-6.5s8 2.6 8 6.5" /></>,
   filetext: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M9 13h6M9 17h6" /></>,
   code: <path d="M16 18l6-6-6-6M8 6l-6 6 6 6" />,
+  sparkles: <><path d="M12 3l1.8 4.8L18.6 9.6 13.8 11.4 12 16.2 10.2 11.4 5.4 9.6 10.2 7.8z" /><path d="M19 14l.9 2.3 2.3.9-2.3.9L19 21l-.9-2.3-2.3-.9 2.3-.9z" /></>,
 }
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -111,7 +115,7 @@ function tabFromHash(): Tab | null {
 function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   return [
-    ...(canEdit ? (['workspace', 'batch'] as Tab[]) : []),
+    ...(canEdit ? (['workspace', 'batch', 'creation'] as Tab[]) : []),
     'library', 'specs',
     ...(user.role === 'admin' ? (GROUP_SYSTEM.items.map(i => i.key)) : []),
   ]
@@ -316,6 +320,7 @@ export default function App() {
           {tab === 'workspace' && isEditor && (
             <Workspace meta={meta} onOpenLibrary={() => go('library')} />
           )}
+          {tab === 'creation' && isEditor && <MaterialCreation meta={meta} />}
           {tab === 'batch' && isEditor && <Batch meta={meta} />}
           {tab === 'library' && <Library user={user} canReview={canReview} isEditor={isEditor} />}
           {tab === 'specs' && <Specs canEdit={canReview} />}

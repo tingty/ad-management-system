@@ -566,6 +566,20 @@
 - 单元测试 4 场景：旧 `admin/Admin@123`（邮箱兜底 `admin@example.com`）、旧 `leson`+兜底邮箱、已正确（幂等）、已改自定义密码（保留不重置）——前三类登录 `leson@recomob.com/Tingty@123.com` 均 200，第四类按设计保留原密码。
 - 真实 HTTP E2E：以「脏库」（旧 `admin/Admin@123`）启动 uvicorn，`POST /api/auth/login` 用统一账号返回 200 + token；错密码 401。
 
+## V4.11 素材创作模块（图片创作 / 视频创作 双子模块）
+
+**需求**（来源：《推广图片与视频 智能素材创作平台 产品策划说明书 V1.0》）：在「素材管理」一级菜单下新增二级菜单「素材创作」；图片创作与视频创作作为两个独立子模块，以切换方式进入；两者基于同一份落地页综合分析，共享品牌色 / 产品图 / 创意方向，保证同一落地页在两个模块下素材风格一致；权限与系统其他模块保持不变。
+
+**交付**
+- 新增 `frontend/src/pages/MaterialCreation.tsx`：
+  - 顶部统一的「落地页综合分析」（粘贴 URL/正文 → `api.report` → 渲染 `ReportView`）、「投放设置与品牌风格」（平台/语言/版位/品牌色/产品图）、「创意方向」三步，与「创作工作台」使用**同一分析引擎与同一 `ReportView` 组件**（从 `Workspace.tsx` 导出复用），确保分析展示完全一致。
+  - 下方 Tab 切换：**图片创作** / **视频创作** 两个独立子模块。各自调用 `api.produce` 生成独立任务（图片：`image+copy+keyword`；视频：`video+copy` 并合成完整成片），但共享同一 `framework_id` / 品牌色 / 产品图 / 选定方向 → 风格一致。
+  - 结果复用创作工作台既有素材墙样式（图片缩略图、文案 `CopyBlock`、视频播放器与关键帧列表），并各提供 ZIP 导出。
+- `App.tsx`：Tab 联合类型、`TABS`、`GROUP_MATERIAL` 新增 `creation`（素材创作，图标 sparkles）；`allowedTabs` 纳入（编辑及以上角色可访问，与创作工作台一致）；主区域渲染 `MaterialCreation`。
+- `Workspace.tsx`：导出 `ReportView / Chips / StepHead / CopyBlock`（仅加 `export` 关键字，行为与权限不变），供新模块复用。
+- `styles.css`：补充 `.mc-banner`（一致性说明）、`.mc-tabs/.mc-tab`（子模块切换）、`.mc-pane`、`.wall` 样式。
+- 验证：`npm run build` 通过（45 模块）。
+
 ## V4.10 全球主流大模型可配置化（目录 + 协议感知测试 + 引导）
 
 **需求**：用户可填写主要 API 配置即可完成大模型调用测试与配置；添加时选择大模型名称，选中后显示可配置字段，保存后首次调用并给出成败与具体错误引导。

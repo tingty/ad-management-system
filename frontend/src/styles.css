@@ -667,6 +667,39 @@ select {
 .wg-sec-video .wg-sec-tag { background: #2f5d8f; }
 .wg-sec-text .wg-sec-tag { background: #6b7c93; }
 
+/* ---------- 素材创作（MaterialCreation） ---------- */
+.mc-banner {
+  background: #f3f7ff;
+  border: 1px solid #d8e3f5;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  color: #33507a;
+  margin-bottom: 14px;
+  line-height: 1.7;
+}
+.mc-banner b { color: #1f3a63; margin-right: 4px; }
+.mc-tabs { display: flex; gap: 8px; margin: 14px 0 4px; border-bottom: 1px solid var(--border); }
+.mc-tab {
+  border: 1px solid var(--border);
+  border-bottom: none;
+  background: #f7f9fc;
+  padding: 9px 18px;
+  border-radius: 10px 10px 0 0;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: -1px;
+}
+.mc-tab.on {
+  background: #fff;
+  color: var(--primary);
+  font-weight: 600;
+  border-bottom: 1px solid #fff;
+}
+.mc-pane { padding-top: 12px; }
+.wall { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }
+
 /* ===================== 设置：大模型目录选择 + 测试引导 ===================== */
 .model-picker {
   border: 1px solid var(--border); border-radius: 10px;
