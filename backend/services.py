@@ -748,6 +748,8 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
     directives = directives or {}
     design_overrides = directives.get("design_overrides") or {}
     design_ctx = directives.get("design_prompt") or ""
+    # 创意方向 → 渲染版式（画面主体）。空字符串表示「沿用内部 angle_key 的默认版式」，向后兼容。
+    template_override = (directives.get("template") or "").strip()
     extra_full = " ".join(filter(None, [extra, directives.get("extra_prompt")])).strip()
     extra = extra_full  # 后续文案生成、prompt_log、视频调用统一使用增强后的提示词
     video_ctx = directives.get("video_prompt") or extra
@@ -808,7 +810,8 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
         if "image" in types:
             spec = _spec_for(db, platform)
             all_sizes = list(spec.image_sizes if spec else ["1080x1080"])
-            data = _render_spec(fw, key, fields, lang, ANGLE_MAP[key]["template"],
+            data = _render_spec(fw, key, fields, lang,
+                                template_override or ANGLE_MAP[key]["template"],
                                 design=design_map.get(key))
             for size in all_sizes[:max_sizes]:
                 w, h = _size_wh(size)
@@ -851,7 +854,8 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
                 fields = (src.content or {}).get("fields", {}) if src else {}
                 if not fields:
                     continue
-                data = _render_spec(fw, key, fields, lang, ANGLE_MAP[key]["template"],
+                data = _render_spec(fw, key, fields, lang,
+                                    template_override or ANGLE_MAP[key]["template"],
                                     design=design_map.get(key))
                 vtasks.append(_make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra,
                                           full_video=full_video, video_ctx=video_ctx))

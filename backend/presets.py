@@ -198,6 +198,61 @@ COLOR_TO_PALETTE: dict[str, dict] = {
 }
 
 
+# ----------------------------- 创意方向 → 渲染版式（画面主体 / 构图） -----------------------------
+# 这是「创意方向」真正驱动视觉的关键：之前方向只进了文案提示词，画面主体完全由内部
+# 8 个 angle_key 决定，所以切换创意方向图片/视频完全不变。这里把每个 D 映射到一个
+# 渲染版式（render.py 的 template），让选不同方向产出不同「画面里画什么」。
+# 取值必须是 render.py 已实现的版式：bigtype / stat / rating / promo / ugc / compare / scenario。
+DIRECTION_TO_TEMPLATE: dict[str, str] = {
+    "D01": "bigtype",   # 卖点直击：主视觉大字突出产品
+    "D02": "bigtype",   # 痛点唤醒：聚光暗场 + 大字
+    "D03": "scenario",  # 场景代入：上下分区，场景面板
+    "D04": "rating",    # 信任背书：评分 / 认证卡
+    "D05": "promo",     # 限时优惠：折扣角标
+    "D06": "compare",   # 对比测评：左右对照
+    "D07": "ugc",       # 用户证言：UGC 手机框
+    "D08": "bigtype",   # 国潮流潮：大字 + 国风背景
+    "D09": "bigtype",   # 极简高级：留白大字
+    "D10": "bigtype",   # 科技未来：大字 + 科技背景
+    "D11": "bigtype",   # 生活方式：大字 + 清新背景
+    "D12": "promo",     # 节日氛围：折扣角标
+    "D13": "stat",      # 权威数据：大字号数字主体
+    "D14": "bigtype",   # 幽默趣味：大字（视频）
+    "D15": "bigtype",   # 情感共鸣：大字（视频）
+    "D16": "bigtype",   # 身份认同：大字 + 几何背景
+    "D17": "promo",     # 稀缺紧迫：折扣角标
+    "D18": "promo",     # 新品尝鲜：折扣角标
+    "D19": "bigtype",   # 本地化：大字 + 几何背景
+    "D20": "ugc",       # KOL 同款：UGC 手机框（视频）
+}
+
+# ----------------------------- 创意方向 → 兜底背景风格键 -----------------------------
+# 当用户「没有」单独选内容风格(S)时，按创意方向自带背景，保证只切方向画面背景也会变
+# （而非恒为品牌色渐变）。取值必须是 render.py 的 STYLE_KEYS。
+DIRECTION_TO_BG: dict[str, str] = {
+    "D01": "solid",       # 纯色聚焦
+    "D02": "spotlight",   # 暗场聚光
+    "D03": "vignette",    # 暗角沉浸场景
+    "D04": "light_panel", # 浅色可信卡
+    "D05": "split",       # 对撞色块
+    "D06": "split",       # 分栏对比
+    "D07": "stripes",     # 斜纹真实感
+    "D08": "ink",         # 水墨国风
+    "D09": "solid",       # 极简纯色
+    "D10": "cyber",       # 赛博科技
+    "D11": "wave",        # 清新波浪
+    "D12": "radial",      # 节日光晕
+    "D13": "halftone",    # 点阵数据感
+    "D14": "paper",       # 手绘轻松
+    "D15": "vignette",    # 情绪暗角
+    "D16": "geo",         # 几何身份感
+    "D17": "split",       # 对撞紧迫
+    "D18": "radial",      # 新品光晕
+    "D19": "geo",         # 本地几何
+    "D20": "stripes",     # UGC 斜纹
+}
+
+
 # ----------------------------- 索引辅助 -----------------------------
 def _index(items: list[dict]) -> dict[str, dict]:
     return {it["id"]: it for it in items}
@@ -268,11 +323,22 @@ def build_directives(
     design_prompt = "；".join(design_parts)
 
     # 渲染层覆盖：背景风格键 + 调色板
+    # 背景优先级：用户选了「内容风格」→ 用它的映射；没选则回落到「创意方向」自带背景，
+    # 保证即便只切了方向、不动风格，画面背景也随之改变（而非恒为品牌色渐变）。
     overrides: dict = {}
+    bg_key = None
     if s and content_style in STYLE_TO_BG:
-        overrides["styles"] = [STYLE_TO_BG[content_style]]
+        bg_key = STYLE_TO_BG[content_style]
+    elif d and creative_direction in DIRECTION_TO_BG:
+        bg_key = DIRECTION_TO_BG[creative_direction]
+    if bg_key:
+        overrides["styles"] = [bg_key]
     if c and color_scheme in COLOR_TO_PALETTE:
         overrides["palette"] = dict(COLOR_TO_PALETTE[color_scheme])
+
+    # 创意方向 → 渲染版式（画面主体 / 构图）。这是「创意方向」真正驱动视觉的关键一环：
+    # 之前方向只进了文案提示词，画面主体完全由内部 8 个 angle_key 决定，所以换方向画面不变。
+    template = DIRECTION_TO_TEMPLATE.get(creative_direction) or ""
 
     # 视频提示词：在文案指令基础上，可选叠加“市场洞察再创作”
     video_parts = list(parts)
@@ -292,5 +358,6 @@ def build_directives(
         "extra_prompt": extra_prompt,
         "design_prompt": design_prompt,
         "design_overrides": overrides,
+        "template": template,
         "video_prompt": video_prompt,
     }

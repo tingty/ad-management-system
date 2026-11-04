@@ -1190,6 +1190,28 @@ def render_creative(out_path, w, h, data: dict) -> str:
                      lb, font=lf, fill=pal["sub"])
         draw_text_block(c, text, headline, sub, cta, design)
 
+    elif template == "scenario":
+        # 场景代入：上方圆角「场景面板」营造真实使用场景，下方文字区自然带出价值，
+        # 弱化广告感。无真实场景图时用合成手机界面占位，避免空壳。
+        paint_background(c, dstyle, pal)
+        if brand:
+            c.brand_mark(c.m, c.m, max(14, int(c.s * 0.052)), brand)
+        sx0, sy0, sx1, sy1 = subject
+        pad = int(c.s * 0.045)
+        pw0, ph0, pw1, ph1 = sx0 + pad, sy0, sx1 - pad, sy1 - int((sy1 - sy0) * 0.04)
+        c.shadow([pw0, ph0, pw1, ph1], int(c.s * 0.03), alpha=80)
+        c.rrect([pw0, ph0, pw1, ph1], int(c.s * 0.05), fill=mix(pal["bg2"], pal["accent"], 0.16))
+        # 面板内一道斜向光带，制造场景纵深
+        c.d.polygon([(pw0, ph1), (pw0 + (pw1 - pw0) * 0.52, ph0), (pw1, ph1)],
+                    fill=mix(pal["accent"], pal["bg2"], 0.42))
+        # 产品 / 界面缩在面板右下角，作为场景中的主角
+        ppad = int((ph1 - ph0) * 0.04)
+        pbox = (pw1 - (pw1 - pw0) * 0.42, ph1 - (ph1 - ph0) * 0.46 - ppad,
+                pw1 - ppad, ph1 - ppad)
+        if not paste_product(c, data.get("product_img"), pbox, int(c.s * 0.03)):
+            draw_phone(c, phone_box(pbox), pal["accent"], "list")
+        draw_text_block(c, text, headline, sub, cta, design)
+
     else:  # bigtype
         paint_background(c, dstyle, pal)
         # 强调斜带：深底专属装饰，浅底/分割/波浪底上叠它只会糊成一块
