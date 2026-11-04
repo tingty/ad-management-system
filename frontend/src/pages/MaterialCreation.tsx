@@ -3,7 +3,7 @@ import {
   api, AnalysisReport, Angle, Campaign, Framework, Material, Meta, PlatformSpec, CreativePreset,
 } from '../api'
 // 复用创作工作台的同一套分析视图与基础组件，保证“落地页综合分析”与创作工作台完全一致
-import { Chips, StepHead, CopyBlock, ReportView } from './Workspace'
+import { Chips, StepHead, CopyBlock, ReportView, PresetSelect } from './Workspace'
 // 三大提示词库：优先从后端接口拉取（单一数据源），失败回退本地内置常量
 import { DIRECTIONS, STYLES, COLORS, appliesTo } from '../materialPresets'
 
@@ -37,46 +37,6 @@ function angleGroups(campaign: Campaign, angles: Angle[]) {
     else if (m.type === 'keyword') g.kw = m
   }
   return Array.from(map.values()).filter(g => g.imgs.length || g.copy || g.video || g.kw)
-}
-
-/* 单个提示词库选择器：单选 + 可清除，沿用全局 .chip 统一风格 */
-function PresetSelect({ label, hint, options, value, onPick, scope }: {
-  label: string
-  hint?: string
-  options: CreativePreset[]
-  value: string | null
-  onPick: (id: string | null) => void
-  scope?: 'image' | 'video'
-}) {
-  return (
-    <div className="mc-preset">
-      <div className="mc-preset-head">
-        <b>{label}</b>
-        {value && (
-          <span className="pill off" style={{ cursor: 'pointer' }}
-            onClick={() => onPick(null)} title="清除选择">
-            已选 {value} · 清除
-          </span>
-        )}
-      </div>
-      {hint && <div className="mc-preset-hint">{hint}</div>}
-      <div className="chip-row">
-        {options.map(o => {
-          const dim = scope ? !appliesTo(o, scope) : false
-          return (
-            <button
-              key={o.id}
-              className={'chip' + (value === o.id ? ' on' : '') + (dim ? ' dim' : '')}
-              title={o.desc}
-              onClick={() => onPick(value === o.id ? null : o.id)}
-            >
-              <span className="mc-chip-id">{o.id}</span> {o.name}
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
 }
 
 export default function MaterialCreation({ meta }: { meta: Meta | null }) {

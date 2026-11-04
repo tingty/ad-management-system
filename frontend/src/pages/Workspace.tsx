@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   api, AnalysisReport, Angle, Campaign, Framework, Material, Meta, OptimizeResult,
-  PlanEstimate, PlatformSpec,
+  PlanEstimate, PlatformSpec, CreativePreset,
 } from '../api'
+// 三大提示词库常量（与「素材创作」共用同一数据源）
+import { DIRECTIONS, STYLES, COLORS, appliesTo } from '../materialPresets'
 
 const TEMPLATE_LABEL: Record<string, string> = {
   bigtype: '纯字体版式', stat: '数字主体', rating: '评分卡', promo: '折扣角标',
@@ -89,6 +91,47 @@ export function StepHead({ no, title, desc, extra }: {
         {desc && <div className="step-desc">{desc}</div>}
       </div>
       {extra && <div className="step-extra">{extra}</div>}
+    </div>
+  )
+}
+
+/* 单个提示词库选择器：单选 + 可清除，沿用全局 .chip 统一风格。
+   上提到创作工作台，供「素材创作」与「创作工作台」共用，避免重复实现。 */
+export function PresetSelect({ label, hint, options, value, onPick, scope }: {
+  label: string
+  hint?: string
+  options: CreativePreset[]
+  value: string | null
+  onPick: (id: string | null) => void
+  scope?: 'image' | 'video'
+}) {
+  return (
+    <div className="mc-preset">
+      <div className="mc-preset-head">
+        <b>{label}</b>
+        {value && (
+          <span className="pill off" style={{ cursor: 'pointer' }}
+            onClick={() => onPick(null)} title="清除选择">
+            已选 {value} · 清除
+          </span>
+        )}
+      </div>
+      {hint && <div className="mc-preset-hint">{hint}</div>}
+      <div className="chip-row">
+        {options.map(o => {
+          const dim = scope ? !appliesTo(o, scope) : false
+          return (
+            <button
+              key={o.id}
+              className={'chip' + (value === o.id ? ' on' : '') + (dim ? ' dim' : '')}
+              title={o.desc}
+              onClick={() => onPick(value === o.id ? null : o.id)}
+            >
+              <span className="mc-chip-id">{o.id}</span> {o.name}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -299,7 +342,29 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
   const [validOnly, setValidOnly] = useState(false)
   const [zoom, setZoom] = useState('')
 
+  // 创作工作台「创意风格设定」：三大提示词库（方向 / 风格 / 配色），驱动画面主体 / 背景纹理 / 配色
+  const [directions, setDirections] = useState<CreativePreset[]>(DIRECTIONS)
+  const [styles, setStyles] = useState<CreativePreset[]>(STYLES)
+  const [colors, setColors] = useState<CreativePreset[]>(COLORS)
+  const [directionId, setDirectionId] = useState<string | null>(null)
+  const [styleId, setStyleId] = useState<string | null>(null)
+  const [colorId, setColorId] = useState<string | null>('C12') // 默认品牌同色系（跟随品牌色）
+
   useEffect(() => { api.specs().then(setSpecs).catch(() => { }) }, [])
+
+  // 从后端拉取三大提示词库（单一数据源）；失败保留本地内置常量
+  useEffect(() => {
+    let alive = true
+    api.creativePresets()
+      .then(res => {
+        if (!alive) return
+        setDirections(res.directions as CreativePreset[])
+        setStyles(res.styles as CreativePreset[])
+        setColors(res.colors as CreativePreset[])
+      })
+      .catch(() => { /* 保留本地回退 */ })
+    return () => { alive = false }
+  }, [])
 
   useEffect(() => {
     if (!campaign) return
@@ -390,6 +455,9 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
         platforms, material_types: materialTypes, languages: langs,
         sizes_per_angle: sizes, video_mode: videoMode,
         full_video: canFullVideo && fullVideo,
+        creative_direction: directionId,
+        content_style: styleId,
+        color_scheme: colorId,
       })
       setCampaign(c)
       setBusy('')
@@ -597,6 +665,18 @@ export default function Workspace({ meta, onOpenLibrary }: { meta: Meta | null; 
             <input type="file" accept="image/png,image/jpeg,image/webp" onChange={e => upload(e.target.files?.[0])} />
             {productImg && <div className="muted" style={{ marginTop: 4 }}>已上传：{productImg.split('/').pop()}</div>}
           </div>
+        </div>
+        {/* ---------------- 创意风格设定（驱动画面方向 / 美术 / 配色） ---------------- */}
+        <div className="mc-style-block">
+          <div className="mc-style-title">创意风格设定</div>
+          <div className="muted" style={{ marginBottom: 8 }}>
+            这是「素材创作」三大提示词库的全局设定，决定所有方向的画面：
+            <b>创意方向</b>决定画面主体与版式、<b>内容风格</b>决定美术纹理与背景、<b>配色方案</b>决定颜色（C12=跟随品牌色）。
+            与下方「③ 创意方向（叙事角度）」是两层叠加关系。
+          </div>
+          <PresetSelect label="创意方向（D01–D20）" hint="决定画面主体与版式" options={directions} value={directionId} onPick={setDirectionId} />
+          <PresetSelect label="内容风格（S01–S26）" hint="决定美术风格与背景处理" options={styles} value={styleId} onPick={setStyleId} />
+          <PresetSelect label="配色方案（C01–C16）" hint="C12 品牌同色系=跟随品牌色" options={colors} value={colorId} onPick={setColorId} />
         </div>
         {est && (
           <div className={'est-bar' + (est.over_limit ? ' over' : '')}>

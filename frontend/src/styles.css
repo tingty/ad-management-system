@@ -838,6 +838,17 @@ select {
 .chip.on { background: var(--primary); border-color: var(--primary); color: #fff; }
 .chip.dim { opacity: .42; }
 .mc-chip-id { font-size: 10.5px; opacity: .7; font-variant-numeric: tabular-nums; }
+/* 创作工作台 · 创意风格设定区块 */
+.mc-style-block {
+  margin-top: 14px; padding: 14px 16px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: #fbfcfe;
+}
+.mc-style-title {
+  font-size: 14px; font-weight: 700; color: var(--ink);
+  margin-bottom: 4px;
+}
+.mc-style-block .mc-preset + .mc-preset { margin-top: 12px; }
 .mc-style-summary {
   margin-top: 12px; padding: 8px 12px; border-radius: 8px;
   background: #f3f7fb; color: var(--ink); font-size: 12.8px;

@@ -681,6 +681,26 @@
 - 配色：同方向同风格下 C13(霓虹绿)/C15(国风朱红)/C01(多彩渐变) 的 mean RGB 分别为 `[21.9,36.6,27.4]` / `[56.3,17.3,18.5]` / `[66.8,44.9,91.6]`，配色覆盖确实改变画面主色。
 - `py_compile` 三个改动模块通过。
 
+## V4.17 创作工作台同样接入三大设置（与素材创作统一）
+
+**问题**
+- 排查发现「素材管理 → 创作工作台」与「素材创作平台 → 素材创作」共用同一套生成后端（`POST /api/produce`），但创作工作台的 `produce` 调用**从未传入 `creative_direction / content_style / color_scheme`**，且整个页面**没有**三大设置的选择 UI。
+- 结果：用户在三大提示词库里配置的创意方向/内容风格/配色方案，在创作工作台里完全不生效——图片/视频只走内部 8 个 `angle_key` 的默认版式，配色只随框架品牌色，与"按设置的方向/风格出图"的预期完全脱节（与 V4.16 修复前素材创作的症状同源，但更严重：连选择入口都没有）。
+
+**改动**
+- `frontend/src/pages/Workspace.tsx`：
+  - 新增导入 `CreativePreset` 与三大库常量 `DIRECTIONS/STYLES/COLORS/appliesTo`。
+  - 把 `PresetSelect` 组件**上提并导出**到创作工作台（单一数据源），「素材创作」改为从创作工作台复用，消除重复实现与潜在漂移。
+  - 组件内新增三大设置状态（`directionId/styleId/colorId`，配色默认 `C12` 品牌同色系）与 `api.creativePresets()` 拉取（失败回退本地常量）。
+  - 在「② 投放设置」新增「创意风格设定」区块（三个 `PresetSelect` + 说明文案，解释它和「③ 创意方向（叙事角度）」是两层叠加关系）。
+  - `produce` 调用补齐 `creative_direction/content_style/color_scheme`，使其与素材创作行为一致。
+- `frontend/src/pages/MaterialCreation.tsx`：移除本地 `PresetSelect`，改从创作工作台 `import`（复用同一组件）。
+- `frontend/src/styles.css`：新增 `.mc-style-block` / `.mc-style-title`（创作工作台创意风格设定区块样式）。
+
+**验证**
+- `npm run build`：47 模块编译通过，0 错误。
+- 后端无需改动——`POST /api/produce` 早已从 `req` 读取三大参数并 `build_directives`（V4.13/16），创作工作台传参后即触发 V4.16 的版式/背景/配色覆盖逻辑。
+
 ## V4.10 全球主流大模型可配置化（目录 + 协议感知测试 + 引导）
 
 **需求**：用户可填写主要 API 配置即可完成大模型调用测试与配置；添加时选择大模型名称，选中后显示可配置字段，保存后首次调用并给出成败与具体错误引导。
