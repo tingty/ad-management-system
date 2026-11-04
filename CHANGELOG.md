@@ -644,6 +644,24 @@
 - `py_compile` 后端全模块通过；`build_report` 冒烟：mock 含九要素与延伸输出的 `site_analysis`，三个新 section 顺序与内容正确（定位→网站定位与目标客户→九要素→…→延伸输出）。
 - `npm run build` 通过（47 模块）。
 
+## V4.15 素材提示词管理补「落地页分析」说明 + 报告长卡片折叠
+
+**需求**
+1. 「素材提示词管理」补一个「落地页分析提示词」字段说明（网站本质/目标客户/吸引力亮点/九要素/延伸输出）。
+2. 「素材创作 / 创作工作台」的九要素、延伸输出等长卡片在内容过长时支持折叠/展开。
+
+**改动**
+- `frontend/src/materialPresets.ts`：新增 `LANDING_ANALYSIS_FIELDS` 常量，结构化描述落地页分析提示词的字段（business_nature / target_clients / appeal_highlights / nine_elements 9 项 / extensions 7 项）。
+- `frontend/src/pages/MaterialPrompts.tsx`：新增第 4 个 Tab「落地页分析」，展示以上字段说明（与三库 Tab 统一卡片风格，子字段以列表呈现）；预设库 Tab 保留搜索与画像筛选。
+- `frontend/src/pages/Workspace.tsx` · `ReportView`：
+  - 新增 `expandedSec` 状态；对行数 ≥ 6 的 section（九要素 / 延伸输出 / 网站定位与目标客户等）加折叠：默认收起并限制高度 + 底部渐隐，标题右侧出现「展开（N 项）▾ / 收起 ▴」按钮。
+  - section 头部改为 `.rsec-head`（标题 + 折叠按钮），内容包进 `.rsec-body`。
+- `frontend/src/styles.css`：新增 `.rsec-head`、`.rsec-toggle` 与折叠相关样式；新增 `.mp-subs`（落地页分析子字段列表）样式。
+
+**验证**
+- `npm run build` 通过（47 模块）；打包产物含「落地页分析 / 网站本质 / 九要素结构化总结 / 延伸输出 / 展开（ / 收起 ▴」等文案。
+- 账号权限逻辑未改动。
+
 ## V4.10 全球主流大模型可配置化（目录 + 协议感知测试 + 引导）
 
 **需求**：用户可填写主要 API 配置即可完成大模型调用测试与配置；添加时选择大模型名称，选中后显示可配置字段，保存后首次调用并给出成败与具体错误引导。

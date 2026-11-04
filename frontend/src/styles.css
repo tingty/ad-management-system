@@ -453,6 +453,24 @@ select {
 .rv { line-height: 1.6; word-break: break-word; white-space: pre-wrap; }
 .rn { grid-column: 2; font-size: 11.5px; color: #8695a6; line-height: 1.5; }
 
+/* 报告 section 折叠（九要素 / 延伸输出 等过长卡片） */
+.rsec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rsec-head h4 { margin: 0; }
+.rsec-toggle { border: none; background: none; color: var(--primary); font: inherit; font-size: 12.5px; cursor: pointer; padding: 0; }
+.rsec-toggle:hover { text-decoration: underline; }
+.rsec.collapsible .rsec-body { max-height: 260px; overflow: hidden; position: relative; transition: max-height .2s ease; }
+.rsec.collapsible:not(.collapsed) .rsec-body { max-height: none; }
+.rsec.collapsible.collapsed .rsec-body::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 52px;
+  background: linear-gradient(to bottom, rgba(251,252,254,0), #fbfcfe); pointer-events: none;
+}
+
+/* 落地页分析字段说明 · 子字段列表 */
+.mp-subs { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.mp-subs li { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 2px 10px; font-size: 12.5px; }
+.mp-sub-key { color: var(--primary); font-weight: 600; }
+.mp-sub-desc { color: #3a4856; line-height: 1.55; }
+
 .vprop { display: flex; gap: 9px; padding: 7px 0; border-top: 1px solid #f0f4f8; }
 .vprop:first-of-type { border-top: none; }
 .vp-rank {

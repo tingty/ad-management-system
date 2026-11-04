@@ -99,3 +99,79 @@ export function appliesTo(p: { applies: string }, f: 'all' | 'image' | 'video' |
   if (f === 'image') return p.applies === '图片' || p.applies === '图片/视频' || p.applies === '通用'
   return p.applies === '视频' || p.applies === '图片/视频' || p.applies === '通用'
 }
+
+/* ===================== 落地页分析提示词 · 字段说明 ===================== */
+// 落地页分析（网站核心内容分析）提示词输出的结构化字段说明。
+// 该提示词驱动「素材创作 / 创作工作台」的落地页综合分析，确保营销/广告平台不被误判，
+// 并输出九要素总结与延伸输出。本常量同时供「素材提示词管理 → 落地页分析」展示使用。
+
+export interface LandingField {
+  /** 字段键 */
+  key: string
+  /** 字段名称 */
+  name: string
+  /** 字段说明 */
+  desc: string
+  /** 子字段（可选） */
+  subs?: { key: string; label: string; desc: string }[]
+}
+
+export const LANDING_ANALYSIS_FIELDS: LandingField[] = [
+  {
+    key: 'business_nature',
+    name: '网站本质',
+    desc: '综合判断网站本质，避免把“帮广告主获客、对接渠道与流量”的营销/广告平台误判为教育、工具等。',
+    subs: [
+      { key: 'nature', label: '本质定位', desc: 'toC 落地页 / toB 服务 / 广告·营销平台（服务广告主与渠道/流量商）' },
+      { key: 'is_marketing_platform', label: '是否营销平台', desc: '是/否：凡是提供广告、营销、变现、代理、流量对接服务的站点必须判为“是”' },
+      { key: 'note', label: '补充说明', desc: '对本质判断的一句话解释' },
+    ],
+  },
+  {
+    key: 'target_clients',
+    name: '目标客户与需求',
+    desc: '区分 toC 终端用户与 toB 广告主/渠道/流量主，并分别总结各自核心诉求。',
+    subs: [
+      { key: 'toc', label: 'toC 终端用户', desc: '最终消费者画像与诉求' },
+      { key: 'tob', label: 'toB 对象', desc: '广告主 / 渠道代理 / 流量主' },
+      { key: 'needs.advertiser', label: '广告主需求', desc: '如：更多优质流量、更高 ROI、更低获客成本' },
+      { key: 'needs.channel', label: '渠道需求', desc: '如：稳定可结算的流量供给、更高填充' },
+      { key: 'needs.media', label: '媒体/流量主需求', desc: '如：更高 eCPM、更优变现效率' },
+    ],
+  },
+  {
+    key: 'appeal_highlights',
+    name: '吸引力亮点',
+    desc: '总结 2–3 条对目标客户最有吸引力的价值钩子（非功能罗列），用于素材标题与首屏主张。',
+  },
+  {
+    key: 'nine_elements',
+    name: '九要素结构化总结',
+    desc: '对落地页进行标准化九要素提炼，作为创意方向与卖点提炼的统一输入。',
+    subs: [
+      { key: 'industry', label: '行业', desc: '所属行业' },
+      { key: 'type', label: '类型', desc: '业务/产品类型' },
+      { key: 'category', label: '品类', desc: '细分类目' },
+      { key: 'needs', label: '满足需求', desc: '解决的用户/客户问题' },
+      { key: 'solution', label: '解决方案', desc: '产品如何解决问题' },
+      { key: 'business_model', label: '商业模式', desc: '如何变现/收费' },
+      { key: 'advantage_compare', label: '优势对比', desc: '相对通用方案/竞品的优势' },
+      { key: 'differentiation', label: '差异化特色', desc: '独有卖点' },
+      { key: 'purpose_summary', label: '目的总结', desc: '一段话总结落地页核心目的' },
+    ],
+  },
+  {
+    key: 'extensions',
+    name: '延伸输出 · 行业/竞品/需求与推荐',
+    desc: '在九要素之上延伸输出，供创意方向与媒体选择直接调用。',
+    subs: [
+      { key: 'industry_insight', label: '行业分析', desc: '行业趋势与机会' },
+      { key: 'competitors', label: '竞品分析', desc: '主要竞品与格局' },
+      { key: 'market_demand', label: '市场需求', desc: '值得切入的需求点' },
+      { key: 'diff_solution', label: '差异化方案', desc: '可放大的差异化打法' },
+      { key: 'edge_advantage', label: '特色优势', desc: '可对外传播的特色优势' },
+      { key: 'recommended_media', label: '推荐媒体', desc: '建议投放的媒体/平台' },
+      { key: 'recommended_audience', label: '推荐人群', desc: '建议触达的目标人群' },
+    ],
+  },
+]

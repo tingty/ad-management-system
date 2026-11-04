@@ -148,6 +148,7 @@ export function ReportView({ report, fw, onDownload }: {
   report: AnalysisReport; fw: Framework; onDownload: () => void
 }) {
   const r = report
+  const [expandedSec, setExpandedSec] = useState<Record<string, boolean>>({})
   const metricPills = r.proof.metrics
   return (
     <div className="report">
@@ -192,20 +193,39 @@ export function ReportView({ report, fw, onDownload }: {
       )}
 
       <div className="rep-grid">
-        {r.sections.map(sec => (
-          <section key={sec.key} className="rsec">
-            <h4>{sec.title}</h4>
-            {sec.summary && <p className="rsec-sum">{sec.summary}</p>}
-            {sec.rows?.map((row, i) => (
-              <div key={i} className="rrow">
-                <span className="rk">{row.label}</span>
-                <span className="rv">{row.value || '—'}</span>
-                {row.note && <span className="rn">{row.note}</span>}
+        {r.sections.map(sec => {
+          const collapsible = (sec.rows?.length ?? 0) >= 6
+          const open = expandedSec[sec.key] ?? !collapsible
+          return (
+            <section
+              key={sec.key}
+              className={'rsec' + (collapsible ? ' collapsible' : '') + (collapsible && !open ? ' collapsed' : '')}
+            >
+              <div className="rsec-head">
+                <h4>{sec.title}</h4>
+                {collapsible && (
+                  <button
+                    className="rsec-toggle"
+                    onClick={() => setExpandedSec(s => ({ ...s, [sec.key]: !open }))}
+                  >
+                    {open ? '收起 ▴' : `展开（${sec.rows?.length ?? 0} 项）▾`}
+                  </button>
+                )}
               </div>
-            ))}
-            {sec.items?.map((it, i) => <ReportItem key={i} it={it} />)}
-          </section>
-        ))}
+              {sec.summary && <p className="rsec-sum">{sec.summary}</p>}
+              <div className="rsec-body">
+                {sec.rows?.map((row, i) => (
+                  <div key={i} className="rrow">
+                    <span className="rk">{row.label}</span>
+                    <span className="rv">{row.value || '—'}</span>
+                    {row.note && <span className="rn">{row.note}</span>}
+                  </div>
+                ))}
+                {sec.items?.map((it, i) => <ReportItem key={i} it={it} />)}
+              </div>
+            </section>
+          )
+        })}
       </div>
 
       <div className="rep-bottom">
