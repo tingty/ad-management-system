@@ -747,6 +747,18 @@ select {
 .proto-openai { background: #e8f0fb; color: #2e75b6; }
 .proto-anthropic { background: #fdeede; color: #b9651f; }
 .proto-gemini { background: #e6f3ec; color: #1f8a5b; }
+.proto-openai-image { background: #efe7fb; color: #7a3fb0; }
+.proto-generic-image { background: #fbe7f1; color: #b03f86; }
+.proto-generic-video { background: #e7f3fb; color: #2e75b6; }
+
+.usage-tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.usage-tab {
+  flex: 1 1 auto; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: #fff; cursor: pointer; font-size: 13px; font-family: inherit; color: var(--text);
+  transition: .15s;
+}
+.usage-tab:hover { border-color: var(--primary); }
+.usage-tab.on { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
 
 .provider-line { display: flex; align-items: center; gap: 8px; padding: 8px 0; flex-wrap: wrap; }
 .provider-name { font-weight: 700; font-size: 14px; }

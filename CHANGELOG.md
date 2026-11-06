@@ -681,6 +681,31 @@
 - 配色：同方向同风格下 C13(霓虹绿)/C15(国风朱红)/C01(多彩渐变) 的 mean RGB 分别为 `[21.9,36.6,27.4]` / `[56.3,17.3,18.5]` / `[66.8,44.9,91.6]`，配色覆盖确实改变画面主色。
 - `py_compile` 三个改动模块通过。
 
+## V4.18 文生图大模型配置模块 + 文生图真正接入生成链
+
+**问题**
+- 排查发现 `providers.py` 早已定义 `OpenAIImage`（文生图），但 `services.py` 的素材生成流程**从未调用 `get_image()`**——所有图片都是 Pillow 模板（`render_creative`）渲染。这是"图片/视频背景内容都一样"的更深根因之一（另一根因"创意方向不驱动画面"已在 V4.16 修复）。
+- 现有"大模型配置"界面只有文本 LLM 目录（`LLM_PRESETS`），**文生图/文生视频没有专属模型目录**，用户无法像配文本模型那样选择文生图模型名称并填 Key/请求链接。
+
+**新增：文生图 / 文生视频模型配置模块（与现有大模型配置界面一致）**
+- `backend/llm_catalog.py`：新增 `IMAGE_PRESETS`（dalle3 / azure-dalle / 通义万相 wanx / 智谱 cogview / Stable Diffusion / Flux-Replicate / 即梦 / 自定义）与 `VIDEO_PRESETS`（runway / 可灵 keling / pika / 即梦视频 / 自定义），字段含 key/name/protocol/default_base_url/models/api_key_label/docs_url/setup_guide/notes；新增 `get_presets(usage)`、`image_protocol_of`/`video_protocol_of`、协议感知测试的 `openai-image`/`generic-image`/`generic-video` 分支（图像做最小出图验证，视频/异步厂商验证可达性与鉴权）。
+- `backend/schemas.py`：`ModelTestIn` 增加可选 `endpoint`（通用图像端点）。
+- `backend/routers.py`：`GET /settings/models/presets` 支持 `?usage=` 返回对应目录；`POST /settings/models/test` 透传 `endpoint`。
+- `frontend/src/api.ts`：`modelPresets(usage?)` 支持按用途拉取。
+- `frontend/src/pages/LLMSettings.tsx`：预设选择器**按用途切换目录**（文本/文生图/文生视频）；新增用途分段标签与文生图/视频专属说明横幅；图像/视频模型显示"自定义端点路径（可选）"输入；保存与测试携带 `endpoint`。
+- `frontend/src/styles.css`：新增 `.usage-tabs` / `.usage-tab` 及图像/视频协议徽标配色。
+
+**核心修复：文生图大模型接入生产链**
+- `backend/providers.py`：`OpenAIImage` 改为"只产出背景底图路径"；新增 `GenericImageProvider`（按 `params.endpoint` 兼容万相/CogView/SD/Replicate/即梦等）；`get_image(db)` 按目录协议选择 provider，**未配置时返回 `None`**（由 Pillow 模板兜底）。
+- `backend/render.py`：`render_creative` 支持 `data["bg_path"]`——AI 背景覆盖式贴底 + 上浅下深品牌色 scrim 保证文字可读，并跳过 Pillow 渐变背景；全部版式（评分卡/折扣角标/对比/手机框/场景/大字）在 AI 背景上正常合成。
+- `backend/services.py`：`produce_campaign` 取 `img_provider = get_image(db)`；图片与视频关键帧在配置文生图模型后，按创意方向/风格/配色合成文生图 prompt（`_build_image_prompt()`）调用模型生成背景并传入渲染；新增 `_cleanup_ai_bgs()` 清理中间背景图。
+
+**验证**
+- `py_compile`：llm_catalog / providers / services / routers / render / schemas 全部通过。
+- 冒烟：文生图目录 8 项、视频目录 5 项字段完整；`image_protocol_of("sd")="generic-image"`、`image_protocol_of("dalle3")="openai-image"`；`_build_image_prompt()` 正确拼接；`render_creative` 在 7 种版式下带 `bg_path` 均正常出图且与原图有差异。
+- `npm run build`：47 模块编译通过，0 错误。
+- 配套分析文档：`文生图与模型提示词归类分析.html`（文生图调用模块、模型类型归纳、提示词/大模型管理归类总表）。
+
 ## V4.17 创作工作台同样接入三大设置（与素材创作统一）
 
 **问题**

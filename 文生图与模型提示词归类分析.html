@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>素材管理平台 · 文生图 / 大模型 / 提示词归类分析</title>
+<style>
+  :root{
+    --bg:#f6f8fb; --card:#ffffff; --ink:#1f2733; --sub:#5b6675; --line:#e3e8f0;
+    --primary:#2e75b6; --primary-soft:#e8f0fb; --ok:#1f8a5b; --warn:#b9651f; --danger:#c0392b;
+    --chip:#f0f3f8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.6;font-size:15px}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+  header{background:linear-gradient(120deg,#2e75b6,#5a9bd8);color:#fff;border-radius:14px;padding:26px 28px;margin-bottom:22px}
+  header h1{margin:0 0 6px;font-size:24px;letter-spacing:.5px}
+  header p{margin:0;opacity:.92;font-size:14px}
+  .ver{display:inline-block;background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);border-radius:999px;padding:2px 12px;font-size:12px;margin-top:10px}
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:20px;box-shadow:0 1px 3px rgba(20,40,80,.04)}
+  h2{font-size:19px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+  h2 .n{background:var(--primary);color:#fff;width:28px;height:28px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;font-size:14px}
+  .lead{color:var(--sub);font-size:13.5px;margin:6px 0 16px}
+  h3{font-size:15.5px;margin:18px 0 8px;color:var(--ink)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0 6px;overflow:hidden}
+  th,td{border:1px solid var(--line);padding:9px 11px;vertical-align:top;text-align:left}
+  th{background:var(--primary-soft);color:#1f3a55;font-weight:700;white-space:nowrap}
+  tbody tr:nth-child(odd){background:#fafcff}
+  code{background:var(--chip);padding:1px 6px;border-radius:5px;font-size:12.5px;font-family:"SF Mono",Consolas,monospace}
+  .tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;margin:1px 2px}
+  .t-ok{background:#e6f3ec;color:var(--ok)}
+  .t-warn{background:#fdeede;color:var(--warn)}
+  .t-dot{background:#efe7fb;color:#7a3fb0}
+  .t-img{background:#fbe7f1;color:#b03f86}
+  .t-vid{background:#e7f3fb;color:#2e75b6}
+  .t-txt{background:#e8f0fb;color:#2e75b6}
+  .muted{color:var(--sub);font-size:12.5px}
+  .note{border-left:4px solid var(--primary);background:var(--primary-soft);padding:10px 14px;border-radius:8px;margin:12px 0;font-size:13.5px}
+  .note.warn{border-color:var(--warn);background:#fdf3e8}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  .kv{font-size:13px}
+  .kv b{color:var(--ink)}
+  footer{color:var(--sub);font-size:12.5px;text-align:center;margin-top:24px}
+  @media print{
+    body{background:#fff}
+    section,header{box-shadow:none;break-inside:avoid}
+    header{background:#2e75b6 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    th{background:#e8f0fb !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>素材管理平台 · 文生图 / 大模型 / 提示词归类分析</h1>
+  <p>统一梳理：① 需调用文生图大模型的功能模块及提示词　② 现有大模型类型按文案/图片/视频归纳　③ 提示词管理 + 大模型管理归类总表</p>
+  <span class="ver">版本 V4.18 · 单文件可分享 · 可打印</span>
+</header>
+
+<!-- ============ 1 ============ -->
+<section>
+  <h2><span class="n">1</span>需调用「文生图大模型」的功能模块及对应提示词</h2>
+  <p class="lead">结论：平台此前 <code>get_image()</code> 为死代码，所有素材图均为 Pillow 模板渲染（即"背景都一样"的根因之一）。V4.18 已将文生图大模型接入生产链路——配置后按创意方向/风格/配色自动产出 AI 背景底图，再叠加广告版式。</p>
+
+  <table>
+    <thead><tr><th>功能模块</th><th>是否调用文生图</th><th>对应提示词 / 配置</th><th>调用方式</th><th>当前状态</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>素材创作</b><br><span class="muted">MaterialCreation</span></td>
+        <td><span class="tag t-ok">是</span></td>
+        <td><code>SYS_IMAGE_DESIGN</code>(image) + 创意方向/风格/配色(<code>directives</code>)<br>运行时合成文生图 prompt：<code>_build_image_prompt()</code></td>
+        <td><code>get_image(db).generate()</code> → 背景图 → <code>render_creative(bg_path)</code> 叠加版式</td>
+        <td><span class="tag t-ok">已接入</span> 配置 image 模型后生效，未配置回退 Pillow</td>
+      </tr>
+      <tr>
+        <td><b>创作工作台</b><br><span class="muted">Workspace</span></td>
+        <td><span class="tag t-ok">是</span></td>
+        <td>同上（与素材创作共用 <code>produce_campaign</code>）</td>
+        <td>复用 <code>produce_campaign</code> 的 <code>img_provider</code></td>
+        <td><span class="tag t-ok">已接入</span></td>
+      </tr>
+      <tr>
+        <td><b>批量生成</b><br><span class="muted">Batch</span></td>
+        <td><span class="tag t-ok">是</span></td>
+        <td>同上</td>
+        <td>复用 <code>produce_campaign</code></td>
+        <td><span class="tag t-ok">已接入</span></td>
+      </tr>
+      <tr>
+        <td><b>视频关键帧</b><br><span class="muted">produce_campaign → _make_video</span></td>
+        <td><span class="tag t-ok">是</span></td>
+        <td><code>SYS_VIDEO</code>(video) + <code>SYS_IMAGE_DESIGN</code>(image)</td>
+        <td>每个方向×版位生成 1 张 AI 背景，4 镜复用（<code>design._shot</code> 轮换风格）</td>
+        <td><span class="tag t-ok">已接入</span></td>
+      </tr>
+      <tr>
+        <td><b>素材优化 / 重生成</b><br><span class="muted">optimize</span></td>
+        <td><span class="tag t-warn">部分</span></td>
+        <td><code>SYS_COPY</code>(copy) + 优化指令</td>
+        <td>文案/版式变体复用 <code>render_creative</code>；文生图背景暂未重生成</td>
+        <td><span class="tag t-warn">待增强</span> 建议优化时按新方向重生成 AI 背景</td>
+      </tr>
+      <tr>
+        <td><b>落地页分析 / 创意方向 / 文案</b></td>
+        <td><span class="tag t-txt">否（文本 LLM）</span></td>
+        <td><code>SYS_SITE_ANALYSIS</code> / <code>SYS_ANGLE</code> / <code>SYS_COPY</code></td>
+        <td><code>get_llm(db,"analysis"/"copy")</code></td>
+        <td><span class="tag t-ok">已运行</span> 仅文本模型，不产图</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note warn"><b>关键发现：</b>文生图大模型此前从未进入生成链路——<code>providers.py</code> 定义了 <code>OpenAIImage</code> 但 <code>services.py</code> 从未调用 <code>get_image()</code>。V4.18 以前，无论是否配置图像模型，图片都是 Pillow 模板。这正是你反馈"图片背景内容都一样"的深层原因之一（另一原因是创意方向 D 未驱动画面，已在 V4.16 修复）。</div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section>
+  <h2><span class="n">2</span>现有大模型类型归纳（按需求目的：文案 / 图片 / 视频）</h2>
+  <p class="lead">三个用途各对应一套提示词类型、输出结果与底层调用类型，互不复用，便于独立配置与调试。</p>
+
+  <h3><span class="tag t-txt">A. 文案生成（usage = copy / analysis）</span></h3>
+  <table>
+    <thead><tr><th>维度</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><b>提示词类型</b></td><td><code>SYS_SITE_ANALYSIS</code>（9 模块结构化分析）、<code>SYS_ANGLE</code>（8 创意方向）、<code>SYS_COPY</code>（标题/正文/CTA）</td></tr>
+      <tr><td><b>输出结果类型</b></td><td>结构化 JSON：<code>{angles:[...]}</code> / <code>{headlines,bodies,cta}</code> / <code>{positioning,value,proof,...}</code></td></tr>
+      <tr><td><b>大模型调用类型</b></td><td><code>get_llm(db,"analysis"|"copy")</code> → <code>OpenAICompatibleLLM</code> / <code>AnthropicLLM</code> / <code>GeminiLLM</code>（协议 openai/anthropic/gemini），失败回退 <code>MockLLM</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3><span class="tag t-img">B. 图片生成（usage = image，文生图）</span></h3>
+  <table>
+    <thead><tr><th>维度</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><b>提示词类型</b></td><td>设计层 <code>SYS_IMAGE_DESIGN</code>（背景风格/版式/字号/意图）+ 运行时合成的文生图 prompt（<code>_build_image_prompt()</code>：产品+创意角度+风格+配色，要求"无文字/无 logo"）；版式叠加由 Pillow 完成</td></tr>
+      <tr><td><b>输出结果类型</b></td><td>图像文件（PNG）。文生图模型产出<b>背景底图</b>，再由 <code>render_creative</code> 叠加广告版式（评分卡/折扣角标/对比/手机框/大字）输出最终素材图</td></tr>
+      <tr><td><b>大模型调用类型</b></td><td><code>get_image(db)</code> → <code>OpenAIImage</code>（协议 <code>openai-image</code>，DALL·E 等）或 <code>GenericImageProvider</code>（协议 <code>generic-image</code>，万相/CogView/SD/Replicate/即梦/自定义），未配置返回 <code>None</code> 回退 Pillow 模板</td></tr>
+    </tbody>
+  </table>
+
+  <h3><span class="tag t-vid">C. 视频生成（usage = video，文生视频）</span></h3>
+  <table>
+    <thead><tr><th>维度</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><b>提示词类型</b></td><td><code>SYS_VIDEO</code>（15s 4 镜分镜脚本：钩子/演示/证明/CTA，visual 仅写拍摄说明、text 写上屏字幕）</td></tr>
+      <tr><td><b>输出结果类型</b></td><td>① 未配视频模型：可执行<b>分镜脚本</b>（StoryboardVideo，含镜头/画面/字幕/口播/交付物）；② 配置后：真实<b>视频文件/URL</b>（mp4），关键帧由 <code>render_creative(bg_path)</code> 渲染</td></tr>
+      <tr><td><b>大模型调用类型</b></td><td><code>get_video(db)</code> → <code>ModelVideo</code>（协议 <code>generic-video</code>，POST <code>/video/generations</code>），失败回退 <code>StoryboardVideo</code> 分镜</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">三者解耦：改文案不影响图、改图不影响视频。调试时按 <code>usage</code> 维度分别查看「大模型管理」配置与「提示词管理」提示词即可定位问题。</div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section>
+  <h2><span class="n">3</span>提示词管理 + 大模型管理 · 归类总表</h2>
+  <p class="lead">两个核心模块的统一定位：<b>提示词管理</b>管"对模型说什么"，<b>大模型管理</b>管"用哪个模型、钥匙与地址"。下方按"使用场景 / 使用来源 / 大模型类型 / 输出结果类型"四列对齐，方便排查与维护。</p>
+
+  <h3>3.1 提示词管理（PromptConfig · 后端 <code>services.py</code> PROMPT_REGISTRY · 前端 Prompts.tsx）</h3>
+  <table>
+    <thead><tr><th>配置项 (key)</th><th>使用场景</th><th>使用来源（代码）</th><th>大模型类型</th><th>输出结果类型</th></tr></thead>
+    <tbody>
+      <tr><td><code>site_analysis</code><br>网站核心内容分析</td><td>落地页抓取后做 9 模块结构化分析，驱动创意方向排序与报告</td><td><code>services.analyze_site()</code> → <code>get_prompt("site_analysis")</code></td><td>文本 LLM（analysis）</td><td>9 模块 JSON（定位/价值/背书/人群/页面/渠道/风险/缺口/下一步）</td></tr>
+      <tr><td><code>angle</code><br>创意方向规划</td><td>基于产品事实生成 8 个创意方向（pain/benefit/proof…）</td><td><code>services.plan_angles()</code> → <code>get_prompt("angle")</code></td><td>文本 LLM（analysis）</td><td><code>{angles:[{key,name,insight,hook,visual,kpi}]}</code></td></tr>
+      <tr><td><code>copy</code><br>按方向生产文案</td><td>按创意方向+语言产出标题/正文/CTA</td><td><code>services._angle_copy()</code> → <code>get_prompt("copy")</code></td><td>文本 LLM（copy）</td><td><code>{headlines:[3],bodies:[2],cta}</code></td></tr>
+      <tr><td><code>video</code><br>视频分镜脚本</td><td>完整视频生成 / 视频素材重生成</td><td><code>services._make_video()</code> → <code>get_prompt("video")</code></td><td>文本 LLM（copy）</td><td><code>{hook,cta,shots:[4镜]}</code></td></tr>
+      <tr><td><code>image</code><br>素材视觉设计指导</td><td>图片渲染 / 视频关键帧的差异化视觉规范</td><td><code>services._design_spec()</code> → <code>get_prompt("image")</code></td><td>文本 LLM（copy）→ 结果驱动 Pillow 版式；文生图背景另走 image 模型</td><td><code>{styles:[],layout,tone,font_scale}</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.2 大模型管理（ModelConfig · 后端 <code>providers.py</code>/<code>llm_catalog.py</code> · 前端 LLMSettings.tsx）</h3>
+  <table>
+    <thead><tr><th>配置项 (usage)</th><th>使用场景</th><th>使用来源（代码）</th><th>大模型类型</th><th>输出结果类型</th></tr></thead>
+    <tbody>
+      <tr><td><code>analysis</code><br>文本·分析</td><td>落地页分析、创意方向规划</td><td><code>providers.get_llm(db,"analysis")</code></td><td>文本 LLM（OpenAI/DeepSeek/Qwen/Claude/Gemini…）</td><td>结构化分析 JSON</td></tr>
+      <tr><td><code>copy</code><br>文本·文案</td><td>文案、视频分镜、视觉设计指导</td><td><code>providers.get_llm(db,"copy")</code></td><td>文本 LLM（同目录）</td><td>文案 / 分镜 / 设计规范 JSON</td></tr>
+      <tr><td><code>image</code><br>文生图</td><td><b>素材图片 / 视频关键帧的 AI 背景</b></td><td><code>providers.get_image(db)</code></td><td>文生图（DALL·E3/万相/CogView/SD/Flux/即梦/自定义）</td><td>背景图 PNG → 叠加版式成素材</td></tr>
+      <tr><td><code>video</code><br>文生视频</td><td>真实视频成片（替代分镜脚本）</td><td><code>providers.get_video(db)</code></td><td>文生视频（Runway/可灵/Pika/即梦/自定义）</td><td>视频文件 / URL（mp4）</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.3 统一归类视图（两张表如何对应）</h3>
+  <div class="grid2">
+    <div class="note">
+      <b>提示词管理 = 说什么</b><br>
+      5 条系统提示词，全部存 <code>prompt_configs</code> 表；<br>
+      保存即生效、可停用/恢复默认；<br>
+      调用方经 <code>get_prompt(key)</code> 读取（DB 优先，否则内置默认）。<br>
+      调试某模块输出异常 → 先查对应 key 提示词。
+    </div>
+    <div class="note warn">
+      <b>大模型管理 = 用谁说</b><br>
+      4 类 <code>usage</code> 各只允许 1 个激活配置；<br>
+      存 <code>model_configs</code> 表（provider/key/url/model/params）；<br>
+      未配置 → 自动回退 Mock/Pillow/分镜，主流程不中断；<br>
+      调试某类不出结果 → 先查该 usage 是否配置且激活。
+    </div>
+  </div>
+
+  <h3>3.4 V4.18 新增：文生图 / 文生视频模型目录</h3>
+  <table>
+    <thead><tr><th>类别</th><th>预置模型（provider key）</th><th>协议</th><th>默认端点</th></tr></thead>
+    <tbody>
+      <tr><td>文生图</td><td>dalle3 · azure-dalle · wanx(通义万相) · cogview(智谱) · sd(SD/ComfyUI) · flux-replicate · jimeng-image · custom-image</td><td><code>openai-image</code> / <code>generic-image</code></td><td><code>/images/generations</code>（SD 为 <code>/sdapi/v1/txt2img</code>，可经参数 endpoint 自定义）</td></tr>
+      <tr><td>文生视频</td><td>runway · keling(可灵) · pika · jimeng-video · custom-video</td><td><code>generic-video</code></td><td><code>/video/generations</code></td></tr>
+    </tbody>
+  </table>
+  <p class="muted">配置入口：设置 → 大模型 → 选择用途（文生图/文生视频）→ 选择模型名称（自动带出默认请求链接与常见模型）→ 填 API Key 与请求链接 → 保存并测试。视频模型多为异步任务，测试仅验证可达性与鉴权。</p>
+</section>
+
+<footer>
+  本分析基于 ad-material-platform 代码（backend/services.py · providers.py · llm_catalog.py · models.py；frontend/LLMSettings.tsx · Prompts.tsx）于 V4.18 梳理。单文件 HTML，无外部依赖，可直接打印或分享。
+</footer>
+
+</div>
+</body>
+</html>

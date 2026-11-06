@@ -90,6 +90,7 @@ class ModelTestIn(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     protocol: Optional[str] = None
+    endpoint: Optional[str] = None
 
 class ModelConfigOut(BaseModel):
     id: int

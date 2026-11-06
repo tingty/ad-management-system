@@ -12,8 +12,16 @@ const PROTOCOL_LABEL: Record<string, string> = {
 }
 
 const empty = {
-  usage: 'analysis', provider: 'custom', api_key: '', base_url: '', model: '', is_active: true,
+  usage: 'analysis', provider: 'custom', api_key: '', base_url: '', model: '', is_active: true, endpoint: '',
 }
+
+// 用途与对应模型目录的映射：文本/图像/视频各自有独立预置目录
+const USAGE_TABS = [
+  { v: 'analysis', label: '文本·落地页分析' },
+  { v: 'copy', label: '文本·文案' },
+  { v: 'image', label: '文生图' },
+  { v: 'video', label: '文生视频' },
+]
 
 export default function LLMSettings() {
   const [list, setList] = useState<ModelConfig[]>([])
@@ -36,11 +44,20 @@ export default function LLMSettings() {
   }
   useEffect(() => { load() }, [])
 
+  // 按用途拉取对应模型目录（文本 / 文生图 / 文生视频）
+  const loadPresets = async (usage: string) => {
+    try { setPresets(await api.modelPresets(usage)) } catch (e: any) { setErr(e.message) }
+  }
+
   const preset = presets.find(p => p.key === form.provider)
+
+  const pickUsage = (u: string) => {
+    setForm({ ...form, usage: u }); loadPresets(u)
+  }
 
   const openAdd = () => {
     setEditingId(null); setForm({ ...empty }); setTestResult(null); setErr(''); setOk('')
-    setPickerOpen(true)
+    setPickerOpen(true); loadPresets(form.usage)
   }
   const choosePreset = (p: ModelPreset) => {
     setForm({
@@ -54,7 +71,9 @@ export default function LLMSettings() {
   }
   const edit = (m: ModelConfig) => {
     setEditingId(m.id); setPickerOpen(false); setTestResult(null)
-    setForm({ usage: m.usage, provider: m.provider, api_key: m.api_key || '', base_url: m.base_url || '', model: m.model || '', is_active: m.is_active })
+    setForm({ usage: m.usage, provider: m.provider, api_key: m.api_key || '', base_url: m.base_url || '',
+              model: m.model || '', is_active: m.is_active,
+              endpoint: (m.params && (m.params as any).endpoint) || '' })
   }
 
   const save = async (): Promise<ModelConfig | null> => {
@@ -64,8 +83,9 @@ export default function LLMSettings() {
       return null
     }
     try {
-      const payload = { usage: form.usage, provider: form.provider, api_key: form.api_key,
+      const payload: any = { usage: form.usage, provider: form.provider, api_key: form.api_key,
                         base_url: form.base_url, model: form.model, is_active: form.is_active }
+      if (form.endpoint?.trim()) payload.params = { endpoint: form.endpoint.trim() }
       const saved = editingId ? await api.updateModel(editingId, payload) : await api.createModel(payload)
       setEditingId(saved.id); await load()
       return saved
@@ -87,14 +107,16 @@ export default function LLMSettings() {
     const saved = await save()
     if (!saved) return
     setOk('已保存配置，正在发起第一次连通测试…')
-    await runTest({ provider: saved.provider, api_key: saved.api_key, base_url: saved.base_url, model: saved.model })
+    await runTest({ provider: saved.provider, api_key: saved.api_key, base_url: saved.base_url,
+                    model: saved.model, endpoint: form.endpoint })
   }
   // 便捷：仅测试当前填写（不落库）
   const testOnly = async () => {
     if (!form.api_key?.trim() || !form.model?.trim() || !form.base_url?.trim()) {
       setErr('请先填写 API Key、Base URL 与 Model。'); return
     }
-    await runTest({ provider: form.provider, api_key: form.api_key, base_url: form.base_url, model: form.model })
+    await runTest({ provider: form.provider, api_key: form.api_key, base_url: form.base_url,
+                    model: form.model, endpoint: form.endpoint })
   }
 
   const del = async (id: number) => {
@@ -116,8 +138,21 @@ export default function LLMSettings() {
 
         {pickerOpen && (
           <div className="model-picker">
-            <div className="muted" style={{ marginBottom: 8 }}>选择要接入的大模型（含默认地址与常见模型名，选中后自动带出字段）：</div>
-            <input className="filter-input" placeholder="搜索厂商 / 模型，如 openai、千问、claude、gemini…"
+            <div className="usage-tabs">
+              {USAGE_TABS.map(u => (
+                <button key={u.v} type="button"
+                        className={'usage-tab' + (form.usage === u.v ? ' on' : '')}
+                        onClick={() => pickUsage(u.v)}>{u.label}</button>
+              ))}
+            </div>
+            {form.usage === 'image' && (
+              <div className="guide">🖼️ 文生图大模型：先选择下方模型名称，会自动带出默认请求链接与常见模型；再填写 API Key 与请求链接（Base URL）即可。生成素材时将按创意方向 / 风格 / 配色自动产出背景底图。</div>
+            )}
+            {form.usage === 'video' && (
+              <div className="guide">🎬 文生视频大模型：选择模型名称后填写 API Key 与请求链接（Base URL）。注意多数视频模型为异步任务，测试仅验证可达性与鉴权。</div>
+            )}
+            <div className="muted" style={{ margin: '8px 0' }}>选择要接入的{form.usage === 'image' ? '文生图' : form.usage === 'video' ? '文生视频' : ''}大模型（含默认地址与常见模型名，选中后自动带出字段）：</div>
+            <input className="filter-input" placeholder="搜索厂商 / 模型，如 dall-e、万相、cogview、sd、flux、runway、可灵…"
                    value={search} onChange={e => setSearch(e.target.value)} autoFocus />
             <div className="preset-grid">
               {filtered.map(p => (
@@ -173,6 +208,16 @@ export default function LLMSettings() {
                    onChange={e => setForm({ ...form, base_url: e.target.value })}
                    disabled={!!preset && !preset.base_url_editable}
                    placeholder="https://.../v1" />
+
+            {(form.usage === 'image' || form.usage === 'video') && (
+              <div style={{ marginTop: 4 }}>
+                <label>自定义端点路径（可选，通用模型需要）</label>
+                <input type="text" value={form.endpoint}
+                       onChange={e => setForm({ ...form, endpoint: e.target.value })}
+                       placeholder="/images/generations 或 /sdapi/v1/txt2img" />
+                <div className="muted" style={{ fontSize: 12 }}>留空使用默认端点；Stable Diffusion 等需填 /sdapi/v1/txt2img。</div>
+              </div>
+            )}
 
             {preset?.setup_guide && <div className="guide">📋 {preset.setup_guide}</div>}
             {preset?.docs_url && <a className="doc-link" href={preset.docs_url} target="_blank" rel="noreferrer">查看官方配置文档 ↗</a>}

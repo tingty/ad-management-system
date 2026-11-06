@@ -527,7 +527,8 @@ export const api = {
     req<any>(`/api/campaigns/${cid}/comment`, { method: 'POST', body: JSON.stringify({ comment }) }),
   // 设置
   models: () => req<ModelConfig[]>('/api/settings/models'),
-  modelPresets: () => req<ModelPreset[]>('/api/settings/models/presets'),
+  modelPresets: (usage?: string) =>
+    req<ModelPreset[]>(`/api/settings/models/presets${usage ? `?usage=${encodeURIComponent(usage)}` : ''}`),
   creativePresets: () => req<CreativePresets>('/api/settings/creative-presets'),
   createModel: (m: Partial<ModelConfig>) =>
     req<ModelConfig>('/api/settings/models', { method: 'POST', body: JSON.stringify(m) }),

@@ -1040,6 +1040,32 @@ def render_creative(out_path, w, h, data: dict) -> str:
     if palette_override:
         pal = _apply_palette(pal, palette_override)
     c = Canvas(w, h, pal)
+
+    # 文生图背景：若调用方传入 AI 生成的底图，覆盖式贴底并叠加品牌色 scrim 保证文字可读，
+    # 后续版式（评分卡/折扣角标/对比/手机框/大字）照常在 AI 背景上合成。无背景则走 Pillow 渐变。
+    ai_bg = False
+    bgp = data.get("bg_path")
+    if bgp and os.path.exists(bgp):
+        try:
+            img = Image.open(bgp).convert("RGB")
+            iw, ih = img.size
+            scale = max(w / iw, h / ih)
+            nw, nh = int(iw * scale), int(ih * scale)
+            img = img.resize((nw, nh), Image.LANCZOS)
+            img = img.crop(((nw - w) // 2, (nh - h) // 2, (nw - w) // 2 + w, (nh - h) // 2 + h))
+            base = img.convert("RGBA")
+            # 上浅下深的暗色 scrim：顶部约 23% 黑，底部约 63% 黑，保证上下文字都可读
+            black = Image.new("RGBA", (w, h), (0, 0, 0, 255))
+            mask = Image.new("L", (w, h))
+            mp = mask.load()
+            for y in range(h):
+                a = int(60 + 120 * (y / max(1, h - 1)))
+                for x in range(w):
+                    mp[x, y] = a
+            c.img = Image.composite(black, base, mask).convert("RGB")
+            ai_bg = True
+        except Exception:
+            ai_bg = False
     # 差异化设计：styles[0] 用于图片；视频关键帧带 _shot 索引轮换 styles
     design = normalize_design(raw_design, data.get("angle_key") or "")
     shot_i = int(raw_design.get("_shot") or 0)
@@ -1053,7 +1079,7 @@ def render_creative(out_path, w, h, data: dict) -> str:
         c.pal = lpal
 
     if kind == "banner":
-        paint_background(c, dstyle, pal)
+        paint_background(c, dstyle, pal) if not ai_bg else None if not ai_bg else None
         draw_banner(c, headline, cta, brand)
         c.img.save(out_path, "PNG", optimize=True)
         return out_path
@@ -1070,7 +1096,7 @@ def render_creative(out_path, w, h, data: dict) -> str:
         lpal = make_palette(data.get("brand_color"), light=True)
         if palette_override:
             lpal = _apply_palette(lpal, palette_override)
-        paint_background(c, dstyle, lpal, light=True)
+        paint_background(c, dstyle, lpal, light=True) if not ai_bg else None
         _base_light_brand(c, brand)
         sx0, sy0, sx1, sy1 = subject
         card_h = min(sy1 - sy0, (sx1 - sx0) * 0.66)
@@ -1103,7 +1129,7 @@ def render_creative(out_path, w, h, data: dict) -> str:
         draw_text_block(c, text, headline, sub, cta, design)
 
     elif template == "promo":
-        paint_background(c, dstyle, pal)
+        paint_background(c, dstyle, pal) if not ai_bg else None
         if brand:
             c.brand_mark(c.m, c.m, max(14, int(c.s * 0.052)), brand)
         sx0, sy0, sx1, sy1 = subject
@@ -1123,7 +1149,7 @@ def render_creative(out_path, w, h, data: dict) -> str:
         draw_text_block(c, text, headline, sub, cta, design)
 
     elif template == "ugc":
-        paint_background(c, dstyle, pal)
+        paint_background(c, dstyle, pal) if not ai_bg else None
         if brand:
             c.brand_mark(c.m, c.m, max(14, int(c.s * 0.052)), brand)
         sx0, sy0, sx1, sy1 = subject
@@ -1138,7 +1164,7 @@ def render_creative(out_path, w, h, data: dict) -> str:
         draw_text_block(c, text, headline, sub, cta, design)
 
     elif template == "compare":
-        paint_background(c, dstyle, pal)
+        paint_background(c, dstyle, pal) if not ai_bg else None
         if brand:
             c.brand_mark(c.m, c.m, max(14, int(c.s * 0.052)), brand)
         sx0, sy0, sx1, sy1 = subject
@@ -1168,7 +1194,7 @@ def render_creative(out_path, w, h, data: dict) -> str:
         draw_text_block(c, text, headline, sub, cta, design)
 
     elif template == "stat":
-        paint_background(c, dstyle, pal)
+        paint_background(c, dstyle, pal) if not ai_bg else None
         if brand:
             c.brand_mark(c.m, c.m, max(14, int(c.s * 0.052)), brand)
         sx0, sy0, sx1, sy1 = subject
@@ -1193,7 +1219,7 @@ def render_creative(out_path, w, h, data: dict) -> str:
     elif template == "scenario":
         # 场景代入：上方圆角「场景面板」营造真实使用场景，下方文字区自然带出价值，
         # 弱化广告感。无真实场景图时用合成手机界面占位，避免空壳。
-        paint_background(c, dstyle, pal)
+        paint_background(c, dstyle, pal) if not ai_bg else None
         if brand:
             c.brand_mark(c.m, c.m, max(14, int(c.s * 0.052)), brand)
         sx0, sy0, sx1, sy1 = subject
@@ -1213,7 +1239,7 @@ def render_creative(out_path, w, h, data: dict) -> str:
         draw_text_block(c, text, headline, sub, cta, design)
 
     else:  # bigtype
-        paint_background(c, dstyle, pal)
+        paint_background(c, dstyle, pal) if not ai_bg else None
         # 强调斜带：深底专属装饰，浅底/分割/波浪底上叠它只会糊成一块
         if not light_bg and dstyle not in ("split", "wave", "light_panel"):
             c.d.polygon([(c.w * 0.62, c.h), (c.w, c.h * 0.72), (c.w, c.h)],

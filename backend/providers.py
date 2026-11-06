@@ -471,11 +471,10 @@ class FallbackLLM(LLMProvider):
             return await self.fallback.chat(system, user, **kw)
 
 class OpenAIImage(ImageProvider):
-    """AI 底图 + 文案合成。
+    """文生图（DALL·E 兼容）：POST /images/generations，解码 b64 底图保存到 path。
 
-    images/generations 仅支持有限尺寸（1024x1024 / 1792x1024 / 1024x1792），
-    因此按目标比例请求最接近的尺寸，再由 Pillow 裁剪到目标尺寸并叠加文案。
-    任一步失败都回退到纯模板合成，保证一定有可交付图片。
+    只负责"生成背景底图"，文案/版式叠加交给 render_creative 统一合成，
+    这样文生图背景能与广告版式（评分卡/折扣角标/对比等）完美贴合。失败返回 None。
     """
     def __init__(self, api_key, base_url, model, params=None):
         self.api_key = api_key
@@ -493,9 +492,6 @@ class OpenAIImage(ImageProvider):
         return "1024x1024"
 
     async def generate(self, prompt, width, height, filename, copy=None):
-        from imaging import render_ad_png
-        cp = copy or {}
-        bg_path = None
         try:
             async with httpx.AsyncClient(timeout=120) as c:
                 r = await c.post(
@@ -506,25 +502,74 @@ class OpenAIImage(ImageProvider):
                 )
                 r.raise_for_status()
                 b64 = (r.json().get("data") or [{}])[0].get("b64_json")
-                if b64:
-                    bg_path = os.path.join(UPLOAD_DIR, "_bg_" + filename.rsplit(".", 1)[0] + ".png")
-                    with open(bg_path, "wb") as f:
-                        f.write(base64.b64decode(b64))
+                if not b64:
+                    return None
+                path = os.path.join(UPLOAD_DIR, filename)
+                with open(path, "wb") as f:
+                    f.write(base64.b64decode(b64))
+                return path
         except Exception:
-            bg_path = None   # 回退纯模板
+            return None
 
-        path = os.path.join(UPLOAD_DIR, filename)
-        await asyncio.to_thread(
-            render_ad_png, path, width, height,
-            cp.get("headline") or prompt, cp.get("sub") or "", cp.get("cta") or "",
-            cp.get("brand") or "", bg_path,
-        )
+
+class GenericImageProvider(ImageProvider):
+    """通用文生图：POST {base_url}{endpoint|/images/generations}，兼容多数厂商。
+
+    endpoint 默认 /images/generations；Stable Diffusion 等可经 params.endpoint 指定
+    （如 /sdapi/v1/txt2img）。返回解码后的背景底图路径；失败返回 None。
+    """
+    def __init__(self, api_key, base_url, model, params=None):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.params = params or {}
+
+    @staticmethod
+    def _decode(resp) -> Optional[bytes]:
+        """从多种响应形态里抽取图像字节。"""
+        if not isinstance(resp, dict):
+            return None
+        item = (resp.get("data") or [{}])[0] if isinstance(resp.get("data"), list) else {}
+        if isinstance(item, dict) and item.get("b64_json"):
+            try: return base64.b64decode(item["b64_json"])
+            except Exception: pass
+        if isinstance(item, dict) and item.get("url"):
+            try: return httpx.get(item["url"], timeout=30).content
+            except Exception: pass
+        if isinstance(resp.get("images"), list) and resp["images"]:
+            try: return base64.b64decode(resp["images"][0])
+            except Exception: pass
+        for k in ("output", "image", "images_b64"):
+            v = resp.get(k)
+            if isinstance(v, str):
+                try: return base64.b64decode(v)
+                except Exception: pass
+        return None
+
+    async def generate(self, prompt, width, height, filename, copy=None):
+        endpoint = (self.params.get("endpoint") or "/images/generations").strip()
+        url = self.base_url + endpoint
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        if "sdapi" in endpoint:
+            body = {"prompt": prompt, "width": width, "height": height, "batch_size": 1, "n_iter": 1}
+        else:
+            body = {"model": self.model, "prompt": prompt, "size": f"{width}x{height}",
+                    "n": 1, "response_format": "b64_json"}
         try:
-            if bg_path and os.path.exists(bg_path):
-                os.remove(bg_path)   # 中间底图不落库，避免 uploads 膨胀
+            async with httpx.AsyncClient(timeout=120) as c:
+                r = await c.post(url, headers=headers, json=body)
+                r.raise_for_status()
+                raw = self._decode(r.json())
+                if not raw:
+                    return None
+                path = os.path.join(UPLOAD_DIR, filename)
+                with open(path, "wb") as f:
+                    f.write(raw)
+                return path
         except Exception:
-            pass
-        return path
+            return None
 
 
 # ----------------------------- 工厂（按用途返回激活 provider） -----------------------------
@@ -552,14 +597,19 @@ def get_llm(db, usage="analysis") -> LLMProvider:
             pass
     return MockLLM()
 
-def get_image(db) -> ImageProvider:
+def get_image(db) -> Optional[ImageProvider]:
+    """返回激活的文生图 Provider；未配置 Key/URL/Model 时返回 None（由 Pillow 模板兜底）。"""
     cfg = _active_config(db, "image")
     if cfg and cfg.api_key and cfg.base_url and cfg.model:
         try:
-            return OpenAIImage(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
+            from llm_catalog import image_protocol_of
+            proto = image_protocol_of(cfg.provider)
+            if proto == "openai-image":
+                return OpenAIImage(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
+            return GenericImageProvider(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
         except Exception:
             pass
-    return TemplateImage()
+    return None
 
 def get_video(db) -> VideoProvider:
     cfg = _active_config(db, "video")

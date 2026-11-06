@@ -616,8 +616,13 @@ def delete_model(mid: int, db: Session = Depends(get_db),
     return {"ok": True}
 
 @router.get("/settings/models/presets")
-def list_model_presets():
-    """返回全球主流大模型配置目录（不含任何密钥），供前端「添加大模型」时选择并自动带出字段。"""
+def list_model_presets(usage: str = ""):
+    """返回模型配置目录（不含任何密钥），按 usage 区分文本/图像/视频，供前端「添加大模型」选择。
+
+    usage 缺省或 analysis/copy → 文本 LLM 目录；image → 文生图目录；video → 文生视频目录。
+    """
+    from llm_catalog import get_presets
+    presets = get_presets(usage or "")
     return [
         {
             "key": p["key"],
@@ -633,13 +638,13 @@ def list_model_presets():
             "setup_guide": p["setup_guide"],
             "notes": p["notes"],
         }
-        for p in LLM_PRESETS
+        for p in presets
     ]
 
 
 @router.post("/settings/models/test")
 async def test_model(req: ModelTestIn):
-    """协议感知连通测试：按 provider 查目录决定协议（OpenAI / Anthropic / Gemini），
+    """协议感知连通测试：按 provider 查目录决定协议（OpenAI / Anthropic / Gemini / 文生图 / 文生视频），
     发起一次最小真实调用，返回 ok/延迟/回包，或结构化错误（error_type/message/hint_url）。"""
     result = await test_llm_connection({
         "provider": req.provider,
@@ -647,6 +652,7 @@ async def test_model(req: ModelTestIn):
         "base_url": req.base_url,
         "model": req.model,
         "protocol": req.protocol,
+        "endpoint": req.endpoint,
     })
     return result
 

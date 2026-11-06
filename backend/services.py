@@ -250,6 +250,39 @@ def _size_wh(size: str):
         return 1080, 1080
 
 
+def _build_image_prompt(fw, key: str, design: dict, directives: dict, lang: str) -> str:
+    """把创意方向 / 风格 / 配色 / 角度，拼成一句文生图提示词（背景层，不含文字）。"""
+    design = design or {}
+    styles = ", ".join(design.get("styles") or []) or "modern advertising"
+    tone = (design.get("tone") or "").strip()
+    color_hint = ""
+    if directives:
+        color_hint = " ".join(filter(None, [
+            directives.get("color_text") or "", directives.get("style_text") or ""])).strip()
+    angle_name = ANGLE_MAP.get(key, {}).get("name", key)
+    return (
+        f"High-quality advertising background visual for the product '{fw.product}', "
+        f"creative angle: {angle_name}. Visual style: {styles}. "
+        f"Mood and design intent: {tone}. {color_hint} "
+        f"No text, no logo, no letters, no watermark, no UI. Clean composition with negative space, "
+        f"suitable as a backdrop for overlaid advertising copy. "
+        f"Photorealistic or illustrative consistent with the stated style."
+    )
+
+
+def _cleanup_ai_bgs():
+    """删除生成过程中产生的中间 AI 背景图（已合成进最终素材，无需留存）。"""
+    try:
+        import glob
+        for f in glob.glob(os.path.join(UPLOAD_DIR, "_aibg_*.png")):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def variant_label(version: int) -> str:
     return chr(64 + version) if 1 <= version <= 26 else f"V{version}"
 
@@ -754,6 +787,9 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
     extra = extra_full  # 后续文案生成、prompt_log、视频调用统一使用增强后的提示词
     video_ctx = directives.get("video_prompt") or extra
 
+    # 文生图大模型：未配置（无 Key/URL/Model）时返回 None，下方出图走 Pillow 模板兜底。
+    img_provider = get_image(db)
+
     # 设计规范：每个创意方向一份（LLM 生成，失败回退内置差异预设），图片与视频关键帧共用
     # 用户所选「内容风格 / 配色」覆盖（styles 背景键 + palette 调色板）优先生效，
     # 大模型只负责在其基础上补全 tone / layout 等未指定项。
@@ -813,6 +849,14 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
             data = _render_spec(fw, key, fields, lang,
                                 template_override or ANGLE_MAP[key]["template"],
                                 design=design_map.get(key))
+            # 文生图大模型：配置了图像模型时，按创意方向与风格生成 AI 背景，再交 Pillow 叠加版式
+            if img_provider:
+                bg_prompt = _build_image_prompt(fw, key, design_map.get(key), directives, lang)
+                bw, bh = _size_wh(all_sizes[0]) if all_sizes else (1080, 1080)
+                bgp = await img_provider.generate(
+                    bg_prompt, bw, bh, f"_aibg_{campaign.id}_{platform}_{key}_{lang}.png")
+                if bgp:
+                    data["bg_path"] = bgp
             for size in all_sizes[:max_sizes]:
                 w, h = _size_wh(size)
                 fn = f"{campaign.id}_{platform}_{key}_{lang}_{w}x{h}_v1.png"
@@ -857,6 +901,13 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
                 data = _render_spec(fw, key, fields, lang,
                                     template_override or ANGLE_MAP[key]["template"],
                                     design=design_map.get(key))
+                # 文生图大模型：为关键帧生成一张 AI 背景（4 镜复用，靠 design._shot 轮换风格制造差异）
+                if img_provider:
+                    bg_prompt = _build_image_prompt(fw, key, design_map.get(key), directives, lang)
+                    bgp = await img_provider.generate(
+                        bg_prompt, vw, vh, f"_aibg_v_{campaign.id}_{platform}_{key}.png")
+                    if bgp:
+                        data["bg_path"] = bgp
                 vtasks.append(_make_video(db, campaign, fw, key, platform, lang, data, vw, vh, extra,
                                           full_video=full_video, video_ctx=video_ctx))
         for v in await asyncio.gather(*vtasks, return_exceptions=True):
@@ -873,6 +924,7 @@ async def produce_campaign(db, fw, campaign, angle_keys, platforms, types, langs
     flag_duplicates(copy_index)
     _apply_dup_warnings(mats, copy_index)
     db.commit()
+    _cleanup_ai_bgs()  # 清理中间 AI 背景图（已合成进最终素材）
     return mats
 
 
