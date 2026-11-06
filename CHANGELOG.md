@@ -880,6 +880,8 @@
 
 ## V4.29 推广图中文乱码（tofu 方块）根治
 
+**发布日期**：2026-11-06
+
 **需求**
 - 生成的推广图片中，中文文案被渲染成一排排空方块（豆腐块/tofu），英文（Apple / Genius Bar / Trade In）正常。要求排查主因、给出修复方案，并避免今后再次出现此类乱码文案。
 
@@ -982,3 +984,30 @@
 - 单元：目录完整性（18 项、协议映射正确）；错误分类 401/404/429/ConnectError 均产出正确 `error_type` 与文档标签。
 - HTTP E2E（token 鉴权后）：`/presets` 返回 18 项；`/test` 坏 Base URL → `network`+中文引导+文档链接；缺字段 → `bad_request`；`POST /settings/models` 创建成功。
 - `npm run build` 前端 44 模块通过。
+
+## V4.30 系统设置新增「新版通知」：版本发布公告
+
+**发布日期**：2026-11-06
+
+**需求**
+- 每次有新版本发布时，在系统内展示版本更新的内容；更新通知入口放在系统设置菜单栏，新增「新版通知」一项。
+- 每次发版时整理更新内容，并同步到 git。
+
+**根因**
+- 此前版本更新内容只沉淀在仓库 `CHANGELOG.md`，用户无法在系统里直接看到，需要主动去翻文档，发版信息触达不到使用方。
+
+**交付**
+- 后端 `release_notes.py`：解析 `CHANGELOG.md` 的 `## Vx.y 标题` 段落为结构化数组（含版本号、标题、发布日期、正文），按版本号降序返回最新在前；带 mtime 缓存，文件变更自动刷新。
+- 后端 `routers.py` 新增 `GET /api/system/release-notes`（任意已登录角色可访问），单一数据源即 `CHANGELOG.md`，无需额外维护一份公告数据。
+- 前端 `App.tsx`：在「系统设置」分组下新增「新版通知」导航项（bell 图标）；并以红点 badge 提示存在未读新版本（基于 localStorage 记录上次已读版本号）。
+- 前端 `pages/ReleaseNotes.tsx`：版本发布列表页，最新版本置顶并标注「新」；正文用轻量 Markdown 渲染（标题/加粗/列表/分段），纯前端实现无额外依赖。
+- 发版工作流固化：今后每次发版，只需在 `CHANGELOG.md` 追加一条 `## Vx.y 标题` 段落（可含 `**发布日期**：YYYY-MM-DD`），「新版通知」即自动展示，并提交推送 git 即完成同步。
+
+**验证**
+- `python3 release_notes.py` 解析正确，`latest=V4.30`，按版本号降序、最新在前。
+- `GET /api/system/release-notes` 返回 `{latest, notes[]}`，`notes[0].version == V4.30`。
+- 前端「系统设置 → 新版通知」可打开列表，最新版本带「新」标记；存在未读版本时菜单项显示红点，点击查看后红点消失。
+- `backend/imaging.py`、`backend/routers.py` `py_compile` 通过；前端 `tsc`/`build` 通过。
+
+**线上运维配合**
+- 无。公告内容完全来自 `CHANGELOG.md`，发版即更新、提交即同步，无需额外配置。

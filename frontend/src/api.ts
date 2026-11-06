@@ -66,6 +66,13 @@ export interface Angle {
   sort: number
 }
 
+export interface ReleaseNote {
+  version: string
+  title: string
+  date: string | null
+  body: string
+}
+
 export interface CopyFieldSpec {
   key: string
   label: string
@@ -565,6 +572,8 @@ export const api = {
     logo?: string
   }) =>
     req<MediaImageResult>('/api/media-campaign/images', { method: 'POST', body: JSON.stringify(payload) }),
+  // 版本发布公告（新版通知）
+  releaseNotes: () => req<{ latest: string | null; notes: ReleaseNote[] }>('/api/system/release-notes'),
   planAngles: (framework_id: number, platforms: string[], extra_prompt?: string, lang?: string) =>
     req<Angle[]>('/api/angles/plan', {
       method: 'POST', body: JSON.stringify({ framework_id, platforms, extra_prompt, lang }),

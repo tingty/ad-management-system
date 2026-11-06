@@ -291,6 +291,16 @@ def creative_presets():
     return creative_presets_payload()
 
 
+# ---------------------------------------------------------------------------
+# 版本发布公告（新版通知）：单一数据源为仓库根目录 CHANGELOG.md
+# ---------------------------------------------------------------------------
+@router.get("/system/release-notes")
+def release_notes(_: User = Depends(require_roles(*ROLES))):
+    """返回版本发布更新内容，供前端「新版通知」展示。"""
+    from release_notes import get_release_notes
+    return get_release_notes()
+
+
 @router.post("/estimate")
 def estimate(req: EstimateRequest, db: Session = Depends(get_db)):
     """预估产出量（不落库、不渲染），用于前端在生成前提示规模。"""

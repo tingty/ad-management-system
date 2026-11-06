@@ -98,6 +98,12 @@ body {
   transition: background .12s, color .12s;
 }
 .sb-item svg { flex: 0 0 auto; }
+.sb-dot {
+  position: absolute; top: 7px; right: 9px; width: 8px; height: 8px;
+  border-radius: 50%; background: #ff4d4f;
+  box-shadow: 0 0 0 2px rgba(255, 77, 79, .25);
+}
+.sidebar.collapsed .sb-dot { right: 12px; }
 .sb-item:hover { background: rgba(255,255,255,.07); color: #fff; }
 .sb-item.active {
   background: #1c5286; color: #fff; font-weight: 600;
@@ -1087,3 +1093,28 @@ select {
   background: #f7faff; }
 .logo-upload-btn:hover { background: #eef4ff; }
 
+
+/* ---------------- 新版通知 / 版本发布 ---------------- */
+.rn-page { max-width: 940px; }
+.rn-card { margin-bottom: 18px; }
+.rn-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 12px;
+}
+.rn-head-main { display: flex; align-items: baseline; gap: 10px; }
+.rn-ver { font-weight: 700; color: var(--primary); font-size: 15px; }
+.rn-title { font-size: 15px; color: var(--text); }
+.rn-head-meta { display: flex; align-items: center; gap: 8px; }
+.rn-date { color: var(--muted); font-size: 12.5px; }
+.rn-tag-new {
+  background: #ff4d4f; color: #fff; font-size: 11px; font-weight: 600;
+  padding: 1px 8px; border-radius: 10px; letter-spacing: .5px;
+}
+.rn-body { color: var(--text); font-size: 13.5px; line-height: 1.7; }
+.rn-body p { margin: 8px 0; }
+.rn-body .rn-section {
+  margin-top: 14px; font-weight: 700; color: var(--primary); font-size: 13.5px;
+}
+.rn-list { margin: 6px 0; padding-left: 20px; }
+.rn-list li { margin: 3px 0; }

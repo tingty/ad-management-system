@@ -12,15 +12,16 @@ import Accounts from './pages/Accounts'
 import Logs from './pages/Logs'
 import Prompts from './pages/Prompts'
 import Specs from './pages/Specs'
+import ReleaseNotes from './pages/ReleaseNotes'
 
 type Tab = 'workspace' | 'batch' | 'creation' | 'matprompts' | 'library' | 'specs'
-  | 'llm' | 'accounts' | 'logs' | 'prompts'
+  | 'llm' | 'accounts' | 'logs' | 'prompts' | 'releasenotes'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['workspace', 'batch', 'creation', 'matprompts', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts']
+const TABS: Tab[] = ['workspace', 'batch', 'creation', 'matprompts', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts', 'releasenotes']
 const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
@@ -66,6 +67,8 @@ const GROUP_SYSTEM: NavGroup = {
       desc: '审计日志：登录、配置变更、账号操作、提示词修改等关键动作可追溯' },
     { key: 'prompts', label: '提示词管理', icon: 'code',
       desc: '统一查阅与编辑各功能模块的大模型提示词，保存即生效，支持恢复默认' },
+    { key: 'releasenotes', label: '新版通知', icon: 'bell',
+      desc: '每次版本发布的更新内容汇总，发版即更新；存在未读新版本时菜单项显示红点提示' },
   ],
 }
 
@@ -107,6 +110,7 @@ const PATHS: Record<string, ReactNode> = {
   wand: <><path d="M5.5 18.5 14 10" /><path d="M15 4l1 2 2 1-2 1-1 2-1-2-2-1 2-1z" /></>,
   broadcast: <><circle cx="12" cy="12" r="2.2" /><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2" /></>,
   tags: <><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0l-7.2-7.2A2 2 0 0 1 3 11.8V5a2 2 0 0 1 2-2h6.8a2 2 0 0 1 1.4.6l7.4 7.4a2 2 0 0 1 0 2.8z" /><circle cx="7.5" cy="7.5" r="1.5" /></>,
+  bell: <><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>,
 }
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -148,6 +152,9 @@ export default function App() {
   const [meta, setMeta] = useState<Meta | null>(null)
   const [collapsed, setCollapsed] = useState<boolean>(readCollapsed)
   const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ material: true, creation: true, system: true })
+  // 版本发布「新版通知」红点：记录最新版本号 + 已读事件触发重算
+  const [releaseLatest, setReleaseLatest] = useState<string | null>(null)
+  const [seenTick, setSeenTick] = useState(0)
 
   useEffect(() => {
     const onUnauthorized = () => setUser(null)
@@ -163,6 +170,19 @@ export default function App() {
   useEffect(() => {
     if (user) api.meta().then(setMeta).catch(() => {})
   }, [user])
+
+  // 拉取最新版本号，用于「新版通知」红点提示
+  useEffect(() => {
+    if (!user) return
+    api.releaseNotes().then((d) => setReleaseLatest(d.latest)).catch(() => {})
+  }, [user])
+
+  // ReleaseNotes 页打开即视为已读，触发红点重算
+  useEffect(() => {
+    const onSeen = () => setSeenTick((t) => t + 1)
+    window.addEventListener('admb:releaseSeen', onSeen)
+    return () => window.removeEventListener('admb:releaseSeen', onSeen)
+  }, [])
 
   useEffect(() => {
     const onHash = () => { const t = tabFromHash(); if (t) setTab(t) }
@@ -229,6 +249,9 @@ export default function App() {
   const shownName = user.display_name || user.username
   const roleText = ROLE_LABEL[user.role] !== shownName ? (ROLE_LABEL[user.role] || '') : ''
 
+  const lastSeen = localStorage.getItem('admb_lastRelease')
+  const hasNewRelease = !!releaseLatest && releaseLatest !== lastSeen
+
   const renderItem = (it: NavItem) => (
     <button
       key={it.key}
@@ -238,6 +261,9 @@ export default function App() {
     >
       <Icon name={it.icon} size={18} />
       {!collapsed && <span className="sb-label">{it.label}</span>}
+      {it.key === 'releasenotes' && hasNewRelease && (
+        <span className="sb-dot" title="有未读的新版本" />
+      )}
     </button>
   )
 
@@ -336,6 +362,7 @@ export default function App() {
           {tab === 'accounts' && isAdmin && <Accounts />}
           {tab === 'logs' && isAdmin && <Logs />}
           {tab === 'prompts' && isAdmin && <Prompts />}
+          {tab === 'releasenotes' && isAdmin && <ReleaseNotes />}
         </div>
       </main>
     </div>
