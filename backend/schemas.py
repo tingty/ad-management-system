@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from typing import Optional, List, Any
 
 class AnalyzeRequest(BaseModel):
@@ -75,7 +75,8 @@ class CampaignOut(BaseModel):
         from_attributes = True
 
 class ModelConfigIn(BaseModel):
-    usage: str
+    name: Optional[str] = None
+    usage: Any = "analysis"          # 单用途字符串，或多用途数组
     provider: str
     api_key: Optional[str] = None
     base_url: Optional[str] = None
@@ -94,7 +95,9 @@ class ModelTestIn(BaseModel):
 
 class ModelConfigOut(BaseModel):
     id: int
-    usage: str
+    name: Optional[str] = None
+    usage: Optional[str] = None        # 主用途（兼容旧数据）
+    usages: List[str] = []             # 多用途数组
     provider: str
     api_key: Optional[str] = None
     base_url: Optional[str] = None
@@ -103,6 +106,15 @@ class ModelConfigOut(BaseModel):
     is_active: bool = True
     class Config:
         from_attributes = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_usages(cls, data):
+        # 兼容未迁移的旧数据：usages 为 NULL 时由 usage(单字符串) 推导。
+        if isinstance(data, dict) and data.get("usages") is None:
+            u = data.get("usage")
+            data = {**data, "usages": [u] if u else []}
+        return data
 
 
 class PromptOut(BaseModel):

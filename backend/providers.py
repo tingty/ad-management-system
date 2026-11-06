@@ -626,10 +626,25 @@ class DashScopeMaaSImageProvider(ImageProvider):
 
 
 # ----------------------------- 工厂（按用途返回激活 provider） -----------------------------
+def _usages_of(cfg) -> list:
+    """兼容新旧两种存储：新配置存 usages(JSON 数组)，旧配置存 usage(单字符串)。"""
+    u = cfg.usages if cfg.usages is not None else cfg.usage
+    if isinstance(u, list):
+        return [str(x) for x in u if x]
+    if u:
+        return [str(u)]
+    return []
+
 def _active_config(db, usage):
     # 延迟导入避免循环依赖
     from models import ModelConfig
-    return db.query(ModelConfig).filter_by(usage=usage, is_active=True).first()
+    # 同用途仅一个激活：遍历激活配置，取「usages 包含该用途且 id 最大（最近创建）」者，
+    # 这样多用途配置与单用途配置并存时，较新的配置按其用途接管，旧配置仍服务其它用途。
+    best = None
+    for c in db.query(ModelConfig).filter_by(is_active=True).all():
+        if usage in _usages_of(c) and (best is None or c.id > best.id):
+            best = c
+    return best
 
 def get_llm(db, usage="analysis") -> LLMProvider:
     cfg = _active_config(db, usage)

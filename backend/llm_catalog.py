@@ -258,6 +258,36 @@ def protocol_of(provider: str) -> str:
     return p["protocol"] if p else "openai"
 
 
+def modality_of(protocol: str) -> str:
+    """协议 → 模态分类，供前端按模态决定可选的「用途」范围。"""
+    if protocol in ("openai-image", "generic-image", "dashscope-maas-image"):
+        return "image"
+    if protocol == "generic-video":
+        return "video"
+    return "text"
+
+
+def get_all_presets() -> list:
+    """全部预设（文本 + 文生图 + 文生视频），供前端「大模型」下拉一次性拉取。"""
+    return LLM_PRESETS + IMAGE_PRESETS + VIDEO_PRESETS
+
+
+# 不同协议默认需要的「厂商专属附加字段」；预设本身也可通过 extra_fields 覆盖。
+# 这里统一在后端 preset 接口输出时附加，避免每个预设重复声明。
+_PROTOCOL_EXTRA = {
+    "generic-image": [{
+        "key": "endpoint", "label": "自定义端点路径（可选）",
+        "placeholder": "/images/generations 或 /sdapi/v1/txt2img",
+        "hint": "留空使用默认端点；Stable Diffusion 等需填 /sdapi/v1/txt2img。",
+    }],
+    "generic-video": [{
+        "key": "endpoint", "label": "自定义端点路径（可选）",
+        "placeholder": "/video/generations",
+        "hint": "留空使用默认端点 /video/generations。",
+    }],
+}
+
+
 # ---------------------------------------------------------------------------
 # 文生图（Text-to-Image）模型目录
 # ---------------------------------------------------------------------------

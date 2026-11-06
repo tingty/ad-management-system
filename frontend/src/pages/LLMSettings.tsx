@@ -1,91 +1,140 @@
 import { useEffect, useState } from 'react'
 import { api, ModelConfig, ModelPreset, ModelTestResult } from '../api'
 
-const USAGES = [
-  { v: 'analysis', label: '落地页分析 / 框架' },
-  { v: 'copy', label: '文案 / 关键词' },
-  { v: 'image', label: '推广图片' },
-  { v: 'video', label: '推广视频' },
-]
+const USAGE_LABEL: Record<string, string> = {
+  analysis: '落地页分析 / 框架',
+  copy: '文案 / 关键词',
+  image: '推广图片',
+  video: '推广视频',
+}
+// 按模态决定可选的「用途」范围：文本模型可同时服务分析与文案；图/视频各自独立。
+const USAGE_BY_MODALITY: Record<string, { v: string; label: string }[]> = {
+  text: [
+    { v: 'analysis', label: '落地页分析 / 框架' },
+    { v: 'copy', label: '文案 / 关键词' },
+  ],
+  image: [{ v: 'image', label: '推广图片' }],
+  video: [{ v: 'video', label: '推广视频' }],
+}
 const PROTOCOL_LABEL: Record<string, string> = {
   openai: 'OpenAI 兼容', anthropic: 'Anthropic', gemini: 'Google Gemini',
+  'openai-image': 'OpenAI 图像', 'generic-image': '通用图像', 'dashscope-maas-image': 'DashScope MaaS',
+  'generic-video': '通用视频',
+}
+const MODALITY_LABEL: Record<string, string> = { text: '文本大模型', image: '文生图大模型', video: '文生视频大模型' }
+
+type FormState = {
+  name: string
+  provider: string
+  model: string
+  base_url: string
+  api_key: string
+  is_active: boolean
+  usages: string[]
+  params: Record<string, string>
 }
 
-const empty = {
-  usage: 'analysis', provider: 'custom', api_key: '', base_url: '', model: '', is_active: true, endpoint: '',
-}
+const emptyForm = (): FormState => ({
+  name: '', provider: '', model: '', base_url: '', api_key: '', is_active: true, usages: ['analysis'], params: {},
+})
 
-// 用途与对应模型目录的映射：文本/图像/视频各自有独立预置目录
-const USAGE_TABS = [
-  { v: 'analysis', label: '文本·落地页分析' },
-  { v: 'copy', label: '文本·文案' },
-  { v: 'image', label: '文生图' },
-  { v: 'video', label: '文生视频' },
-]
+function defaultUsagesFor(modality: string): string[] {
+  return (USAGE_BY_MODALITY[modality] || USAGE_BY_MODALITY.text).map(u => u.v)
+}
 
 export default function LLMSettings() {
   const [list, setList] = useState<ModelConfig[]>([])
-  const [presets, setPresets] = useState<ModelPreset[]>([])
-  const [form, setForm] = useState<any>({ ...empty })
+  const [allPresets, setAllPresets] = useState<ModelPreset[]>([])
+  const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
+  const [form, setForm] = useState<FormState>(emptyForm())
   const [err, setErr] = useState('')
   const [ok, setOk] = useState('')
 
-  const [pickerOpen, setPickerOpen] = useState(false)
-  const [search, setSearch] = useState('')
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<ModelTestResult | null>(null)
 
   const load = async () => {
     try {
-      const [models, ps] = await Promise.all([api.models(), api.modelPresets()])
-      setList(models); setPresets(ps)
+      const [models, ps] = await Promise.all([api.models(), api.modelPresetsAll()])
+      setList(models); setAllPresets(ps)
     } catch (e: any) { setErr(e.message) }
   }
   useEffect(() => { load() }, [])
 
-  // 按用途拉取对应模型目录（文本 / 文生图 / 文生视频）
-  const loadPresets = async (usage: string) => {
-    try { setPresets(await api.modelPresets(usage)) } catch (e: any) { setErr(e.message) }
-  }
-
-  const preset = presets.find(p => p.key === form.provider)
-
-  const pickUsage = (u: string) => {
-    setForm({ ...form, usage: u }); loadPresets(u)
-  }
+  const preset = allPresets.find(p => p.key === form.provider)
+  const modality = preset?.modality || 'text'
+  const usageOptions = USAGE_BY_MODALITY[modality] || USAGE_BY_MODALITY.text
 
   const openAdd = () => {
-    setEditingId(null); setForm({ ...empty }); setTestResult(null); setErr(''); setOk('')
-    setPickerOpen(true); loadPresets(form.usage)
+    setEditingId(null); setForm(emptyForm()); setTestResult(null); setErr(''); setOk('')
+    setModalOpen(true)
   }
-  const choosePreset = (p: ModelPreset) => {
-    setForm({
-      ...form,
-      provider: p.key,
-      base_url: p.default_base_url,
-      model: p.models[0] || '',
-      is_active: true,
-    })
-    setPickerOpen(false); setTestResult(null); setErr(''); setOk('')
+  const closeModal = () => { setModalOpen(false); setErr(''); setOk('') }
+
+  const onPickProvider = (key: string) => {
+    const p = allPresets.find(x => x.key === key)
+    setForm(f => ({
+      ...f,
+      provider: key,
+      base_url: p?.default_base_url || '',
+      model: p?.models?.[0] || '',
+      // 切换厂商后用途按模态重置为默认选项
+      usages: defaultUsagesFor(p?.modality || 'text'),
+      // 重置附加字段占位（保留已填值以便再次切换回填）
+      params: Object.fromEntries((p?.extra_fields || []).map(ef => [ef.key, f.params[ef.key] || ''])),
+    }))
   }
+
+  const toggleUsage = (v: string) => {
+    setForm(f => ({
+      ...f,
+      usages: f.usages.includes(v) ? f.usages.filter(x => x !== v) : [...f.usages, v],
+    }))
+  }
+
   const edit = (m: ModelConfig) => {
-    setEditingId(m.id); setPickerOpen(false); setTestResult(null)
-    setForm({ usage: m.usage, provider: m.provider, api_key: m.api_key || '', base_url: m.base_url || '',
-              model: m.model || '', is_active: m.is_active,
-              endpoint: (m.params && (m.params as any).endpoint) || '' })
+    const usages = (m.usages && m.usages.length ? m.usages : (m.usage ? [m.usage] : []))
+    setEditingId(m.id)
+    setForm({
+      name: m.name || '',
+      provider: m.provider,
+      model: m.model || '',
+      base_url: m.base_url || '',
+      api_key: m.api_key || '',
+      is_active: m.is_active,
+      usages: usages.length ? usages : defaultUsagesFor(
+        // 编辑时按已存用途推断模态，避免目录缺失导致误判
+        usages.includes('image') ? 'image' : usages.includes('video') ? 'video' : 'text'
+      ),
+      params: (m.params && typeof m.params === 'object') ? m.params as Record<string, string> : {},
+    })
+    setTestResult(null); setErr(''); setOk('')
+    setModalOpen(true)
   }
+
+  const buildPayload = () => ({
+    name: form.name.trim(),
+    usage: form.usages,
+    provider: form.provider,
+    api_key: form.api_key,
+    base_url: form.base_url,
+    model: form.model,
+    is_active: form.is_active,
+    params: form.params,
+  })
 
   const save = async (): Promise<ModelConfig | null> => {
     setErr(''); setOk('')
+    if (!form.name.trim()) { setErr('请填写「名称」，便于区分不同配置。'); return null }
+    if (!form.provider) { setErr('请选择「大模型」。'); return null }
+    if (form.usages.length === 0) { setErr('请至少选择一个「用途」。'); return null }
     if (!form.api_key?.trim() || !form.model?.trim() || !form.base_url?.trim()) {
-      setErr('请先填写 API Key、Base URL 与 Model 三项必填内容。')
+      setErr('请先填写 API Key、模型请求链接与模型版本（Model）三项必填内容。')
       return null
     }
     try {
-      const payload: any = { usage: form.usage, provider: form.provider, api_key: form.api_key,
-                        base_url: form.base_url, model: form.model, is_active: form.is_active }
-      if (form.endpoint?.trim()) payload.params = { endpoint: form.endpoint.trim() }
+      const payload = buildPayload()
       const saved = editingId ? await api.updateModel(editingId, payload) : await api.createModel(payload)
       setEditingId(saved.id); await load()
       return saved
@@ -102,21 +151,19 @@ export default function LLMSettings() {
     } finally { setTesting(false) }
   }
 
-  // 主流程：保存配置 → 立即第一次真实调用
   const saveAndTest = async () => {
     const saved = await save()
     if (!saved) return
     setOk('已保存配置，正在发起第一次连通测试…')
     await runTest({ provider: saved.provider, api_key: saved.api_key, base_url: saved.base_url,
-                    model: saved.model, endpoint: form.endpoint })
+                    model: saved.model, endpoint: form.params?.endpoint })
   }
-  // 便捷：仅测试当前填写（不落库）
   const testOnly = async () => {
     if (!form.api_key?.trim() || !form.model?.trim() || !form.base_url?.trim()) {
-      setErr('请先填写 API Key、Base URL 与 Model。'); return
+      setErr('请先填写 API Key、模型请求链接与模型版本（Model）。'); return
     }
     await runTest({ provider: form.provider, api_key: form.api_key, base_url: form.base_url,
-                    model: form.model, endpoint: form.endpoint })
+                    model: form.model, endpoint: form.params?.endpoint })
   }
 
   const del = async (id: number) => {
@@ -124,115 +171,148 @@ export default function LLMSettings() {
     try { await api.deleteModel(id); await load() } catch (e: any) { setErr(e.message) }
   }
 
-  const filtered = presets.filter(p =>
-    !search.trim() || (p.name + p.key).toLowerCase().includes(search.trim().toLowerCase()))
+  // 预设按模态分组，供下拉展示
+  const grouped = [
+    { modality: 'text', label: MODALITY_LABEL.text, items: allPresets.filter(p => p.modality === 'text') },
+    { modality: 'image', label: MODALITY_LABEL.image, items: allPresets.filter(p => p.modality === 'image') },
+    { modality: 'video', label: MODALITY_LABEL.video, items: allPresets.filter(p => p.modality === 'video') },
+  ].filter(g => g.items.length > 0)
 
   return (
     <div>
-      {/* 新增表单 */}
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2>{editingId ? '编辑配置 #' + editingId : '新增配置'}</h2>
-          {!pickerOpen && <button className="btn secondary" onClick={openAdd}>＋ 添加大模型</button>}
+          <h2>已配置模型（{list.length}）</h2>
+          <button className="btn" onClick={openAdd}>＋ 添加大模型</button>
         </div>
-
-        {pickerOpen && (
-          <div className="model-picker">
-            <div className="usage-tabs">
-              {USAGE_TABS.map(u => (
-                <button key={u.v} type="button"
-                        className={'usage-tab' + (form.usage === u.v ? ' on' : '')}
-                        onClick={() => pickUsage(u.v)}>{u.label}</button>
-              ))}
-            </div>
-            {form.usage === 'image' && (
-              <div className="guide">🖼️ 文生图大模型：先选择下方模型名称，会自动带出默认请求链接与常见模型；再填写 API Key 与请求链接（Base URL）即可。生成素材时将按创意方向 / 风格 / 配色自动产出背景底图。</div>
-            )}
-            {form.usage === 'video' && (
-              <div className="guide">🎬 文生视频大模型：选择模型名称后填写 API Key 与请求链接（Base URL）。注意多数视频模型为异步任务，测试仅验证可达性与鉴权。</div>
-            )}
-            <div className="muted" style={{ margin: '8px 0' }}>选择要接入的{form.usage === 'image' ? '文生图' : form.usage === 'video' ? '文生视频' : ''}大模型（含默认地址与常见模型名，选中后自动带出字段）：</div>
-            <input className="filter-input" placeholder="搜索厂商 / 模型，如 dall-e、万相、cogview、sd、flux、runway、可灵…"
-                   value={search} onChange={e => setSearch(e.target.value)} autoFocus />
-            <div className="preset-grid">
-              {filtered.map(p => (
-                <button key={p.key} className="preset-card" onClick={() => choosePreset(p)}>
-                  <div className="preset-name">{p.name}</div>
-                  <div className="preset-meta">
-                    <span className={'proto proto-' + p.protocol}>{PROTOCOL_LABEL[p.protocol] || p.protocol}</span>
-                    <span className="muted">{p.models[0] || '自定义 Model'}</span>
-                  </div>
-                </button>
-              ))}
-              {filtered.length === 0 && <div className="muted">无匹配厂商。</div>}
-            </div>
-          </div>
+        <div className="muted">按用途配置大模型接口，保存即热切换，无需重启后端。未配置 Key 时自动使用内置 Mock 兜底。同一用途仅一个激活配置，新增/编辑同用途配置会停用其它。</div>
+        {list.length === 0 ? <div className="muted" style={{ marginTop: 10 }}>暂无配置，将使用 Mock 兜底。</div> : (
+          <table style={{ marginTop: 10 }}>
+            <thead><tr><th>名称</th><th>大模型</th><th>用途</th><th>模型版本</th><th>请求链接</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>
+              {list.map(m => {
+                const p = allPresets.find(x => x.key === m.provider)
+                const us = (m.usages && m.usages.length ? m.usages : (m.usage ? [m.usage] : []))
+                return (
+                  <tr key={m.id}>
+                    <td>{m.name || <span className="muted">未命名</span>}</td>
+                    <td>{p?.name || m.provider}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {us.map(u => <span key={u} className="usage-tag">{USAGE_LABEL[u] || u}</span>)}
+                      </div>
+                    </td>
+                    <td>{m.model}</td>
+                    <td className="muted">{m.base_url}</td>
+                    <td><span className={'pill ' + (m.is_active ? 'ok' : 'off')}>{m.is_active ? '激活' : '停用'}</span></td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button className="btn small ghost" onClick={() => edit(m)}>编辑</button>
+                        <button className="btn small danger" onClick={() => del(m.id)}>删除</button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         )}
+      </div>
 
-        {!pickerOpen && (
-          <>
-            <div className="row">
-              <div>
-                <label>用途</label>
-                <select value={form.usage} onChange={e => setForm({ ...form, usage: e.target.value })}>
-                  {USAGES.map(u => <option key={u.v} value={u.v}>{u.label}</option>)}
-                </select>
+      {modalOpen && (
+        <div className="modal-overlay" onMouseDown={closeModal}>
+          <div className="modal modal-wide" onMouseDown={e => e.stopPropagation()}>
+            <h3>{editingId ? `编辑配置 #${editingId}` : '添加大模型'}</h3>
+
+            <label>名称（自定义，便于区分）</label>
+            <input type="text" value={form.name} placeholder="如：阿里通义-主分析 / 自建GPU-文生图"
+                   onChange={e => setForm({ ...form, name: e.target.value })} autoFocus />
+
+            <label>大模型（下拉选择厂商）</label>
+            <select value={form.provider} onChange={e => onPickProvider(e.target.value)}>
+              <option value="">— 请选择大模型 —</option>
+              {grouped.map(g => (
+                <optgroup key={g.modality} label={g.label}>
+                  {g.items.map(p => (
+                    <option key={p.key} value={p.key}>{p.name}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+
+            {preset && (
+              <div className="provider-line">
+                <span className={'proto proto-' + preset.protocol}>{PROTOCOL_LABEL[preset.protocol] || preset.protocol}</span>
+                {preset.notes && <span className="muted">{preset.notes}</span>}
               </div>
-              <div>
-                <label>大模型</label>
-                <div className="provider-line">
-                  <span className="provider-name">{preset ? preset.name : (form.provider || '自定义')}</span>
-                  {preset && <span className={'proto proto-' + preset.protocol}>{PROTOCOL_LABEL[preset.protocol] || preset.protocol}</span>}
-                  <button className="btn small ghost" onClick={() => setPickerOpen(true)}>更换</button>
-                </div>
-              </div>
-            </div>
+            )}
 
-            <label>{preset?.api_key_label || 'API Key'}</label>
-            <input type="password" value={form.api_key} onChange={e => setForm({ ...form, api_key: e.target.value })}
-                   placeholder={preset?.api_key_placeholder || 'sk-...'} />
-
-            <label>Model {preset?.models && preset.models.length ? '（点击建议快速填入）' : ''}</label>
-            <input type="text" value={form.model} onChange={e => setForm({ ...form, model: e.target.value })}
-                   placeholder={preset?.model_placeholder || '模型名'} />
+            <label>模型版本（公司与版本号，如 qwen-max / dall-e-3）</label>
+            <input type="text" value={form.model} placeholder={preset?.model_placeholder || '如 gpt-4o-mini'}
+                   onChange={e => setForm({ ...form, model: e.target.value })} />
             {preset?.models && preset.models.length > 0 && (
               <div className="chip-row">
                 {preset.models.map(m => (
-                  <button key={m} className="chip" onClick={() => setForm({ ...form, model: m })}>{m}</button>
+                  <button key={m} className="chip" type="button" onClick={() => setForm({ ...form, model: m })}>{m}</button>
                 ))}
               </div>
             )}
 
-            <label>Base URL {preset && !preset.base_url_editable && '（该厂商标定，不可改）'}</label>
+            <label>用途（可多选：应用到哪些模块 / 功能）</label>
+            <div className="usage-checks">
+              {usageOptions.map(u => (
+                <label key={u.v} className={'usage-check' + (form.usages.includes(u.v) ? ' on' : '')}>
+                  <input type="checkbox" checked={form.usages.includes(u.v)} onChange={() => toggleUsage(u.v)} />
+                  {u.label}
+                </label>
+              ))}
+            </div>
+
+            <label>模型请求链接（Base URL）</label>
             <input type="text" value={form.base_url}
                    onChange={e => setForm({ ...form, base_url: e.target.value })}
-                   disabled={!!preset && !preset.base_url_editable}
-                   placeholder="https://.../v1" />
-
-            {(form.usage === 'image' || form.usage === 'video') && (
-              <div style={{ marginTop: 4 }}>
-                <label>自定义端点路径（可选，通用模型需要）</label>
-                <input type="text" value={form.endpoint}
-                       onChange={e => setForm({ ...form, endpoint: e.target.value })}
-                       placeholder="/images/generations 或 /sdapi/v1/txt2img" />
-                <div className="muted" style={{ fontSize: 12 }}>留空使用默认端点；Stable Diffusion 等需填 /sdapi/v1/txt2img。</div>
-              </div>
+                   placeholder="https://..." disabled={!!preset && preset.base_url_editable === false} />
+            {preset && preset.base_url_editable === false && (
+              <div className="muted" style={{ fontSize: 12 }}>该厂商标定地址，不可修改。</div>
             )}
+
+            <label>{preset?.api_key_label || 'API Key'}</label>
+            <input type="password" value={form.api_key}
+                   onChange={e => setForm({ ...form, api_key: e.target.value })}
+                   placeholder={preset?.api_key_placeholder || 'sk-...'} />
+
+            {/* 厂商专属附加字段（如自定义端点），按 preset.extra_fields 动态渲染 */}
+            {preset?.extra_fields?.map(ef => (
+              <div key={ef.key}>
+                <label>{ef.label}</label>
+                <input type="text" value={form.params[ef.key] || ''}
+                       onChange={e => setForm({ ...form, params: { ...form.params, [ef.key]: e.target.value } })}
+                       placeholder={ef.placeholder} />
+                {ef.hint && <div className="muted" style={{ fontSize: 12 }}>{ef.hint}</div>}
+              </div>
+            ))}
 
             {preset?.setup_guide && <div className="guide">📋 {preset.setup_guide}</div>}
             {preset?.docs_url && <a className="doc-link" href={preset.docs_url} target="_blank" rel="noreferrer">查看官方配置文档 ↗</a>}
 
+            {modality === 'image' && (
+              <div className="guide">🖼️ 文生图大模型：保存后生成素材时，将按创意方向 / 风格 / 配色自动产出背景底图。</div>
+            )}
+            {modality === 'video' && (
+              <div className="guide">🎬 文生视频大模型：注意多数视频模型为异步任务，测试仅验证可达性与鉴权。</div>
+            )}
+
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center', margin: '14px 0 0' }}>
+              <input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} />
+              设为激活（同用途仅一个激活）
+            </label>
+
             <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <label style={{ display: 'flex', gap: 6, alignItems: 'center', margin: 0 }}>
-                <input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} />
-                设为激活（同用途仅一个激活）
-              </label>
               <button className="btn" onClick={saveAndTest} disabled={testing}>{testing ? '保存并测试中…' : '保存并测试'}</button>
               <button className="btn secondary" onClick={testOnly} disabled={testing}>{testing ? '测试中…' : '仅测试（不保存）'}</button>
-              {editingId && <button className="btn ghost" onClick={() => { setEditingId(null); setForm({ ...empty }); setTestResult(null) }}>取消</button>}
+              <button className="btn ghost" onClick={closeModal}>取消</button>
             </div>
 
-            {/* 测试结果：成功 / 失败引导 */}
             {testResult?.ok && (
               <div className="alert ok">✓ 连通成功 ｜ 延迟 {testResult.latency_ms}ms ｜ 模型回复：{testResult.reply}</div>
             )}
@@ -255,40 +335,9 @@ export default function LLMSettings() {
             )}
             {ok && <div className="alert ok">{ok}</div>}
             {err && <div className="alert err">{err}</div>}
-          </>
-        )}
-      </div>
-
-      {/* 已配置列表 */}
-      <div className="card">
-        <h2>已配置模型（{list.length}）</h2>
-        <div className="muted">按用途配置大模型接口，保存即热切换，无需重启后端。未配置 Key 时自动使用内置 Mock 兜底。</div>
-        {list.length === 0 ? <div className="muted" style={{ marginTop: 10 }}>暂无配置，将使用 Mock 兜底。</div> : (
-          <table style={{ marginTop: 10 }}>
-            <thead><tr><th>用途</th><th>大模型</th><th>Base URL</th><th>Model</th><th>状态</th><th>操作</th></tr></thead>
-            <tbody>
-              {list.map(m => {
-                const p = presets.find(x => x.key === m.provider)
-                return (
-                  <tr key={m.id}>
-                    <td>{USAGES.find(u => u.v === m.usage)?.label || m.usage}</td>
-                    <td>{p?.name || m.provider}</td>
-                    <td className="muted">{m.base_url}</td>
-                    <td>{m.model}</td>
-                    <td><span className={'pill ' + (m.is_active ? 'ok' : 'off')}>{m.is_active ? '激活' : '停用'}</span></td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn small ghost" onClick={() => edit(m)}>编辑</button>
-                        <button className="btn small danger" onClick={() => del(m.id)}>删除</button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

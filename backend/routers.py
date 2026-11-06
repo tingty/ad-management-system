@@ -579,17 +579,55 @@ def download_material(mid: int, db: Session = Depends(get_db)):
     return StreamingResponse(iter([_material_text(m)]), media_type="text/plain",
                              headers={"Content-Disposition": f"attachment; filename={base}"})
 
-# ----------------------------- 设置：AI 模型配置 -----------------------------@router.get("/settings/models", response_model=list[ModelConfigOut])
+# ----------------------------- 设置：AI 模型配置 -----------------------------
+def _normalize_usage(u) -> list:
+    """usage 可能是单字符串或数组，统一为去重后的非空数组。"""
+    if isinstance(u, str):
+        return [u] if u else []
+    if isinstance(u, (list, tuple)):
+        return [str(x) for x in u if x]
+    return []
+
+def _deactivate_conflicting(db, usages: list, exclude_id: int | None = None):
+    """同用途仅一个激活：仅停用「用途被新配置完全覆盖」的其它激活配置。
+
+    例如新配置用途为 [analysis]，则只停用单用途的 analysis 配置；
+    若某旧配置为 [analysis, copy]（多用途），因用途未被完全覆盖，保留其继续服务 copy。
+    """
+    if not usages:
+        return
+    uset = set(str(x) for x in usages)
+    for o in db.query(ModelConfig).filter(ModelConfig.is_active == True).all():
+        if exclude_id is not None and o.id == exclude_id:
+            continue
+        ou = o.usages if o.usages is not None else o.usage
+        ou = set(str(x) for x in (ou if isinstance(ou, list) else ([ou] if ou else [])))
+        if ou and ou <= uset:   # 旧配置的用途是新配置用途的子集 → 安全停用
+            o.is_active = False
+
+@router.get("/settings/models", response_model=list[ModelConfigOut])
 def list_models(db: Session = Depends(get_db)):
-    return db.query(ModelConfig).order_by(ModelConfig.usage).all()
+    return db.query(ModelConfig).order_by(ModelConfig.id).all()
 
 @router.post("/settings/models", response_model=ModelConfigOut)
 def create_model(req: ModelConfigIn, db: Session = Depends(get_db),
                  admin: User = Depends(require_roles("admin"))):
-    # 同用途只允许一个激活
+    usages = _normalize_usage(req.usage)
+    if not usages:
+        raise HTTPException(400, "请至少选择一个用途")
     if req.is_active:
-        db.query(ModelConfig).filter_by(usage=req.usage).update({"is_active": False})
-    m = ModelConfig(**req.dict())
+        _deactivate_conflicting(db, usages)
+    m = ModelConfig(
+        name=req.name,
+        usage=usages[0],
+        usages=usages,
+        provider=req.provider,
+        api_key=req.api_key,
+        base_url=req.base_url,
+        model=req.model,
+        params=req.params,
+        is_active=req.is_active,
+    )
     db.add(m); db.commit(); db.refresh(m)
     return m
 
@@ -599,10 +637,21 @@ def update_model(mid: int, req: ModelConfigIn, db: Session = Depends(get_db),
     m = db.query(ModelConfig).filter_by(id=mid).first()
     if not m:
         raise HTTPException(404, "配置不存在")
+    usages = _normalize_usage(req.usage)
+    if not usages:
+        raise HTTPException(400, "请至少选择一个用途")
     if req.is_active:
-        db.query(ModelConfig).filter(ModelConfig.usage == req.usage, ModelConfig.id != mid).update({"is_active": False})
-    for k, v in req.dict(exclude_unset=True).items():
-        setattr(m, k, v)
+        _deactivate_conflicting(db, usages, exclude_id=mid)
+    m.name = req.name
+    m.usages = usages
+    m.usage = usages[0]
+    m.provider = req.provider
+    m.api_key = req.api_key
+    m.base_url = req.base_url
+    m.model = req.model
+    if req.params is not None:
+        m.params = req.params
+    m.is_active = req.is_active
     db.commit(); db.refresh(m)
     return m
 
@@ -617,17 +666,20 @@ def delete_model(mid: int, db: Session = Depends(get_db),
 
 @router.get("/settings/models/presets")
 def list_model_presets(usage: str = ""):
-    """返回模型配置目录（不含任何密钥），按 usage 区分文本/图像/视频，供前端「添加大模型」选择。
+    """返回模型配置目录（不含任何密钥），供前端「添加大模型」选择。
 
-    usage 缺省或 analysis/copy → 文本 LLM 目录；image → 文生图目录；video → 文生视频目录。
+    usage 缺省或 analysis/copy → 文本 LLM 目录；image → 文生图目录；video → 文生视频目录；
+    all → 全部（含文本/图像/视频），前端下拉选择时一次性拉取。
+    每个预设额外带出 extra_fields（厂商专属附加字段，如自定义端点）与 modality（text/image/video）。
     """
-    from llm_catalog import get_presets
-    presets = get_presets(usage or "")
+    from llm_catalog import get_presets, modality_of, _PROTOCOL_EXTRA, get_all_presets
+    presets = get_all_presets() if (usage or "") == "all" else get_presets(usage or "")
     return [
         {
             "key": p["key"],
             "name": p["name"],
             "protocol": p["protocol"],
+            "modality": modality_of(p["protocol"]),
             "default_base_url": p["default_base_url"],
             "base_url_editable": p["base_url_editable"],
             "models": p["models"],
@@ -637,6 +689,7 @@ def list_model_presets(usage: str = ""):
             "docs_url": p["docs_url"],
             "setup_guide": p["setup_guide"],
             "notes": p["notes"],
+            "extra_fields": p.get("extra_fields") or _PROTOCOL_EXTRA.get(p["protocol"], []),
         }
         for p in presets
     ]

@@ -177,7 +177,9 @@ export interface CompareResult {
 
 export interface ModelConfig {
   id: number
-  usage: string
+  name?: string | null
+  usage?: string | null            // 主用途（兼容旧数据）
+  usages?: string[]                // 多用途数组
   provider: string
   api_key?: string
   base_url?: string
@@ -190,6 +192,7 @@ export interface ModelPreset {
   key: string
   name: string
   protocol: string
+  modality: 'text' | 'image' | 'video'
   default_base_url: string
   base_url_editable: boolean
   models: string[]
@@ -199,6 +202,7 @@ export interface ModelPreset {
   docs_url: string
   setup_guide: string
   notes: string
+  extra_fields: { key: string; label: string; placeholder?: string; hint?: string }[]
 }
 
 export interface ModelTestResult {
@@ -529,14 +533,17 @@ export const api = {
   models: () => req<ModelConfig[]>('/api/settings/models'),
   modelPresets: (usage?: string) =>
     req<ModelPreset[]>(`/api/settings/models/presets${usage ? `?usage=${encodeURIComponent(usage)}` : ''}`),
+  // 全量预设（文本 + 文生图 + 文生视频），弹窗下拉一次性拉取
+  modelPresetsAll: () =>
+    req<ModelPreset[]>('/api/settings/models/presets?usage=all'),
   creativePresets: () => req<CreativePresets>('/api/settings/creative-presets'),
-  createModel: (m: Partial<ModelConfig>) =>
+  createModel: (m: Partial<Omit<ModelConfig, 'usage'>> & { usage?: string | string[] }) =>
     req<ModelConfig>('/api/settings/models', { method: 'POST', body: JSON.stringify(m) }),
-  updateModel: (id: number, m: Partial<ModelConfig>) =>
+  updateModel: (id: number, m: Partial<Omit<ModelConfig, 'usage'>> & { usage?: string | string[] }) =>
     req<ModelConfig>(`/api/settings/models/${id}`, { method: 'PUT', body: JSON.stringify(m) }),
   deleteModel: (id: number) =>
     req<any>(`/api/settings/models/${id}`, { method: 'DELETE' }),
-  testModel: (m: Partial<ModelConfig>) =>
+  testModel: (m: Partial<ModelConfig> & { endpoint?: string; protocol?: string }) =>
     req<ModelTestResult>(
       '/api/settings/models/test', { method: 'POST', body: JSON.stringify(m) }),
   // 提示词管理

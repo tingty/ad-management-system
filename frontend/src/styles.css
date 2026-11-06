@@ -786,6 +786,23 @@ select {
 }
 .fv-actions { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 
+/* ==================== 大模型配置弹窗 ==================== */
+.usage-checks { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 4px; }
+.usage-check {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  border: 1px solid var(--border, #e2e6eb); background: #fff; color: var(--text);
+  border-radius: 8px; padding: 7px 12px; font-size: 13px; user-select: none;
+  transition: .15s;
+}
+.usage-check:hover { border-color: var(--primary); }
+.usage-check.on { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+.usage-check input { accent-color: currentColor; margin: 0; }
+.usage-tag {
+  display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px;
+  background: #eef2f7; color: #3b4a5a; border: 1px solid #dde4ec;
+}
+.modal .provider-line { padding-top: 0; }
+
 /* ==================== 素材提示词管理 ==================== */
 .pill.img { background: #e8f1fb; color: var(--primary2); border: 1px solid #cfe3f5; }
 .pill.vid { background: #f1e9fb; color: #7b4fc4; border: 1px solid #e2d4f3; }

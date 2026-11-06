@@ -723,6 +723,27 @@
 - 单元：文生图提示词生成含具体视觉词（"neon-lit cyberpunk"）与 hex（"#FF8A1E"）；`build_directives` 的 `design_overrides` 正确携带 `styles/palette`；geo/languages/platform_analysis 合并逻辑按 LLM 输出正确回填。
 - 渲染冒烟：`render_creative` 在「有 AI 底图」与「纯 Pillow」两条路径均生成成功；`_style_motif` 对全部 19 种风格键无崩溃。
 
+## V4.23 大模型配置改为弹窗，并支持多用途 / 自定义名称 / 厂商专属附加字段
+
+**需求**：把"大模型配置"的添加/编辑改为弹窗；字段含「名称、大模型（下拉）、模型版本、用途（多选）、模型请求链接、API Key」，并按厂商要求动态补充其它必要字段。
+
+**改动（前端 `LLMSettings.tsx` 重写为弹窗）**
+- 弹窗字段：名称（自定义配置名）→ 大模型（全量预设下拉，按 文本/文生图/文生视频 分组，选中自动带出默认地址与模型）→ 模型版本（即 Model，提示"公司与版本号"）→ 用途（多选 Checkbox）→ 模型请求链接（Base URL）→ API Key → 厂商专属附加字段（如文生图/视频的"自定义端点路径"）。
+- 用途多选：按模态过滤可选项——文本模型可选「落地页分析 / 文案」可同时勾选；文生图仅「推广图片」；文生视频仅「推广视频」。
+- 列表展示：名称、厂商、用途标签、模型版本、请求链接、状态、编辑/删除；遮罩点击或取消关闭弹窗。
+
+**改动（后端）**
+- `models.ModelConfig` 新增 `name`（自定义名称）与 `usages`（JSON 数组，多用途）；`usage` 保留为主用途字符串以兼容旧数据。
+- `schemas.ModelConfigIn` 的 `usage` 支持 str|list；`ModelConfigOut` 新增 `name`/`usages`，并对无 `usages` 的旧数据由 `usage` 推导（避免 NULL 校验失败）。
+- `routers`：`create/update` 归一化 usage 为数组写入 `usages`；"同用途仅一个激活"改为**仅停用用途被新配置完全覆盖的旧配置**（多用途配置不会被整体停用，仍服务其它用途）；`list` 返回 `usages` 数组。
+- `providers._active_config`：按 usages 数组包含匹配，同用途多配置时取**最近创建（id 最大）**者，使新配置按其用途接管、旧多用途配置继续服务其余用途。
+- `llm_catalog`：新增 `modality_of`（协议→text/image/video）、`get_all_presets`（全量）；`_PROTOCOL_EXTRA` 为 generic-image / generic-video 默认注入 `endpoint` 附加字段；预设接口支持 `usage=all` 并透出 `modality` 与 `extra_fields`。
+
+**验证**
+- 前端 `npm run build` 通过（47 模块）。
+- 后端流程测试：创建 [analysis,copy] 文本配置 + [image] 配置 + 仅 [analysis] 配置后，getter 正确——analysis 取较新的 deepseek、copy 仍取 qwen、image 取 custom-image；旧单字符串行经 `usages` 推导正常。
+- 预设接口 `usage=all` 返回 33 项，含 `modality` 与 `extra_fields`（generic-image 正确带出 endpoint）。
+
 ## V4.20 403 提示识别 MaaS 工作空间 access_denied
 
 - `backend/llm_catalog.py`：`_classify_error` 的 403 分支检测 body 中的 workspace / access_denied，给出 MaaS 工作空间专属 Key 指引（ws-*.maas.aliyuncs.com / llm-*.maas.aliyuncs.com 需绑定工作空间的专用 Key，且区域需一致）。

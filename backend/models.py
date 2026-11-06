@@ -128,12 +128,14 @@ class Job(Base):
 class ModelConfig(Base):
     __tablename__ = "model_configs"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    usage = Column(String(32))          # analysis / copy / image / video
+    name = Column(String(128), nullable=True)      # 用户自定义的配置名称
+    usage = Column(String(32))          # 主用途（兼容旧数据 / 单用途场景，取 usages[0]）
+    usages = Column(JSON, nullable=True) # 多用途数组：analysis / copy / image / video
     provider = Column(String(64))
     api_key = Column(String(512), nullable=True)
     base_url = Column(String(512), nullable=True)
-    model = Column(String(128), nullable=True)
-    params = Column(JSON, nullable=True)
+    model = Column(String(128), nullable=True)      # 模型版本 / 标识（API 调用使用）
+    params = Column(JSON, nullable=True)            # 厂商专属附加字段，如 endpoint
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=utcnow)
 
