@@ -853,6 +853,31 @@
 - 后端 `py_compile` 通过；前端 `tsc --noEmit` 退出码 0、`npm run build` 通过。
 - 端到端：① `POST /api/landing-analysis` 响应含 `logo` 字段；② `POST /api/media-campaign/images` 传 `logo=''` 与 `logo='/files/不存在'` 均优雅出图；③ 上传真实 PNG → 返回 `/files/...` → 生成图片成功，像素校验确认 logo 已落到图片右上角。
 
+## V4.28 大模型配置：修复厂商下拉为空 + 补齐 17 家主流厂商
+
+**需求**
+- 「大模型配置 → 添加大模型」弹窗中，厂商下拉框无法选择、且不显示任何可选项；要求修复，并把主流大模型厂商（GPT / Claude / Gemini / Grok / Command R / Llama4 / Mistral / Gemma / 通义千问 / Kimi / DeepSeek / GLM / 文心一言 / MiniMax / 豆包 / 腾讯混元 / 百川大模型）显示在下拉选项中。
+- 配置时按每家厂商的要求显示必要的输入字段；现有设计（名称 / 模型版本 / 用途 / Base URL / API Key / 厂商专属附加字段）已覆盖，缺失则补充。
+
+**根因**
+- 弹窗用原生 `<select>` + `<optgroup>` 渲染厂商列表；在弹窗/内嵌 webview 中，原生 select 下拉常被裁剪或不弹出，导致用户看不到、也点不开选项（数据本身正常：接口始终返回 60+ 厂商）。
+
+**交付**
+- 目录补全（后端 `backend/llm_catalog.py`）：
+  - 新增 `Llama 4（Meta）`、`Gemma（Google 开放权重）` 两个厂商（均为 OpenAI 兼容，标注其开放权重托管方式）。
+  - 新增 `MAINSTREAM_KEYS` 集合（上述 17 家），`get_all_presets()` / `get_presets()` 在返回时统一注入 `mainstream` 标记；现有 15 家（OpenAI/Anthropic/Gemini/xAI/Cohere/Mistral/通义千问/Kimi/DeepSeek/GLM/文心一言/MiniMax/豆包/腾讯混元/百川）已含在内。
+  - `backend/routers.py` 的 `/api/settings/models/presets` 输出新增 `mainstream` 字段。
+- 前端下拉改造（`frontend/src/pages/LLMSettings.tsx`）：
+  - 用自定义浮层下拉 `ProviderSelect` 替代原生 `<select>`：绝对定位浮层渲染，保证在弹窗内一定可见、可点选；支持关键词搜索；分组为「★ 主流大模型（推荐）」置顶 + 文本大模型（其他）+ 文生图 + 文生视频。
+  - `load()` 将 `api.models()` 与 `api.modelPresetsAll()` 解耦，任一处失败都不会清空厂商候选列表。
+  - `frontend/src/api.ts`：`ModelPreset` 接口增加 `mainstream?: boolean`。
+  - `frontend/src/styles.css`：新增 `.provider-select / .ps-trigger / .ps-pop / .ps-search / .ps-list / .ps-group / .ps-opt / .ps-proto / .ps-empty` 等样式。
+
+**验证**
+- 后端 `py_compile` 通过；`get_all_presets()` 返回 62 家，其中 `mainstream=True` 17 家，且 17 家关键厂商全部存在。
+- 认证调用 `GET /api/settings/models/presets?usage=all` 返回 62 条，每条均含 `mainstream` 与 `modality`，17 家主流标记正确。
+- 前端 `tsc --noEmit` 退出码 0、`npm run build` 通过（48 模块）。
+
 ## V4.20 403 提示识别 MaaS 工作空间 access_denied
 
 - `backend/llm_catalog.py`：`_classify_error` 的 403 分支检测 body 中的 workspace / access_denied，给出 MaaS 工作空间专属 Key 指引（ws-*.maas.aliyuncs.com / llm-*.maas.aliyuncs.com 需绑定工作空间的专用 Key，且区域需一致）。

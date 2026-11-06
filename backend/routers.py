@@ -723,6 +723,7 @@ def list_model_presets(usage: str = ""):
             "name": p["name"],
             "protocol": p["protocol"],
             "modality": modality_of(p["protocol"]),
+            "mainstream": p.get("mainstream", False),
             "default_base_url": p["default_base_url"],
             "base_url_editable": p["base_url_editable"],
             "models": p["models"],

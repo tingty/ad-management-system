@@ -193,6 +193,7 @@ export interface ModelPreset {
   name: string
   protocol: string
   modality: 'text' | 'image' | 'video'
+  mainstream?: boolean
   default_base_url: string
   base_url_editable: boolean
   models: string[]

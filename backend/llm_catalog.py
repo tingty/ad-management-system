@@ -311,6 +311,28 @@ LLM_PRESETS = [
         "notes": "完全兼容 OpenAI 协议。",
     },
     {
+        "key": "meta-llama", "name": "Llama 4（Meta）", "protocol": "openai",
+        "default_base_url": "https://api.together.xyz/v1",
+        "base_url_editable": True,
+        "models": ["meta-llama/Llama-4-Scout-17B-16E-Instruct", "meta-llama/Llama-4-Maverick-17B-128E-Instruct"],
+        "api_key_label": "Llama 4 托管平台 API Key（Together / Groq / Fireworks / Ollama 等）", "api_key_placeholder": "sk-...",
+        "model_placeholder": "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+        "docs_url": "https://www.llama.com",
+        "setup_guide": "1) Llama 4 为开放权重模型，需通过 OpenAI 兼容网关调用；2) 在 Together / Groq / Fireworks / SambaNova 等平台获取 API Key（示例默认 Together https://api.together.xyz/v1）；3) Model 填对应模型名（如 meta-llama/Llama-4-Scout-17B-16E-Instruct）；4) 本地可用 Ollama/vLLM 部署，Base URL 改为 http://localhost:11434/v1；5) 保存并测试。",
+        "notes": "Llama 4 为开放权重，不在任何单一厂商云端独占；选择你所在的托管平台填对应 Base URL 即可。",
+    },
+    {
+        "key": "gemma", "name": "Gemma（Google 开放权重）", "protocol": "openai",
+        "default_base_url": "https://api.groq.com/openai/v1",
+        "base_url_editable": True,
+        "models": ["gemma2-9b-it", "gemma-7b-it"],
+        "api_key_label": "Gemma 托管平台 API Key（Groq / Google AI Studio / 自建等）", "api_key_placeholder": "gsk_... 或 AIza...",
+        "model_placeholder": "gemma2-9b-it",
+        "docs_url": "https://ai.google.dev/gemma",
+        "setup_guide": "1) Gemma 为 Google 开放权重模型，可通过 Groq（https://api.groq.com/openai/v1，Model 填 gemma2-9b-it）或 Google AI Studio（Gemini 协议）调用；2) 也可本地用 Ollama/vLLM 部署；3) 选择对应平台填 Key 与 Base URL；4) 保存并测试。",
+        "notes": "Gemma 开放权重，多平台可托管；示例默认 Groq 极速推理网关。",
+    },
+    {
         "key": "nvidia-nim", "name": "NVIDIA NIM（自建/云端推理）", "protocol": "openai",
         "default_base_url": "https://integrate.api.nvidia.com/v1",
         "base_url_editable": True,
@@ -411,9 +433,25 @@ def modality_of(protocol: str) -> str:
     return "text"
 
 
+# 主流大模型厂商（用户配置时优先展示的「推荐」分组）。
+# 覆盖：GPT、Claude、Gemini、Grok、Command R、Llama4、Mistral、Gemma、
+#       通义千问、Kimi、DeepSeek、GLM、文心一言、MiniMax、豆包、腾讯混元、百川大模型。
+MAINSTREAM_KEYS = {
+    "openai", "anthropic", "google", "xai", "cohere", "mistral", "meta-llama",
+    "qwen", "moonshot", "deepseek", "zhipu", "ernie", "minimax", "doubao",
+    "hunyuan", "baichuan", "gemma",
+}
+
+
+def _with_mainstream(p: dict) -> dict:
+    d = dict(p)
+    d["mainstream"] = p.get("key") in MAINSTREAM_KEYS
+    return d
+
+
 def get_all_presets() -> list:
     """全部预设（文本 + 文生图 + 文生视频），供前端「大模型」下拉一次性拉取。"""
-    return LLM_PRESETS + IMAGE_PRESETS + VIDEO_PRESETS
+    return [_with_mainstream(p) for p in (LLM_PRESETS + IMAGE_PRESETS + VIDEO_PRESETS)]
 
 
 # 不同协议默认需要的「厂商专属附加字段」；预设本身也可通过 extra_fields 覆盖。
@@ -765,10 +803,10 @@ def get_presets(usage: str) -> list:
     usage: analysis/copy → 文本 LLM 目录；image → 文生图目录；video → 文生视频目录。
     """
     if usage == "image":
-        return IMAGE_PRESETS
+        return [_with_mainstream(p) for p in IMAGE_PRESETS]
     if usage == "video":
-        return VIDEO_PRESETS
-    return LLM_PRESETS
+        return [_with_mainstream(p) for p in VIDEO_PRESETS]
+    return [_with_mainstream(p) for p in LLM_PRESETS]
 
 
 # ---------------------------------------------------------------------------

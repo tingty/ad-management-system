@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, ModelConfig, ModelPreset, ModelTestResult } from '../api'
 
 const USAGE_LABEL: Record<string, string> = {
@@ -56,8 +56,11 @@ export default function LLMSettings() {
 
   const load = async () => {
     try {
-      const [models, ps] = await Promise.all([api.models(), api.modelPresetsAll()])
-      setList(models); setAllPresets(ps)
+      const models = await api.models(); setList(models)
+    } catch (e: any) { setErr(e.message) }
+    try {
+      // 与 models() 解耦：其一失败不应导致下拉厂商列表被清空
+      const ps = await api.modelPresetsAll(); setAllPresets(ps)
     } catch (e: any) { setErr(e.message) }
   }
   useEffect(() => { load() }, [])
@@ -171,12 +174,71 @@ export default function LLMSettings() {
     try { await api.deleteModel(id); await load() } catch (e: any) { setErr(e.message) }
   }
 
-  // 预设按模态分组，供下拉展示；(p.modality || 'text') 兜底，避免个别预设缺字段时整组消失
-  const grouped = [
-    { modality: 'text', label: MODALITY_LABEL.text, items: allPresets.filter(p => (p.modality || 'text') === 'text') },
-    { modality: 'image', label: MODALITY_LABEL.image, items: allPresets.filter(p => (p.modality || 'text') === 'image') },
-    { modality: 'video', label: MODALITY_LABEL.video, items: allPresets.filter(p => (p.modality || 'text') === 'video') },
-  ].filter(g => g.items.length > 0)
+  // 自定义下拉（替代原生 <select>）：在弹窗/webview 中原生 select 下拉可能被裁剪/不弹出，
+  // 这里用绝对定位的浮层渲染，保证厂商列表一定可见、可点选。
+  const ProviderSelect = ({ value, presets, onPick }: {
+    value: string; presets: ModelPreset[]; onPick: (key: string) => void
+  }) => {
+    const [open, setOpen] = useState(false)
+    const [q, setQ] = useState('')
+    const ref = useRef<HTMLDivElement>(null)
+    useEffect(() => {
+      const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+      document.addEventListener('mousedown', h)
+      return () => document.removeEventListener('mousedown', h)
+    }, [])
+    const sel = presets.find(p => p.key === value)
+    const modOf = (p: ModelPreset) => p.modality || 'text'
+    const groups: { label: string; items: ModelPreset[] }[] = [
+      { label: '★ 主流大模型（推荐）', items: presets.filter(p => p.mainstream) },
+      { label: '文本大模型（其他）', items: presets.filter(p => modOf(p) === 'text' && !p.mainstream) },
+      { label: MODALITY_LABEL.image, items: presets.filter(p => modOf(p) === 'image') },
+      { label: MODALITY_LABEL.video, items: presets.filter(p => modOf(p) === 'video') },
+    ].filter(g => g.items.length > 0)
+    const ql = q.trim().toLowerCase()
+    const vis = groups.map(g => ({
+      ...g,
+      items: g.items.filter(p => !ql || p.name.toLowerCase().includes(ql) || p.key.toLowerCase().includes(ql)),
+    })).filter(g => g.items.length > 0)
+    return (
+      <div className="provider-select" ref={ref}>
+        <button type="button" className={'ps-trigger' + (sel ? '' : ' placeholder')} onClick={() => setOpen(o => !o)}>
+          <span>{sel ? sel.name : '— 请选择大模型 —'}</span>
+          <span className="ps-caret">▾</span>
+        </button>
+        {open && (
+          <div className="ps-pop">
+            <input
+              className="ps-search"
+              placeholder="搜索厂商 / 模型名…"
+              value={q}
+              autoFocus
+              onChange={e => setQ(e.target.value)}
+            />
+            <div className="ps-list">
+              {vis.length === 0 && <div className="ps-empty">无匹配的厂商</div>}
+              {vis.map(g => (
+                <div key={g.label} className="ps-group">
+                  <div className="ps-group-label">{g.label}</div>
+                  {g.items.map(p => (
+                    <button
+                      type="button"
+                      key={p.key}
+                      className={'ps-opt' + (p.key === value ? ' on' : '')}
+                      onClick={() => { onPick(p.key); setOpen(false); setQ('') }}
+                    >
+                      <span className="ps-name">{p.name}</span>
+                      <span className="ps-proto">{PROTOCOL_LABEL[p.protocol] || p.protocol}</span>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -229,16 +291,11 @@ export default function LLMSettings() {
                    onChange={e => setForm({ ...form, name: e.target.value })} autoFocus />
 
             <label>大模型（下拉选择厂商）</label>
-            <select value={form.provider} onChange={e => onPickProvider(e.target.value)}>
-              <option value="">— 请选择大模型 —</option>
-              {grouped.map(g => (
-                <optgroup key={g.modality} label={g.label}>
-                  {g.items.map(p => (
-                    <option key={p.key} value={p.key}>{p.name}</option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
+            <ProviderSelect
+              value={form.provider}
+              presets={allPresets}
+              onPick={onPickProvider}
+            />
 
             {preset && (
               <div className="provider-line">
