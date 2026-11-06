@@ -651,9 +651,8 @@ def get_llm(db, usage="analysis") -> LLMProvider:
     if cfg and cfg.api_key and cfg.base_url and cfg.model:
         try:
             # 按目录协议选择真实 provider；未知厂商按 OpenAI 兼容处理
-            from llm_catalog import get_preset
-            preset = get_preset(cfg.provider)
-            protocol = preset["protocol"] if preset else "openai"
+            from llm_catalog import _resolve_protocol
+            protocol = _resolve_protocol(cfg.provider)
             if protocol == "anthropic":
                 real = AnthropicLLM(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
             elif protocol == "gemini":
@@ -670,8 +669,8 @@ def get_image(db) -> Optional[ImageProvider]:
     cfg = _active_config(db, "image")
     if cfg and cfg.api_key and cfg.base_url and cfg.model:
         try:
-            from llm_catalog import image_protocol_of
-            proto = image_protocol_of(cfg.provider)
+            from llm_catalog import _resolve_protocol
+            proto = _resolve_protocol(cfg.provider)
             if proto == "openai-image":
                 return OpenAIImage(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
             if proto == "dashscope-maas-image":

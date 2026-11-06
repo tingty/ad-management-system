@@ -2,8 +2,9 @@
 全球主流大模型「配置目录 + 协议感知连通测试」。
 
 用途：
-- 前端「设置 → 大模型」按目录选择厂商（OpenAI / DeepSeek / 通义千问 / Anthropic / Gemini …），
-  选中后自动带出默认 Base URL、常见 Model、必填字段与官方文档链接，用户只填 Key/Model 即可。
+- 前端「设置 → 大模型」选择「接口协议」（openai / anthropic / gemini / openai-image / generic-image / dashscope-maas-image / generic-video），
+  不再强制从厂商目录里挑一个“大模型名称”；模型版本、Key、链接均由用户自行填写，选中协议后带出默认 Base URL 与常见 Model 建议。
+  ModelConfig.provider 直接存储协议串，后端通过 _resolve_protocol() 解析鉴权方式（同时兼容旧数据存厂商 key 的情况）。
 - 保存后后端用 test_llm_connection() 真正发起一次最小调用：
   - 成功：返回 ok + 延迟 + 模型回包片段；
   - 失败：结构化返回 error_type（auth / permission / not_found / rate_limit / network / bad_request / unknown）
@@ -421,6 +422,29 @@ def get_preset(key: str) -> Optional[dict]:
 
 def protocol_of(provider: str) -> str:
     p = get_preset(provider)
+    return p["protocol"] if p else "openai"
+
+
+# 全部已知协议：用于判断「存储的 provider 字段本身就是协议串」（新配置直接存协议，
+# 不再依赖厂商目录），从而让 get_llm/get_image/test 都能正确解析，无需再选厂商。
+ALL_PROTOCOLS = {
+    "openai", "anthropic", "gemini",
+    "openai-image", "dashscope-maas-image", "generic-image", "generic-video",
+}
+
+
+def _resolve_protocol(provider: str) -> str:
+    """把存储的 provider 字段解析为实际协议。
+
+    - 若本身就是协议串（新配置直接存协议），原样返回；
+    - 否则按厂商目录 / 文生图目录 / 文生视频目录查协议（兼容旧数据存的是厂商 key）；
+    - 都查不到按 OpenAI 兼容处理。
+    """
+    if not provider:
+        return "openai"
+    if provider in ALL_PROTOCOLS:
+        return provider
+    p = get_preset(provider) or get_image_preset(provider) or get_video_preset(provider)
     return p["protocol"] if p else "openai"
 
 
@@ -1092,6 +1116,6 @@ async def test_llm_connection(req: dict) -> dict:
     provider = req.get("provider") or "custom"
     # 图像/视频厂商走各自目录解析协议；文本厂商走 LLM 目录
     preset = get_preset(provider) or get_image_preset(provider) or get_video_preset(provider)
-    protocol = (req.get("protocol") or (preset["protocol"] if preset else "openai"))
+    protocol = req.get("protocol") or _resolve_protocol(provider)
     tester = _TESTERS.get(protocol, _test_openai)
     return await tester(req, preset)

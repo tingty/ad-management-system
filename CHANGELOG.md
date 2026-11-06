@@ -1011,3 +1011,34 @@
 
 **线上运维配合**
 - 无。公告内容完全来自 `CHANGELOG.md`，发版即更新、提交即同步，无需额外配置。
+
+## V4.31 大模型配置：移除「大模型名称」选择，改为「接口协议」直配
+
+**发布日期**：2026-11-06
+
+**需求**
+- 在「大模型配置」模块中，添加 / 编辑大模型时，删除「大模型（厂商）选项」，不再强制选择大模型名称；
+  用户直接按填入的配置（模型版本 / Base URL / API Key 等）发起测试与保存。
+
+**根因**
+- 原「添加大模型」弹窗第一步强制在 62 个厂商目录里挑一个厂商名称，才能继续填写 Key / Model；
+  但多数用户（自建 GPU / vLLM / 第三方网关 / 国内模型）只是想直接填接口信息，厂商选择既多余又阻碍快速接入。
+
+**交付**
+- 前端 `LLMSettings.tsx`：用紧凑的「接口协议」选择器替换原「厂商大模型」下拉（`ProtocolSelect`），选项仅 7 种协议：
+  OpenAI 兼容 / Anthropic / Gemini / 文生图·OpenAI / 文生图·阿里 DashScope / 文生图·通用 / 文生视频·通用。
+  选中协议自动带出默认 Base URL 与常见 Model 建议，模型版本（Model）由用户自由填写。
+- ModelConfig.provider 字段改为直接存储协议串（如 openai / gemini / openai-image）。
+- 验证时显式传递 `protocol`，后端 `test_llm_connection()` 据此选对鉴权方式。
+- 后端 `llm_catalog.py` 新增 `_resolve_protocol()`：provider 若为协议串原样返回；否则回退到厂商目录解析（兼容旧数据）；
+  并用于 `get_llm` / `get_image` / `test_llm_connection`，确保运行时与测试对新旧配置都正确。
+- 移除原「厂商标定地址不可修改」「厂商专属文档链接」等厂商耦合逻辑；通用图像/视频协议的「自定义端点」字段保留。
+
+**验证**
+- 后端 `_resolve_protocol` 单测：协议串（openai/anthropic/gemini/openai-image/generic-image/dashscope-maas-image/generic-video）原样返回；
+  旧厂商 key（google→gemini、dalle3→openai-image、wanx→generic-image）正确回退。
+- 前端 `tsc --noEmit` 与 `npm run build` 通过（49 模块）。
+- `llm_catalog.py` / `providers.py` / `routers.py` `py_compile` 通过。
+
+**线上运维配合**
+- 无。旧配置（provider 存厂商 key）仍可正常解析与运行，无需迁移。

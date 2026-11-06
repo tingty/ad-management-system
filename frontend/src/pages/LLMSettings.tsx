@@ -23,6 +23,56 @@ const PROTOCOL_LABEL: Record<string, string> = {
 }
 const MODALITY_LABEL: Record<string, string> = { text: '文本大模型', image: '文生图大模型', video: '文生视频大模型' }
 
+// 「接口协议」选项（替代原「大模型厂商」下拉）：用户只需选择 API 类型，
+// 模型版本（Model）、Key、链接均自行填写，不再强制从厂商目录里挑一个“大模型名称”。
+// provider 字段直接存储协议串（openai / anthropic / gemini …），后端据此解析鉴权方式。
+type ProtocolOption = {
+  key: string
+  name: string
+  modality: 'text' | 'image' | 'video'
+  default_base_url: string
+  model_placeholder: string
+  models: string[]
+  api_key_label: string
+  api_key_placeholder: string
+  notes?: string
+  setup_guide?: string
+  extra_fields?: { key: string; label: string; placeholder?: string; hint?: string }[]
+}
+const PROTOCOL_OPTIONS: ProtocolOption[] = [
+  { key: 'openai', name: 'OpenAI 兼容（GPT / DeepSeek / 通义 / Kimi / 本地 vLLM …）', modality: 'text',
+    default_base_url: 'https://api.openai.com/v1', model_placeholder: 'gpt-4o-mini',
+    models: ['gpt-4o', 'gpt-4o-mini', 'o1', 'o3-mini'], api_key_label: 'API Key', api_key_placeholder: 'sk-...',
+    notes: '最通用的 OpenAI 兼容协议（/chat/completions），绝大多数第三方网关与自建服务均兼容此格式。' },
+  { key: 'anthropic', name: 'Anthropic（Claude）', modality: 'text',
+    default_base_url: 'https://api.anthropic.com', model_placeholder: 'claude-3-5-sonnet-latest',
+    models: ['claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest', 'claude-3-opus-latest'],
+    api_key_label: 'Anthropic API Key', api_key_placeholder: 'sk-ant-...',
+    notes: '使用 Anthropic Messages API（x-api-key 头）。' },
+  { key: 'gemini', name: 'Google Gemini', modality: 'text',
+    default_base_url: 'https://generativelanguage.googleapis.com/v1beta', model_placeholder: 'gemini-1.5-pro',
+    models: ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.0-flash'], api_key_label: 'Gemini API Key', api_key_placeholder: 'AIza...',
+    notes: '请求地址需带 ?key= 参数，后端自动拼接。' },
+  { key: 'openai-image', name: '文生图 · OpenAI 图像（DALL·E 3/2）', modality: 'image',
+    default_base_url: 'https://api.openai.com/v1', model_placeholder: 'dall-e-3',
+    models: ['dall-e-3', 'dall-e-2'], api_key_label: 'OpenAI API Key', api_key_placeholder: 'sk-...',
+    notes: '标准 OpenAI 图像协议，后端自动 POST /images/generations 并裁剪到目标尺寸。' },
+  { key: 'dashscope-maas-image', name: '文生图 · 阿里 DashScope（万相 / qwen-image）', modality: 'image',
+    default_base_url: 'https://dashscope.aliyuncs.com/api/v1', model_placeholder: 'wanx2.1-t2i-turbo',
+    models: ['wanx2.1-t2i-turbo', 'wanx2.1-t2i-plus', 'qwen-image'], api_key_label: 'DashScope API Key', api_key_placeholder: 'sk-...',
+    notes: '阿里云 MaaS 多模态生成，请求体为 messages 数组，需立即下载签名 OSS 结果。' },
+  { key: 'generic-image', name: '文生图 · 通用兼容（SD / 通义万相 / Replicate …）', modality: 'image',
+    default_base_url: 'https://', model_placeholder: 'your-image-model',
+    models: [], api_key_label: 'API Key', api_key_placeholder: 'sk-...',
+    notes: '通用图像端点，POST {base_url}{endpoint}，默认 /images/generations；不同厂商路径与字段差异大，可在下方填写自定义端点。',
+    extra_fields: [{ key: 'endpoint', label: '自定义端点路径（可选）', placeholder: '/images/generations 或 /sdapi/v1/txt2img', hint: '留空使用默认端点；Stable Diffusion 等需填 /sdapi/v1/txt2img。' }] },
+  { key: 'generic-video', name: '文生视频 · 通用兼容', modality: 'video',
+    default_base_url: 'https://', model_placeholder: 'your-video-model',
+    models: [], api_key_label: 'API Key', api_key_placeholder: 'sk-...',
+    notes: '通用视频端点，多数视频模型为异步任务，测试仅验证可达性与鉴权。',
+    extra_fields: [{ key: 'endpoint', label: '自定义端点路径（可选）', placeholder: '/video/generations', hint: '留空使用默认端点 /video/generations。' }] },
+]
+
 type FormState = {
   name: string
   provider: string
@@ -65,7 +115,7 @@ export default function LLMSettings() {
   }
   useEffect(() => { load() }, [])
 
-  const preset = allPresets.find(p => p.key === form.provider)
+  const preset = PROTOCOL_OPTIONS.find(p => p.key === form.provider) || allPresets.find(p => p.key === form.provider)
   const modality = preset?.modality || 'text'
   const usageOptions = USAGE_BY_MODALITY[modality] || USAGE_BY_MODALITY.text
 
@@ -76,17 +126,19 @@ export default function LLMSettings() {
   const closeModal = () => { setModalOpen(false); setErr(''); setOk('') }
 
   const onPickProvider = (key: string) => {
-    const p = allPresets.find(x => x.key === key)
-    setForm(f => ({
-      ...f,
-      provider: key,
-      base_url: p?.default_base_url || '',
-      model: p?.models?.[0] || '',
-      // 切换厂商后用途按模态重置为默认选项
-      usages: defaultUsagesFor(p?.modality || 'text'),
-      // 重置附加字段占位（保留已填值以便再次切换回填）
-      params: Object.fromEntries((p?.extra_fields || []).map(ef => [ef.key, f.params[ef.key] || ''])),
-    }))
+    const p = PROTOCOL_OPTIONS.find(x => x.key === key)
+    setForm(f => {
+      // 仅当链接为空或仍为某个协议的默认值（即用户未手动改过）时，才用新协议默认链接覆盖
+      const isBlankOrDefault = !f.base_url || PROTOCOL_OPTIONS.some(o => o.default_base_url === f.base_url)
+      return {
+        ...f,
+        provider: key,
+        base_url: isBlankOrDefault ? (p?.default_base_url || '') : f.base_url,
+        model: f.model, // 模型版本由用户自行填写，切换协议不覆盖
+        usages: defaultUsagesFor(p?.modality || 'text'),
+        params: Object.fromEntries((p?.extra_fields || []).map(ef => [ef.key, f.params[ef.key] || ''])),
+      }
+    })
   }
 
   const toggleUsage = (v: string) => {
@@ -130,7 +182,7 @@ export default function LLMSettings() {
   const save = async (): Promise<ModelConfig | null> => {
     setErr(''); setOk('')
     if (!form.name.trim()) { setErr('请填写「名称」，便于区分不同配置。'); return null }
-    if (!form.provider) { setErr('请选择「大模型」。'); return null }
+    if (!form.provider) { setErr('请选择「接口协议」。'); return null }
     if (form.usages.length === 0) { setErr('请至少选择一个「用途」。'); return null }
     if (!form.api_key?.trim() || !form.model?.trim() || !form.base_url?.trim()) {
       setErr('请先填写 API Key、模型请求链接与模型版本（Model）三项必填内容。')
@@ -158,14 +210,14 @@ export default function LLMSettings() {
     const saved = await save()
     if (!saved) return
     setOk('已保存配置，正在发起第一次连通测试…')
-    await runTest({ provider: saved.provider, api_key: saved.api_key, base_url: saved.base_url,
+    await runTest({ provider: saved.provider, protocol: saved.provider, api_key: saved.api_key, base_url: saved.base_url,
                     model: saved.model, endpoint: form.params?.endpoint })
   }
   const testOnly = async () => {
     if (!form.api_key?.trim() || !form.model?.trim() || !form.base_url?.trim()) {
       setErr('请先填写 API Key、模型请求链接与模型版本（Model）。'); return
     }
-    await runTest({ provider: form.provider, api_key: form.api_key, base_url: form.base_url,
+    await runTest({ provider: form.provider, protocol: form.provider, api_key: form.api_key, base_url: form.base_url,
                     model: form.model, endpoint: form.params?.endpoint })
   }
 
@@ -175,63 +227,38 @@ export default function LLMSettings() {
   }
 
   // 自定义下拉（替代原生 <select>）：在弹窗/webview 中原生 select 下拉可能被裁剪/不弹出，
-  // 这里用绝对定位的浮层渲染，保证厂商列表一定可见、可点选。
-  const ProviderSelect = ({ value, presets, onPick }: {
-    value: string; presets: ModelPreset[]; onPick: (key: string) => void
+  // 这里用绝对定位的浮层渲染，保证选项一定可见、可点选。本组件改为选择「接口协议」而非厂商。
+  const ProtocolSelect = ({ value, options, onPick }: {
+    value: string; options: ProtocolOption[]; onPick: (key: string) => void
   }) => {
     const [open, setOpen] = useState(false)
-    const [q, setQ] = useState('')
     const ref = useRef<HTMLDivElement>(null)
     useEffect(() => {
       const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
       document.addEventListener('mousedown', h)
       return () => document.removeEventListener('mousedown', h)
     }, [])
-    const sel = presets.find(p => p.key === value)
-    const modOf = (p: ModelPreset) => p.modality || 'text'
-    const groups: { label: string; items: ModelPreset[] }[] = [
-      { label: '★ 主流大模型（推荐）', items: presets.filter(p => p.mainstream) },
-      { label: '文本大模型（其他）', items: presets.filter(p => modOf(p) === 'text' && !p.mainstream) },
-      { label: MODALITY_LABEL.image, items: presets.filter(p => modOf(p) === 'image') },
-      { label: MODALITY_LABEL.video, items: presets.filter(p => modOf(p) === 'video') },
-    ].filter(g => g.items.length > 0)
-    const ql = q.trim().toLowerCase()
-    const vis = groups.map(g => ({
-      ...g,
-      items: g.items.filter(p => !ql || p.name.toLowerCase().includes(ql) || p.key.toLowerCase().includes(ql)),
-    })).filter(g => g.items.length > 0)
+    const sel = options.find(p => p.key === value)
+    const ordered = [...options].sort((a, b) => (a.modality === b.modality ? 0 : a.modality === 'text' ? -1 : a.modality === 'image' ? 1 : 2))
     return (
       <div className="provider-select" ref={ref}>
         <button type="button" className={'ps-trigger' + (sel ? '' : ' placeholder')} onClick={() => setOpen(o => !o)}>
-          <span>{sel ? sel.name : '— 请选择大模型 —'}</span>
+          <span>{sel ? sel.name : '— 请选择接口协议 —'}</span>
           <span className="ps-caret">▾</span>
         </button>
         {open && (
           <div className="ps-pop">
-            <input
-              className="ps-search"
-              placeholder="搜索厂商 / 模型名…"
-              value={q}
-              autoFocus
-              onChange={e => setQ(e.target.value)}
-            />
             <div className="ps-list">
-              {vis.length === 0 && <div className="ps-empty">无匹配的厂商</div>}
-              {vis.map(g => (
-                <div key={g.label} className="ps-group">
-                  <div className="ps-group-label">{g.label}</div>
-                  {g.items.map(p => (
-                    <button
-                      type="button"
-                      key={p.key}
-                      className={'ps-opt' + (p.key === value ? ' on' : '')}
-                      onClick={() => { onPick(p.key); setOpen(false); setQ('') }}
-                    >
-                      <span className="ps-name">{p.name}</span>
-                      <span className="ps-proto">{PROTOCOL_LABEL[p.protocol] || p.protocol}</span>
-                    </button>
-                  ))}
-                </div>
+              {ordered.map(p => (
+                <button
+                  type="button"
+                  key={p.key}
+                  className={'ps-opt' + (p.key === value ? ' on' : '')}
+                  onClick={() => { onPick(p.key); setOpen(false) }}
+                >
+                  <span className="ps-name">{p.name}</span>
+                  <span className="ps-proto">{MODALITY_LABEL[p.modality]}</span>
+                </button>
               ))}
             </div>
           </div>
@@ -253,12 +280,12 @@ export default function LLMSettings() {
             <thead><tr><th>名称</th><th>大模型</th><th>用途</th><th>模型版本</th><th>请求链接</th><th>状态</th><th>操作</th></tr></thead>
             <tbody>
               {list.map(m => {
-                const p = allPresets.find(x => x.key === m.provider)
+                const p = PROTOCOL_OPTIONS.find(x => x.key === m.provider) || allPresets.find(x => x.key === m.provider)
                 const us = (m.usages && m.usages.length ? m.usages : (m.usage ? [m.usage] : []))
                 return (
                   <tr key={m.id}>
                     <td>{m.name || <span className="muted">未命名</span>}</td>
-                    <td>{p?.name || m.provider}</td>
+                    <td>{p?.name || PROTOCOL_LABEL[m.provider] || m.provider}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                         {us.map(u => <span key={u} className="usage-tag">{USAGE_LABEL[u] || u}</span>)}
@@ -290,21 +317,21 @@ export default function LLMSettings() {
             <input type="text" value={form.name} placeholder="如：阿里通义-主分析 / 自建GPU-文生图"
                    onChange={e => setForm({ ...form, name: e.target.value })} autoFocus />
 
-            <label>大模型（下拉选择厂商）</label>
-            <ProviderSelect
+            <label>接口协议（API 类型，非大模型名称）</label>
+            <ProtocolSelect
               value={form.provider}
-              presets={allPresets}
+              options={PROTOCOL_OPTIONS}
               onPick={onPickProvider}
             />
 
             {preset && (
               <div className="provider-line">
-                <span className={'proto proto-' + preset.protocol}>{PROTOCOL_LABEL[preset.protocol] || preset.protocol}</span>
+                <span className={'proto proto-' + (form.provider.includes('image') ? 'openai-image' : form.provider.includes('video') ? 'generic-video' : form.provider)}>{MODALITY_LABEL[preset.modality]}</span>
                 {preset.notes && <span className="muted">{preset.notes}</span>}
               </div>
             )}
 
-            <label>模型版本（公司与版本号，如 qwen-max / dall-e-3）</label>
+            <label>模型版本（公司与版本号，如 gpt-4o-mini / claude-3-5-sonnet-latest / dall-e-3）</label>
             <input type="text" value={form.model} placeholder={preset?.model_placeholder || '如 gpt-4o-mini'}
                    onChange={e => setForm({ ...form, model: e.target.value })} />
             {preset?.models && preset.models.length > 0 && (
@@ -328,17 +355,14 @@ export default function LLMSettings() {
             <label>模型请求链接（Base URL）</label>
             <input type="text" value={form.base_url}
                    onChange={e => setForm({ ...form, base_url: e.target.value })}
-                   placeholder="https://..." disabled={!!preset && preset.base_url_editable === false} />
-            {preset && preset.base_url_editable === false && (
-              <div className="muted" style={{ fontSize: 12 }}>该厂商标定地址，不可修改。</div>
-            )}
+                   placeholder="https://..." />
 
             <label>{preset?.api_key_label || 'API Key'}</label>
             <input type="password" value={form.api_key}
                    onChange={e => setForm({ ...form, api_key: e.target.value })}
                    placeholder={preset?.api_key_placeholder || 'sk-...'} />
 
-            {/* 厂商专属附加字段（如自定义端点），按 preset.extra_fields 动态渲染 */}
+            {/* 协议专属附加字段（如通用图像/视频的自定义端点），按 extra_fields 动态渲染 */}
             {preset?.extra_fields?.map(ef => (
               <div key={ef.key}>
                 <label>{ef.label}</label>
@@ -350,7 +374,6 @@ export default function LLMSettings() {
             ))}
 
             {preset?.setup_guide && <div className="guide">📋 {preset.setup_guide}</div>}
-            {preset?.docs_url && <a className="doc-link" href={preset.docs_url} target="_blank" rel="noreferrer">查看官方配置文档 ↗</a>}
 
             {modality === 'image' && (
               <div className="guide">🖼️ 文生图大模型：保存后生成素材时，将按创意方向 / 风格 / 配色自动产出背景底图。</div>
