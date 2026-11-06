@@ -878,6 +878,31 @@
 - 认证调用 `GET /api/settings/models/presets?usage=all` 返回 62 条，每条均含 `mainstream` 与 `modality`，17 家主流标记正确。
 - 前端 `tsc --noEmit` 退出码 0、`npm run build` 通过（48 模块）。
 
+## V4.29 推广图中文乱码（tofu 方块）根治
+
+**需求**
+- 生成的推广图片中，中文文案被渲染成一排排空方块（豆腐块/tofu），英文（Apple / Genius Bar / Trade In）正常。要求排查主因、给出修复方案，并避免今后再次出现此类乱码文案。
+
+**根因**
+- `backend/imaging.py` 的字体候选列表硬编码了 macOS 字体路径（STHeiti / Hiragino / PingFang 等）。在 macOS 本机这些字体存在、中文可正常渲染；但部署到 Linux 服务器（生产环境）后，这些路径全部不存在，最终回退到 `ImageFont.load_default()`——该内置字体仅含基础拉丁字母，于是所有中文字符被渲染成空方块。
+- 该失败是**静默**的：既不报错，也无告警，图片照常产出，导致乱码文案上线才被发现。
+
+**交付**
+- 动态字体发现：保留常见 macOS/Linux 路径，新增 fontconfig `fc-list` 兜底发现系统字体；候选顺序将 CJK 字体排在拉丁字体之前，确保中文优先命中 CJK 字体。
+- 逐字符字体回退：`_draw_text()` 对每个字符独立挑选能渲染它的字体，中英文混排不再串字体、不再出方块。
+- 精确缺字检测：引入 `fontTools` 读取字体字符映射（cmap）判断字符是否真实存在；内置默认字体仅视为含 ASCII。缺字字符被**安全跳过**（而非渲染成方块），并打出 `WARNING` 明确指出被跳过的字符，便于定位与避免静默乱码。
+- `backend/requirements.txt` 增加 `fonttools>=4.38` 依赖。
+
+**验证**
+- 正常环境（含 CJK 字体）：1080x1920 / 1200x628 / 320x50 三种尺寸混合中英文渲染均无方块，中文完整可读。
+- 退化环境 A（部署机零字体 → 仅 `load_default`）：原 bug 场景，现不再出方块，改为跳过中文并输出 `WARNING` 指明缺失字符（如「苹果以旧换新」「天才吧」等）。
+- 退化环境 B（部署机仅有拉丁字体如 DejaVu/Arial Bold）：CJK 字符经 cmap 检测确认缺字后同样被跳过并告警，杜绝静默豆腐块。
+- 字形检测准确性：STHeiti 对 `中` → True；默认字体对 `中` → False；默认字体对 `A` → True。
+- `backend/imaging.py` `py_compile` 通过；已提交并推送 `e00390b`。
+
+**线上仍需运维配合**
+- 若部署服务器（Linux）本身未安装任何 CJK 字体，代码会跳过中文而非显示方块——要真正显示中文，需在部署机安装 CJK 字体（如 `apt-get install -y fonts-noto-cjk` 或 `fonts-wqy-zenhei`），重启后端即可被自动发现。
+
 ## V4.20 403 提示识别 MaaS 工作空间 access_denied
 
 - `backend/llm_catalog.py`：`_classify_error` 的 403 分支检测 body 中的 workspace / access_denied，给出 MaaS 工作空间专属 Key 指引（ws-*.maas.aliyuncs.com / llm-*.maas.aliyuncs.com 需绑定工作空间的专用 Key，且区域需一致）。
