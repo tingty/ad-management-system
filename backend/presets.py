@@ -175,6 +175,82 @@ STYLE_TO_BG: dict[str, str] = {
 }
 
 
+# ----------------------------- 风格键 → 文生图视觉描述 -----------------------------
+# 文生图大模型（qwen-image 等）无法理解 Pillow 风格键（如 "cyber"/"split"），
+# 需要把它翻译成模型能落地的具体视觉描述。这里把 STYLE_KEYS 逐一映射成
+# 英文画面说明，拼接进 _build_image_prompt，让所选「内容风格 / 创意方向」真正改变背景。
+STYLE_VISUAL: dict[str, str] = {
+    "gradient": "smooth diagonal color gradient backdrop with soft light transition",
+    "radial": "radial glow emanating from center, luminous halo fading to dark edges",
+    "split": "bold diagonal split composition with two contrasting color blocks colliding",
+    "wave": "flowing wave-like curves and clean airy lines, fresh and light",
+    "halftone": "halftone dot pattern and pop-art texture, playful dot gradient",
+    "stripes": "diagonal stripes texture suggesting authentic user-generated realism",
+    "spotlight": "dramatic dark scene with a single spotlight beam on the subject, high contrast",
+    "light_panel": "clean light panel / soft card surface, bright trustworthy background",
+    "vignette": "immersive vignette darkening toward edges, atmospheric depth",
+    "solid": "solid brand-tone background, clean and focused, single dominant color",
+    "ink": "east-asian ink-wash painting mood, soft ink diffusion and negative space",
+    "oil": "oil-painting texture with classical chiaroscuro and rich brushwork",
+    "cyber": "neon-lit cyberpunk cityscape, glowing blue-purple grid lines, futuristic",
+    "retro": "retro film grain, light leaks and vintage color grading, nostalgic",
+    "vapor": "vaporwave pink-purple gradient with grid horizon and classical sculpture silhouette",
+    "pixel": "8-bit pixel art blocks with retro game palette, chunky pixelated shapes",
+    "paper": "hand-drawn paper doodle texture, sketchy lines, casual youthful feel",
+    "neon": "neon glow and light-pollution color streaks, energetic night-city vibe",
+    "glitch": "glitch art with RGB channel split and digital displacement, avant-garde",
+    "geo": "geometric shapes and generous negative space, rational minimalist order",
+}
+
+
+def style_visual(key: str) -> str:
+    """风格键 → 文生图可用的英文视觉描述；未知键回退中性描述。"""
+    return STYLE_VISUAL.get(key) or "modern advertising visual backdrop"
+
+
+# ----------------------------- 创意方向 → 文生图情绪描述 -----------------------------
+# 文生图提示词按「创意方向」区分画面情绪/构图意图。把 D01-D20 翻译成简短英文情绪，
+# 让不同方向产出情绪不同的背景（痛点=暗场张力，促销=对撞冲击，对比=左右对照…）。
+DIRECTION_MOOD: dict[str, str] = {
+    "D01": "benefit-forward: clean hero shot of the product with its core value made obvious",
+    "D02": "pain-point awakening: dark tense scene amplifying the cost of not having the solution",
+    "D03": "scenario immersion: real-life usage environment the viewer can step into",
+    "D04": "trust building: authoritative badges, charts and certification cues, credible",
+    "D05": "limited-time promo: high-impact discount energy, urgency and celebration",
+    "D06": "before-vs-after comparison: clear left/right contrast of old vs new",
+    "D07": "user testimonial: authentic, candid real-person vibe, social proof",
+    "D08": "trendy cultural: oriental or street-culture symbols, youthful and festive",
+    "D09": "minimal luxury: generous negative space, restrained elegant single subject",
+    "D10": "tech futurism: glowing tech-blue, grid lines and forward-looking sci-fi mood",
+    "D11": "lifestyle aspiration: desirable free and refined way of living, product as part of it",
+    "D12": "festive mood: holiday colors and symbols, warm celebratory impulse",
+    "D13": "authority data: huge statistic number as the dominant subject, professional",
+    "D14": "humor: light-hearted exaggerated contrast that lowers ad feel",
+    "D15": "emotional resonance: touching story moment that earns memory",
+    "D16": "identity belonging: circle/tribe symbols, 'this is me' belonging",
+    "D17": "scarcity urgency: low stock / rushing energy, immediate action",
+    "D18": "new arrival: fresh launch excitement, debut exclusivity",
+    "D19": "localization: local cultural symbols and language cues, familiar and relevant",
+    "D20": "KOL same-style: creator unboxing / review vibe, follow-the-trend energy",
+}
+
+
+def palette_prompt(palette: dict | None) -> str:
+    """调色板覆盖 → 文生图可用的颜色描述（如 'warm orange #FF8A1E on deep brown #2A1402'）。"""
+    if not isinstance(palette, dict):
+        return ""
+    accent = palette.get("accent")
+    bg1 = palette.get("bg1")
+    out = []
+    if accent:
+        out.append(f"accent color {accent}")
+    if bg1:
+        out.append(f"background base {bg1}")
+    if not out:
+        return ""
+    return "Color palette: " + ", ".join(out) + "."
+
+
 # ----------------------------- 配色 → 渲染调色板覆盖 -----------------------------
 # 十六进制调色板。字段：accent 强调色 / bg1 背景主色 / bg2 背景次色 /
 # fg 正文色 / sub 次要文字色 / card 卡片色 / on_accent 强调底上的文字色 / light 是否浅底。

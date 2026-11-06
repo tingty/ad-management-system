@@ -1,0 +1,36 @@
+request_id: "7286c3f0a43b"
+entry_type: full_pipeline
+created_at: "2026-11-04T14:16:00+08:00"
+updated_at: "2026-11-04T14:16:00+08:00"
+output_docx_path: "/Users/leson/Workbuddy/素材管理与生成工具/ad-material-platform/output/7286c3f0a43b/stage3/素材创作模块功能优化说明书.docx"
+output_docx_user_specified: false
+current_stage: 1
+stages:
+  stage_0:
+    status: completed
+    resolved_output: true
+  stage_1:
+    status: completed
+    completed_at: "2026-11-04T14:22:00+08:00"
+    output_path: "stage1/final_draft.md"
+    genre: general
+    expert_used: general-writer
+    route_tag: general_writing
+  stage_2:
+    status: completed
+    completed_at: "2026-11-04T14:30:00+08:00"
+    output_path: "stage2/formatted-素材创作模块功能优化说明书.html"
+    output_format: html
+    route: html
+    html_sub: template
+    template_used: business-report
+
+  stage_3:
+    status: completed
+    completed_at: "2026-11-04T14:32:00+08:00"
+    executor: doc-converter
+    skill_used: ["html-to-doc"]
+    output_path: "stage3/素材创作模块功能优化说明书.docx"
+    present_files_opened: true
+    fallback: false
+consistency_check: {}

@@ -812,6 +812,67 @@ def paint_background(c: Canvas, style: str, pal: dict, light: bool = False):
         c.blobs(pal["accent"], 2, 22)
 
 
+def _style_motif(c: Canvas, dstyle: str, pal: dict):
+    """在 AI 底图（已叠加 scrim）之上，以低透明度叠加一层风格母题，保留「方向/风格」的视觉签名。
+
+    当文生图模型较弱、产出的背景千篇一律时，这层母题保证不同方向/风格的素材背景仍能看出差异
+    （痛点=暗角聚光、促销=对撞色块、对比=分栏、科技=网格…）。透明度刻意压低，不破坏 AI 底图质感。
+    父函数须在本函数返回后重新绑定 c.d = ImageDraw.Draw(c.img)，否则后续文字会画到旧图层。
+    """
+    w, h = c.w, c.h
+    accent = tuple(int(x) for x in pal.get("accent", DEFAULT_ACCENT))
+    A = 34  # 约 13% 透明度上限
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(overlay)
+    if dstyle == "spotlight":
+        cx, cy = w // 2, int(h * 0.42)
+        r = int(min(w, h) * 0.6)
+        for i in range(r, 0, -max(2, r // 60)):
+            d.ellipse([cx - i, cy - i, cx + i, cy + i],
+                      fill=(255, 255, 255, int(A * (1 - i / r))))
+    elif dstyle == "vignette":
+        band = int(min(w, h) * 0.2)
+        d.rectangle([0, 0, w, band], fill=(0, 0, 0, A))
+        d.rectangle([0, h - band, w, h], fill=(0, 0, 0, A))
+        d.rectangle([0, 0, band, h], fill=(0, 0, 0, A))
+        d.rectangle([w - band, 0, w, h], fill=(0, 0, 0, A))
+    elif dstyle in ("split", "stripes"):
+        step = max(40, int(w * 0.06))
+        for x in range(0, w, step):
+            d.rectangle([x, 0, x + step // 2, h], fill=(*accent, A))
+    elif dstyle == "cyber":
+        step = max(60, int(w * 0.09))
+        for x in range(0, w, step):
+            d.line([(x, 0), (x, h)], fill=(*accent, A // 2), width=2)
+        for y in range(0, h, step):
+            d.line([(0, y), (w, y)], fill=(*accent, A // 2), width=2)
+    elif dstyle == "radial":
+        cx, cy = w // 2, h // 2
+        r = int(min(w, h) * 0.5)
+        for i in range(r, 0, -max(3, r // 50)):
+            d.ellipse([cx - i, cy - i, cx + i, cy + i],
+                      outline=(*accent, int(A * (1 - i / r))), width=3)
+    elif dstyle == "wave":
+        for y in range(0, h, max(30, int(h * 0.05))):
+            off = int(18 * (1 if (y // 60) % 2 == 0 else -1))
+            d.line([(0, y + off), (w, y)], fill=(*accent, A // 2), width=2)
+    elif dstyle == "halftone":
+        r = max(6, int(w * 0.01))
+        gap = r * 3
+        for y in range(r, h, gap):
+            for x in range(r, w, gap):
+                d.ellipse([x - r, y - r, x + r, y + r], fill=(*accent, A // 2))
+    elif dstyle == "geo":
+        for i in range(4):
+            d.polygon([(w * (i * 0.25), 0), (w * (i * 0.25 + 0.12), 0),
+                       (w * (i * 0.25 + 0.06), h), (w * (i * 0.25 - 0.06), h)],
+                      fill=(*accent, A // 3))
+    else:
+        return  # 其余风格保持 AI 底图原样，不加母题
+    c.img = Image.alpha_composite(c.img.convert("RGBA"), overlay).convert("RGB")
+    c.d = ImageDraw.Draw(c.img)
+
+
 # ----------------------------- 版式判定 -----------------------------
 def _zones_base(c: Canvas):
     """按版位返回 (主体框, 文本框)；横幅由调用方单独处理。"""
@@ -1063,6 +1124,7 @@ def render_creative(out_path, w, h, data: dict) -> str:
                 for x in range(w):
                     mp[x, y] = a
             c.img = Image.composite(black, base, mask).convert("RGB")
+            c.d = ImageDraw.Draw(c.img)  # 重新绑定绘图上下文，否则后续文字会画到旧图层（丢失文案）
             ai_bg = True
         except Exception:
             ai_bg = False
@@ -1077,6 +1139,11 @@ def render_creative(out_path, w, h, data: dict) -> str:
         if palette_override:
             lpal = _apply_palette(lpal, palette_override)
         c.pal = lpal
+
+    # AI 底图已就位：在其上叠加一层低透明度风格母题，保留方向/风格的视觉签名，
+    # 避免背景千篇一律。非 AI 底图时由下方各模板分支的 paint_background 负责风格。
+    if ai_bg:
+        _style_motif(c, dstyle, c.pal)
 
     if kind == "banner":
         paint_background(c, dstyle, pal) if not ai_bg else None if not ai_bg else None

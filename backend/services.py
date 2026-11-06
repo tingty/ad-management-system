@@ -22,8 +22,10 @@ from insight import analyze_local, detect_lang
 from creative import (ANGLE_LIBRARY, ANGLE_MAP, COPY_SCHEMA, build_copy_kit, map_to_platform,
                       copy_text, validate_copy, char_table, flag_duplicates, fit_text,
                       build_keywords, keyword_text)
-from render import render_creative, render_keyframe
+from render import render_creative, render_keyframe, ANGLE_DESIGN
 from validation import build_validation
+from presets import (build_directives, creative_presets_payload, style_visual,
+                     palette_prompt, DIRECTION_MOOD)
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 IMAGE_MAX_SIZES = int(os.getenv("IMAGE_SIZES_PER_PLATFORM", "4"))
@@ -46,6 +48,9 @@ SYS_SITE_ANALYSIS = (
     '  "proof": {"summary": str, "metrics": [{"value": str, "kind": "rating|price|ratio|multiple|scale|other", '
     '"label": str}], "endorsements": [str], "credibility": str},\n'
     '  "audience": {"primary": str, "demographics": str, "pain_points": [str], "secondary": str},\n'
+    '  "geo": "目标投放地区（如 北美, 拉美, 东南亚；依正文语言/提及地区/业务成熟度独立判断，'
+    '无明确信号写 全球 或 T1 英语区）",\n'
+    '  "languages": ["目标语言代码 en/es/pt/id/zh 等，依正文语言与受众判断，不要照搬本地抽取"],\n'
     '  "page": {"sections": [str], "structure_note": str, "conversion_path": str, '
     '"primary_cta": str, "tone": str},\n'
     '  "channel": {平台名: {"tactics": str, "hook": str, "selling_point": str, "compliance_note": str}},\n'
@@ -76,7 +81,11 @@ SYS_SITE_ANALYSIS = (
     "10. target_clients 必须区分两类：toc=终端用户及其需求；tob=它服务的企业/广告主/渠道方，并分别写出 advertiser(广告主)/channel(渠道或代理)/media(流量主或媒体)各自的核心诉求（如：需要更多优质广告主、需要稳定流量供给、需要更高的 eCPM/填充率）。\n"
     "11. appeal_highlights 写 2-3 条「对目标客户最有吸引力的亮点/价值钩子」，是对方为什么该用它，而不是功能罗列。\n"
     "12. nine_elements 是「看懂这个网站是什么」的核心总结：industry=所处行业；type=网站/业务类型；category=主营产品品类；needs=解决谁的什么问题；solution=怎么解决；business_model=如何赚钱（广告变现/订阅/SaaS/佣金/CPA 等）；advantage_compare=相比竞品或传统方式好在哪；differentiation=别人没有的特色；purpose_summary=用一段话概括这个网站的核心目的。\n"
-    "13. extensions 是延伸输出：industry_insight=行业趋势与机会；competitors=主要竞品及对比；market_demand=目标市场需求规模与痛点；diff_solution=可落地的差异化打法；edge_advantage=特色优势；recommended_media=推荐投放的媒体/平台（如 Google/Facebook/TikTok/行业垂直媒体）；recommended_audience=推荐的目标人群标签。"
+    "13. extensions 是延伸输出：industry_insight=行业趋势与机会；competitors=主要竞品及对比；market_demand=目标市场需求规模与痛点；diff_solution=可落地的差异化打法；edge_advantage=特色优势；recommended_media=推荐投放的媒体/平台（如 Google/Facebook/TikTok/行业垂直媒体）；recommended_audience=推荐的目标人群标签。\n"
+    "14. geo 与 languages 必须由你独立判断：本地抽取常不准（如把全英文页误判成多语、把全球产品误判成单一地区），"
+    "请依据正文实际语言、明确提及的地区、产品成熟度给出真实判断，禁止照搬本地抽取事实。\n"
+    "15. channel 的 tactics 必须针对该产品/品类定制（结合卖点与合规），不要复述通用的平台操作手册；"
+    "至少覆盖 Facebook/Google/TikTok/Unity/AppLovin/Moloco/Mintegral/Adsterra。"
 )
 
 # 旧版基础框架提示词（仅用于兼容，已被 SYS_SITE_ANALYSIS 取代）；保留常量避免引用断裂。
@@ -251,23 +260,48 @@ def _size_wh(size: str):
 
 
 def _build_image_prompt(fw, key: str, design: dict, directives: dict, lang: str) -> str:
-    """把创意方向 / 风格 / 配色 / 角度，拼成一句文生图提示词（背景层，不含文字）。"""
+    """把创意方向 / 内容风格 / 配色 / 角度，拼成一句**具体可区分**的文生图提示词（背景层，不含文字）。
+
+    关键改进：不再只把 Pillow 风格键（"cyber"/"split"）和中文内容描述丢给图像模型，
+    而是把风格键翻译成具体英文视觉描述、把配色翻译成 hex 颜色、把创意方向翻译成情绪/构图意图，
+    并按角度叠加不同情绪——让选不同方向/风格/配色时，AI 背景真正不同。
+    """
     design = design or {}
-    styles = ", ".join(design.get("styles") or []) or "modern advertising"
-    tone = (design.get("tone") or "").strip()
-    color_hint = ""
-    if directives:
-        color_hint = " ".join(filter(None, [
-            directives.get("color_text") or "", directives.get("style_text") or ""])).strip()
+    directives = directives or {}
+    raw_styles = design.get("styles") or []
+    if isinstance(raw_styles, str):
+        raw_styles = [raw_styles]
+    style_keys = [s for s in raw_styles if isinstance(s, str)]
+    # 风格键 → 具体英文视觉描述（最多取 3 个，制造层次）
+    style_desc = "; ".join(style_visual(s) for s in style_keys[:3]) or "modern advertising visual backdrop"
+
+    # 创意方向 → 英文情绪/构图意图（按方向制造差异）
+    dir_id = directives.get("direction_id") or ""
+    dir_mood = DIRECTION_MOOD.get(dir_id, "")
+    # 角度 → 各自情绪（ANGLE_DESIGN.tone），同一批次不同角度背景不同
     angle_name = ANGLE_MAP.get(key, {}).get("name", key)
-    return (
-        f"High-quality advertising background visual for the product '{fw.product}', "
-        f"creative angle: {angle_name}. Visual style: {styles}. "
-        f"Mood and design intent: {tone}. {color_hint} "
-        f"No text, no logo, no letters, no watermark, no UI. Clean composition with negative space, "
-        f"suitable as a backdrop for overlaid advertising copy. "
-        f"Photorealistic or illustrative consistent with the stated style."
-    )
+    angle_tone = (ANGLE_DESIGN.get(key) or ANGLE_DESIGN["benefit"]).get("tone", "")
+    tone = (design.get("tone") or "").strip()
+    # 配色 → 具体 hex 描述
+    palette_text = palette_prompt(design.get("palette"))
+
+    parts = [
+        f"High-quality advertising background visual for the product '{fw.product}'.",
+        "No text, no logo, no letters, no watermark, no UI; clean negative space for overlaid ad copy.",
+    ]
+    if dir_mood:
+        parts.append(f"Creative direction mood: {dir_mood}.")
+    parts.append(f"Visual style: {style_desc}.")
+    if palette_text:
+        parts.append(palette_text)
+    if angle_tone:
+        parts.append(f"Angle '{angle_name}': {angle_tone}.")
+    elif tone:
+        parts.append(f"Design intent: {tone}.")
+    parts.append(
+        "Photorealistic or illustrative, consistent with the described style, high detail, "
+        "professional advertising quality.")
+    return " ".join(parts)
 
 
 def _cleanup_ai_bgs():
@@ -413,9 +447,9 @@ def build_site_prompt(page: dict, text: str, facts: dict, url: str = "") -> str:
         f"H1={page.get('h1') or '无'}；H2={page.get('h2') or '无'}；"
         f"CTA={page.get('ctas') or '无'}；META描述={page.get('description') or '无'}\n"
         f"正文:\n{(text or '')[:4000]}\n\n"
-        "### 本地已抽取事实（JSON，以此为准，不要编造）\n"
+        "### 本地初步抽取事实（仅供参考，可能不准确，请以落地页正文独立判断并纠正）\n"
         f"{json.dumps(pf, ensure_ascii=False)}\n\n"
-        "请产出网站核心内容 JSON。"
+        "请基于正文与页面结构，独立产出网站核心内容 JSON；若本地抽取与正文矛盾，以正文为准。"
     )
 
 
@@ -507,15 +541,24 @@ async def analyze_site(db, page, text, facts, url: str = "") -> dict:
 
     真实模型可用时优先用真实模型；解析失败或无模型（走 Mock 兜底）时，
     由 `_local_site_analysis` 用本地事实构造结构化结果，保证下游报告始终有内容。
+
+    复用策略：优先专用「分析」模型；若未单独配置「分析」模型，但已配置「文案」文本模型，
+    则复用「文案」模型——避免仅配了一个大模型（如 qwen-plus）却让整段落地页分析默默走模板。
     """
     prompt = build_site_prompt(page, text, facts, url)
     llm = get_llm(db, "analysis")  # 真实模型（带 Mock 兜底）或 Mock
+    source_usage = "analysis"
+    if not has_real(db, "analysis") and has_real(db, "copy"):
+        llm = get_llm(db, "copy")
+        source_usage = "copy"
     try:
         resp = await llm.chat(get_prompt(db, "site_analysis"), prompt)
         sa = parse_json(resp)
         if isinstance(sa, dict) and sa.get("positioning"):
             # 只有「确实调用了真实模型且成功」才标 llm；FallbackLLM 静默回退 Mock 时如实标 mock。
-            sa["_source"] = "mock" if getattr(llm, "used_fallback", False) or not has_real(db, "analysis") else "llm"
+            real = has_real(db, source_usage)
+            sa["_source"] = "mock" if (getattr(llm, "used_fallback", False) or not real) else "llm"
+            sa["_source_usage"] = source_usage
             return sa
         print(f"[analyze_site] 模型返回无法解析为 9 模块 JSON（len={len(resp)}），回退本地构造")
     except Exception as e:
@@ -563,10 +606,42 @@ async def analyze_landing_page(db, url, text, page=None) -> Framework:
             data["metrics"] = ms
     if site.get("audience", {}).get("primary"):
         data["audience"] = site["audience"]["primary"]
+    # 大模型独立判断的 geo / languages：覆盖本地抽取的薄弱结论
+    if isinstance(site.get("geo"), str) and site["geo"].strip():
+        data["geo"] = site["geo"].strip()
+    if isinstance(site.get("languages"), list):
+        ll = [str(x) for x in site["languages"] if str(x).strip()]
+        if ll:
+            data["languages"] = ll
+    # 各平台打法：优先用大模型按产品定制的 channel，缺失平台用本地 PLATFORM_NOTES 兜底，
+    # 避免「所有同品类产品共用一套固定打法模板」。
+    if isinstance(site.get("channel"), dict) and site["channel"]:
+        local_notes = facts.get("platform_analysis") or {}
+        merged = {}
+        for plat in set(list(local_notes.keys()) + list(site["channel"].keys())):
+            ll = site["channel"].get(plat) or {}
+            merged[plat] = (ll.get("tactics") or "").strip() or local_notes.get(plat) or ""
+        merged = {k: v for k, v in merged.items() if v}
+        if merged:
+            data["platform_analysis"] = merged
     # 按本次分析的真实来源标注，不用「是否配置了模型」代替「是否真的用了模型」。
-    data["analyzer"] = "llm+local" if site.get("_source") == "llm" else "local"
+    src = site.get("_source", "local")
+    data["analyzer"] = ("llm+local" if src == "llm"
+                        else "mock+local" if src == "mock" else "local")
 
     evidence = dict(data.get("evidence") or {})
+    # 维度级来源标注：让投放人员一眼看出哪些是真实大模型分析、哪些仍是本地规则/模板兜底。
+    evidence["_sources"] = {
+        "product": src if src != "local" else "local",
+        "category": src if src != "local" else "local",
+        "selling_points": src if src != "local" else "local",
+        "metrics": src if src != "local" else "local",
+        "audience": src if src != "local" else "local",
+        "geo": "llm" if isinstance(site.get("geo"), str) and site["geo"].strip() else "local",
+        "languages": "llm" if isinstance(site.get("languages"), list) and site["languages"] else "local",
+        "platform_analysis": ("llm" if isinstance(site.get("channel"), dict) and site["channel"]
+                              else "local-template"),
+    }
     if page:
         # 页面结构单独存一份：报告需要，前端"抽取依据"也能看到
         evidence["page"] = {k: page.get(k) for k in _PAGE_META_KEYS + ("chars", "status", "fetched", "final_url")}

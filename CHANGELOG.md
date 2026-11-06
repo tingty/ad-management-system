@@ -701,6 +701,28 @@
 - `py_compile`：providers / llm_catalog 通过。
 - 端到端冒烟（真实 API）：`DashScopeMaaSImageProvider.generate` 产出 1024×1024 PNG（436KB，签名 URL 下载落盘）；`get_presets("image")` 含 `qwen-image-maas`；`image_protocol_of("qwen-image-maas")="dashscope-maas-image"`。
 
+## V4.22 落地页分析准确性 + 图片/视频背景差异化（审计与优化）
+
+**审计结论（用户原问：哪些是固定框架、哪些真用了大模型）**
+
+落地页分析实际由两段叠加，并非都走大模型：
+- **固定框架（本地规则，非大模型）**：`insight.py` 本地抽取——`product/category/audience/geo/languages/selling_points/metrics`，以及 `platform_analysis`（各平台打法，来自 `PLATFORM_NOTES` 按品类取模板）。`geo`/`languages`/`platform_analysis` **永远**来自本地，从不被大模型覆盖。
+- **真正的大模型分析（仅当配置了专用"分析"模型）**：`analyze_site` 产出 9 模块（`business_nature/nine_elements/extensions/target_clients/appeal_highlights/channel/risk/next_steps` 等）。**未单独配置"分析"模型时，整段 9 模块走 `MockLLM→_local_site_analysis` 模板占位**，且还会把 `category/audience/selling_points` 覆盖成通用模板值 → 表现为"很多维度不准确"。
+- 图片/视频：配置了文生图模型后，`_build_image_prompt` 只把风格键（如 `cyber`）+ 中文内容描述丢给模型，qwen-image 无法据此产出差异化背景；且 AI 底图贴上后 `render_creative` 直接跳过 Pillow 的 `paint_background`，导致 V4.16 精心设计的「方向→背景风格」差异化不可见 → 背景千篇一律，只有文案/文字色在变。
+
+**改动**
+
+1. 分析模型复用（修复"只配一个模型却全程模板"）：`analyze_site` 优先专用"分析"模型；未配置但有"文案"文本模型时，复用"文案"模型驱动真实分析（`_source_usage` 如实标注）。
+2. 解除本地事实锚定：`build_site_prompt` 把"以此为准，不要编造"改为"仅供参考，请以正文独立判断并纠正"，并新增 `geo`/`languages` 输出字段 + 约束（独立判断、禁止照搬本地抽取、各平台打法须按产品定制）。
+3. 维度回填：`analyze_landing_page` 现在接收大模型产出的 `geo`/`languages`，并用 LLM 的 `channel`（各平台打法）按平台合并进 `platform_analysis`（缺失平台用本地模板兜底），替代"同品类共用一套打法"。`evidence._sources` 增加维度级来源标注（llm / local / local-template）。
+4. 文生图提示词重写（`_build_image_prompt` + `presets.py`）：新增 `STYLE_VISUAL`（风格键→英文视觉描述）、`DIRECTION_MOOD`（创意方向→英文情绪）、`palette_prompt`（配色→hex 颜色描述）；提示词改为"方向情绪 + 风格视觉 + hex 配色 + 角度情绪"的具体可区分描述，按角度区分。
+5. AI 底图叠加风格母题（`render.py`）：新增 `_style_motif`，在 AI 底图 + scrim 之上以约 13% 透明度叠加方向/风格母题（暗角/聚光/对撞/网格等），保证即使图像模型较弱也能看出方向/风格差异。**同时修复一处潜在缺陷**：AI 底图就位后原先未重绑 `c.d`，会导致后续文案画到旧图层（文字丢失）；现已在合成后重绑 `c.d`。
+
+**验证**
+- `py_compile`：services / render / presets 全部通过；`import main` 65 路由正常。
+- 单元：文生图提示词生成含具体视觉词（"neon-lit cyberpunk"）与 hex（"#FF8A1E"）；`build_directives` 的 `design_overrides` 正确携带 `styles/palette`；geo/languages/platform_analysis 合并逻辑按 LLM 输出正确回填。
+- 渲染冒烟：`render_creative` 在「有 AI 底图」与「纯 Pillow」两条路径均生成成功；`_style_motif` 对全部 19 种风格键无崩溃。
+
 ## V4.20 403 提示识别 MaaS 工作空间 access_denied
 
 - `backend/llm_catalog.py`：`_classify_error` 的 403 分支检测 body 中的 workspace / access_denied，给出 MaaS 工作空间专属 Key 指引（ws-*.maas.aliyuncs.com / llm-*.maas.aliyuncs.com 需绑定工作空间的专用 Key，且区域需一致）。
