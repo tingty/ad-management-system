@@ -16,7 +16,7 @@ function modelLabel(m: ModelInfo): string {
   return `${m.provider} / ${m.model}${role}${fb}`
 }
 
-export default function MaterialCreation({ meta }: { meta: any }) {
+export default function MaterialCreation({ meta, onOpenMedia }: { meta: any; onOpenMedia: (a: LandingAnalysis) => void }) {
   const [url, setUrl] = useState('')
   const [text, setText] = useState('')
   const [showText, setShowText] = useState(false)
@@ -91,12 +91,12 @@ export default function MaterialCreation({ meta }: { meta: any }) {
         {err && <div className="alert err">{err}</div>}
       </div>
 
-      {data && <ResultView data={data} />}
+      {data && <ResultView data={data} onOpenMedia={onOpenMedia} />}
     </div>
   )
 }
 
-function ResultView({ data }: { data: LandingAnalysis }) {
+function ResultView({ data, onOpenMedia }: { data: LandingAnalysis; onOpenMedia: (a: LandingAnalysis) => void }) {
   const m = data.model_info
   const llmUsed = data.source === 'llm'
 
@@ -112,6 +112,11 @@ function ResultView({ data }: { data: LandingAnalysis }) {
             : '系统尚未在「大模型配置」中配置可用的「分析 / 文案」模型'}，
             以下结果为本地兜底，请在「大模型配置」中配置后重试。</>
         )}
+      </div>
+
+      <div className="la-next">
+        <span className="muted">分析完成，下一步可据此生成推广图片素材：</span>
+        <button className="btn primary" onClick={() => onOpenMedia(data)}>进入营销推广的媒体平台设置 →</button>
       </div>
 
       {/* (1) 网站地址：仅展示 */}

@@ -933,3 +933,102 @@ select {
   .la-grid { grid-template-columns: 1fr; }
 }
 
+/* ===================== 营销推广的媒体平台设置 ===================== */
+.media-studio { display: flex; flex-direction: column; gap: 14px; }
+
+.media-analysis { background: var(--card); }
+.media-analysis .ma-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.media-analysis .ma-url { color: var(--primary); word-break: break-all; margin: 6px 0 2px; font-size: 13px; }
+.media-analysis .ma-summary { color: var(--muted); font-size: 13px; line-height: 1.7; }
+
+.media-empty { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+
+/* 步骤条 */
+.stepper { display: flex; gap: 10px; flex-wrap: wrap; }
+.mstep {
+  flex: 1 1 0; min-width: 140px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--card); color: var(--muted); cursor: pointer; text-align: left;
+  transition: .15s;
+}
+.mstep:disabled { cursor: not-allowed; opacity: .65; }
+.mstep.active { border-color: var(--primary); color: var(--text); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent); }
+.mstep.done { border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); color: var(--text); }
+.mstep-no {
+  width: 26px; height: 26px; flex: 0 0 26px; border-radius: 50%;
+  display: grid; place-items: center; font-weight: 700; font-size: 13px;
+  background: var(--border); color: var(--muted);
+}
+.mstep.active .mstep-no, .mstep.done .mstep-no { background: var(--primary); color: #fff; }
+.mstep-label { font-weight: 600; font-size: 14px; }
+
+/* 模型标注 */
+.model-badge {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
+  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border);
+}
+.model-badge.ok { color: #1f8a4c; border-color: color-mix(in srgb, #1f8a4c 35%, var(--border)); }
+.model-badge.warn { color: #b06a00; border-color: color-mix(in srgb, #b06a00 35%, var(--border)); }
+.model-badge em { font-style: normal; opacity: .8; }
+.model-badge .mb-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+/* 平台选择 */
+.platform-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin: 12px 0; }
+.platform-card {
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--card); cursor: pointer; text-align: left; transition: .15s; min-height: 92px;
+}
+.platform-card:hover { border-color: color-mix(in srgb, var(--primary) 50%, var(--border)); }
+.platform-card.active { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent); }
+.platform-card .pc-name { font-weight: 700; font-size: 15px; }
+.platform-card .pc-count { font-size: 12px; color: var(--primary); }
+.platform-card .pc-sizes { font-size: 11.5px; color: var(--muted); line-height: 1.5; word-break: break-word; }
+
+/* 规格面板 */
+.spec-panel { border-top: 1px dashed var(--border); margin-top: 14px; padding-top: 14px; display: flex; flex-direction: column; gap: 12px; }
+.sp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sp-meta { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.sp-meta li { font-size: 13px; color: var(--muted); }
+.sp-meta li span { display: inline-block; width: 72px; color: var(--text); font-weight: 600; }
+.sp-placements { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.placement-card {
+  display: flex; flex-direction: column; gap: 3px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--card); transition: .15s;
+}
+.placement-card:hover { border-color: color-mix(in srgb, var(--primary) 50%, var(--border)); }
+.placement-card.on { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--card)); }
+.placement-card input { position: absolute; opacity: 0; pointer-events: none; }
+.placement-card .pl-name { font-weight: 600; font-size: 13.5px; }
+.placement-card .pl-name em { font-style: normal; margin-left: 6px; font-size: 11px; color: var(--primary); }
+.placement-card .pl-desc { font-size: 12px; color: var(--muted); }
+.placement-card .pl-sizes { font-size: 11.5px; color: var(--muted); word-break: break-word; }
+.sp-count, .sp-lang { display: flex; align-items: center; gap: 8px; }
+.sp-count input, .sp-lang select { width: auto; }
+
+/* 文案编辑 */
+.copy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin: 14px 0; }
+.copy-field { display: flex; flex-direction: column; gap: 6px; }
+.copy-field label { font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+.copy-field .cf-limit { font-weight: 500; color: var(--muted); font-size: 11.5px; }
+.cf-multi { display: flex; flex-direction: column; gap: 6px; }
+
+/* 风格设置 */
+.style-panel { border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 14px; }
+.style-panel h4 { margin: 0 0 10px; font-size: 14px; }
+.style-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.style-row label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; }
+
+.form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+
+/* 图片结果 */
+.img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin: 14px 0; }
+.img-card { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--card); }
+.img-card img { width: 100%; display: block; background: #0b1220; }
+.ic-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; font-size: 12px; }
+
+/* 落地页分析：下一步入口 */
+.la-next { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+

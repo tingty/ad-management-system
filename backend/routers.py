@@ -15,7 +15,7 @@ from schemas import (AnalyzeRequest, FrameworkOut, GenerateRequest, CampaignOut,
                      LoginRequest, UserOut, UserCreate, UserUpdate, ReviewRequest, SpecUpdate,
                      AngleOut, AnglePlanRequest, ProduceRequest, BrandUpdate, EstimateRequest,
                      ReportRequest, OptimizeRequest, PromptOut, PromptUpdate,
-                     LandingAnalysisRequest, LandingAnalysis)
+                     LandingAnalysisRequest, LandingAnalysis, MediaCopyRequest, MediaImageRequest)
 from services import (analyze_landing_page, generate_campaign_materials, regenerate_material,
                       plan_angles, produce_campaign, fetch_page, optimize_campaign,
                       IMAGE_MAX_SIZES, PROMPT_REGISTRY, analyze_landing_concise)
@@ -25,6 +25,8 @@ from batch import parse_csv, run_job, template_csv, CSV_HEADERS
 from specs_data import PLATFORMS, MATERIAL_TYPES, LANGUAGES
 from llm_catalog import LLM_PRESETS, test_llm_connection
 from presets import build_directives, creative_presets_payload
+from media_platforms import list_media_platforms
+from media_ad import generate_media_copy, generate_media_images
 from auth import (current_user, require_roles, verify_password, hash_password, create_token,
                   user_dict, ROLE_LABELS, CAN_EDIT, CAN_REVIEW, ROLES)
 
@@ -92,6 +94,34 @@ async def landing_analysis(req: LandingAnalysisRequest, db: Session = Depends(ge
         raise HTTPException(400, "请提供落地页 URL 或正文")
     result = await analyze_landing_concise(db, url or None, text or None)
     return LandingAnalysis(**result)
+
+# ----------------------------- 素材创作：营销推广的媒体平台设置 -----------------------------
+@router.get("/media-platforms")
+async def api_media_platforms(_: User = Depends(require_roles(*CAN_EDIT))):
+    """营销推广媒体平台规格：数量 / 规格 / 尺寸 / 常规方案 / 字数红线。供前端展示与预选。"""
+    return list_media_platforms()
+
+@router.post("/media-campaign/copy")
+async def api_media_campaign_copy(req: MediaCopyRequest, db: Session = Depends(get_db),
+                                  user: User = Depends(require_roles(*CAN_EDIT))):
+    """基于落地页分析结论 + 选中平台，调用大模型生成可编辑广告文案，并标注本次调用的模型。
+
+    文案必须结合落地页分析结论（行业/类型/优势/竞品/受众/推广途径），生成后立即返回，前端展示并允许编辑。
+    """
+    result = await generate_media_copy(db, req.analysis.model_dump(), req.platform, req.lang)
+    return result
+
+@router.post("/media-campaign/images")
+async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depends(get_db),
+                                    user: User = Depends(require_roles(*CAN_EDIT))):
+    """基于编辑后的文案 + 落地页分析结论 + 风格/样式/颜色，生成推广图片素材，并标注图片实际调用的模型。
+
+    生成前可在前端选风格/样式/颜色；未配置文生图模型时自动用 Pillow 品牌渐变模板兜底，并如实标注回退。
+    """
+    slots = [s.model_dump() for s in req.slots]
+    result = await generate_media_images(db, req.analysis.model_dump(), req.platform, req.lang,
+                                         req.copy_fields, req.style_opts, slots)
+    return result
 
 # ----------------------------- 产品分析报告 -----------------------------
 @router.post("/report")

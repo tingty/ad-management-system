@@ -175,6 +175,31 @@ class LandingAnalysis(BaseModel):
     source: str = "local"       # llm / local —— 结果真的来自大模型推理，还是本地兜底
     class Config:
         from_attributes = True
+        protected_namespaces = ()   # 允许字段名 model_info 不被 "model_" 保护前缀拦截
+
+
+# ----------------------------- 素材创作：营销推广的媒体平台设置 -----------------------------
+class MediaCopyRequest(BaseModel):
+    """生成媒体平台广告文案：以落地页 8 字段分析结论为依据，调用大模型产出可编辑文案。"""
+    analysis: LandingAnalysis      # 落地页分析结论（生成依据）
+    platform: str                  # 选中的媒体推广平台
+    lang: str = "en"              # 文案语言
+
+
+class MediaImageSlot(BaseModel):
+    """单个图片版位（尺寸 + 位置）。"""
+    size: str                     # 尺寸，如 1080x1080
+    placement: str = ""          # 广告版位 id / 名称
+
+
+class MediaImageRequest(BaseModel):
+    """生成推广图片：依据编辑后的文案 + 落地页分析结论 + 风格/样式/颜色选项。"""
+    analysis: LandingAnalysis
+    platform: str
+    lang: str = "en"
+    copy_fields: dict = {}       # 编辑后的文案字段（覆盖平台 schema）
+    style_opts: dict = {}         # {creative_direction, content_style, color_scheme}
+    slots: List[MediaImageSlot] = []
 
 class RegenerateRequest(BaseModel):
     extra_prompt: str

@@ -364,6 +364,54 @@ export interface LandingAnalysis {
   source: string           // llm / local —— 结果是否真的来自大模型推理
 }
 
+/* ----------------------------- 媒体推广的媒体平台设置 ----------------------------- */
+export interface MediaPlacement {
+  id: string
+  name: string
+  sizes: string[]
+  desc: string
+  default: boolean
+}
+
+export interface MediaPlatform {
+  platform: string
+  placements: MediaPlacement[]
+  image_sizes: string[]
+  recommended_sizes: string[]
+  recommended_count: number
+  copy_limits: { title_max?: number; description_max?: number; primary_text_max?: number; body_max?: number }
+  usage: string
+  cta_options: string[]
+}
+
+export interface MediaCopyResult {
+  platform: string
+  lang: string
+  fields: Record<string, any>
+  schema: { key: string; label: string; max: number; count: number }[]
+  char_table: { field: string; text: string; len: number; max: number; over: boolean }[]
+  validation: { valid: boolean; issues: { level: string; code: string; message: string }[]; problems?: any[] }
+  model_info: ModelInfo
+  brand: string
+}
+
+export interface MediaImageItem {
+  url: string
+  file: string
+  size: string
+  w: number
+  h: number
+  placement: string
+}
+
+export interface MediaImageResult {
+  platform: string
+  images: MediaImageItem[]
+  image_model: ModelInfo
+  note: string
+  count: number
+}
+
 export interface OptimizeChange {
   field: string
   before: string
@@ -502,6 +550,18 @@ export const api = {
   // 素材创作：落地页分析（8 字段 LLM 推理）
   landingAnalysis: (payload: { url?: string; text?: string }) =>
     req<LandingAnalysis>('/api/landing-analysis', { method: 'POST', body: JSON.stringify(payload) }),
+  // 素材创作：营销推广的媒体平台设置 —— 平台规格目录
+  mediaPlatforms: () =>
+    req<MediaPlatform[]>('/api/media-platforms'),
+  // 基于落地页分析结论 + 选中平台，调用大模型生成可编辑广告文案
+  mediaCopy: (payload: { analysis: LandingAnalysis; platform: string; lang?: string }) =>
+    req<MediaCopyResult>('/api/media-campaign/copy', { method: 'POST', body: JSON.stringify(payload) }),
+  // 基于编辑后的文案 + 落地页分析结论 + 风格/样式/颜色，生成推广图片
+  mediaImages: (payload: {
+    analysis: LandingAnalysis; platform: string; lang?: string
+    copy_fields: Record<string, any>; style_opts: Record<string, string>; slots: { size: string; placement: string }[]
+  }) =>
+    req<MediaImageResult>('/api/media-campaign/images', { method: 'POST', body: JSON.stringify(payload) }),
   planAngles: (framework_id: number, platforms: string[], extra_prompt?: string, lang?: string) =>
     req<Angle[]>('/api/angles/plan', {
       method: 'POST', body: JSON.stringify({ framework_id, platforms, extra_prompt, lang }),

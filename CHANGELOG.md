@@ -769,6 +769,40 @@
 - 烟雾测试：5 段提示词正确播种（module/分类一致）；拼接提示词非空且含 8 字段键；`analyze_landing_concise` 返回结构经 `LandingAnalysis(**result)` 校验通过（channels→list、model_info→ModelInfo 正确）。
 - 前端 `npm run build` 通过（47 模块）。
 
+## V4.25 素材创作：营销推广的媒体平台设置模块
+
+**需求**
+1. 在「素材创作」落地页分析之后，新增「营销推广的媒体平台设置」：可基于已分析的落地页选择媒体推广平台，也可自主选择。可选平台：Facebook / Google / Mintegral / Unity / Adsterra / AppLovin / TikTok 等，默认仅可选其一。
+2. 选中平台后展示该平台支持的图片素材数量、规格、尺寸；可设置生成图片的数量、版位（按常规方案默认）。
+3. 生成图片必须依据网站落地页分析结论（8 字段），由大模型完成图片生成任务，并在结果中标注实际调用的模型。
+4. 生成前可先选择图片风格 / 样式 / 颜色等（尽量丰富的选项），以产出更吸引用户的推广图。
+5. 广告文案生成需结合落地页分析结论；文案即时显示、可编辑，编辑后的文案最终呈现在推广图中。
+6. 布局按流程展示：设置媒体平台 → 展示文案 → 生成推广图片。
+
+**后端**
+- 新增 `backend/media_platforms.py`：7 平台规格单一数据源 `MEDIA_PLATFORMS`（Facebook/Google/Unity/AppLovin/Adsterra/Mintegral/TikTok），每平台含 `image_sizes / recommended_sizes / recommended_count / copy_limits / usage / cta_options / placements[]`；导出 `list_media_platforms()` / `get_media_platform()` / `MEDIA_PLATFORM_MAP`。
+- 新增 `backend/media_ad.py`：
+  - `MEDIA_COPY_SCHEMA` 在 `creative.COPY_SCHEMA` 基础上补齐 TikTok（headline≤40 / body≤100 / cta≤20）。
+  - `generate_media_copy(db, analysis, platform, lang)`：以落地页 8 字段分析结论为生成依据，调用已配置「文案」模型，逐字段 `fit_text` 按平台字数上限裁剪；返回 `fields / schema / char_table / validation / model_info`（provider/model/role/fallback）/ brand`。
+  - `generate_media_images(db, analysis, platform, lang, copy_fields, style_opts, slots)`：`build_directives` 解析风格/样式/配色 → 取 `STYLE_TO_BG / DIRECTION_TO_BG / COLOR_TO_PALETTE` → `get_image(db)` 出 AI 背景（未配图像模型则 Pillow 模板兜底）→ `render_ad_png` 叠加文案 → 返回 `images[{url,file,size,w,h,placement}] / image_model / note / count`；`image_model` 如实标注（有图像模型用 provider/model，否则标注 template 兜底）。
+  - `_analysis_context()` 将 8 字段拼为生成依据；`_media_image_prompt()` 结合落地页结论与风格选项；`_overlay_text()` / `_cleanup_ai_bgs()` 管理叠加与临时文件。
+- `schemas.py`：新增 `MediaCopyRequest{analysis,platform,lang}` / `MediaImageSlot{size,placement}` / `MediaImageRequest{analysis,platform,lang,copy_fields,style_opts,slots}`；`LandingAnalysis` 加 `protected_namespaces=()` 消除 `model_` 前缀警告。
+- `routers.py`：新增 3 端点（均 `require_roles(*CAN_EDIT)`）：
+  - `GET /api/media-platforms` → `list_media_platforms()`
+  - `POST /api/media-campaign/copy` → `generate_media_copy(...)`
+  - `POST /api/media-campaign/images` → `generate_media_images(...)`
+
+**前端**
+- `api.ts`：新增 `MediaPlacement / MediaPlatform / MediaCopyResult / MediaImageItem / MediaImageResult` 类型与 `api.mediaPlatforms()` / `api.mediaCopy()` / `api.mediaImages()`。
+- `App.tsx`：Tab 体系新增 `'media'`（营销推广设置，icon `broadcast`），`allowedTabs` 的 canEdit 组加入 `'media'`；`MaterialCreation` 分析完成后通过 `onOpenMedia` 跳转；新增 `MediaAdStudio` 接入。
+- 新增 `pages/MediaAdStudio.tsx`：三步流程页（设置媒体平台 → 展示文案 → 生成推广图片）；Step1 选单平台卡片并展示规格/版位多选/数量/语言；Step2 可编辑文案字段 + 品牌名 + 风格/样式/颜色下拉（数据取自 `api.creativePresets()`）；Step3 网格展示生成图并标注 `ModelBadge`（fallback 标 warn）。
+- `MaterialCreation.tsx`：分析 `ResultView` 末尾新增「进入营销推广的媒体平台设置 →」按钮，携带 `LandingAnalysis` 跳转。
+- `styles.css`：追加媒体工作室样式（`.media-studio / .stepper / .mstep / .model-badge / .platform-grid / .platform-card / .spec-panel / .placement-card / .copy-grid / .copy-field / .style-panel / .img-grid / .img-card / .la-next` 等），步骤条类名独立以避免与素材创作模块冲突。
+
+**验证**
+- 后端 `python -m py_compile` 通过；前端 `npx tsc --noEmit` 退出码 0。
+- 端到端烟雾测试：7 平台列表正常返回；文案生成实际使用真实模型（千问大模型 / qwen-plus，fallback=False），字段由落地页分析结论推导；3 张图片按 1080x1080/1080x1350/1080x1920 生成，经 `/files/` 访问返回 HTTP 200，image_model 如实标注（未配图像模型时为 Pillow 模板兜底）。
+
 ## V4.20 403 提示识别 MaaS 工作空间 access_denied
 
 - `backend/llm_catalog.py`：`_classify_error` 的 403 分支检测 body 中的 workspace / access_denied，给出 MaaS 工作空间专属 Key 指引（ws-*.maas.aliyuncs.com / llm-*.maas.aliyuncs.com 需绑定工作空间的专用 Key，且区域需一致）。
