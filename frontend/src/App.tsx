@@ -4,7 +4,6 @@ import { api, clearToken, getToken, Meta, User } from './api'
 import Workspace from './pages/Workspace'
 import MaterialCreation from './pages/MaterialCreation'
 import MaterialPromptLibrary from './pages/MaterialPromptLibrary'
-import MediaAdStudio from './pages/MediaAdStudio'
 import Batch from './pages/Batch'
 import Library from './pages/Library'
 import Login from './pages/Login'
@@ -14,14 +13,14 @@ import Logs from './pages/Logs'
 import Prompts from './pages/Prompts'
 import Specs from './pages/Specs'
 
-type Tab = 'workspace' | 'batch' | 'creation' | 'matprompts' | 'media' | 'library' | 'specs'
+type Tab = 'workspace' | 'batch' | 'creation' | 'matprompts' | 'library' | 'specs'
   | 'llm' | 'accounts' | 'logs' | 'prompts'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['workspace', 'batch', 'creation', 'matprompts', 'media', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts']
+const TABS: Tab[] = ['workspace', 'batch', 'creation', 'matprompts', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts']
 const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
@@ -49,11 +48,9 @@ const GROUP_CREATION: NavGroup = {
   icon: 'wand',
   items: [
     { key: 'creation', label: '素材创作', icon: 'sparkles',
-      desc: '输入落地页链接或正文，调用已配置的大模型推理，输出网站地址、语言、行业、类型、对象、竞品、优势、推广途径 8 项关键分析；并标注本次实际调用的模型，便于持续跟踪其优劣势' },
+      desc: '输入落地页链接或正文，调用已配置的大模型推理，输出 8 项关键分析并标注实际调用模型；分析完成后，直接在本模块内基于分析结论进行营销推广设置（选平台 → 文案 → 生成推广图片）' },
     { key: 'matprompts', label: '素材提示词', icon: 'tags',
       desc: '分门别类展示「素材创作」使用的提示词框架（分析总纲 / 基础识别 / 竞争分析 / 价值提炼 / 增长推广），可查阅并编辑保存，保存即生效' },
-    { key: 'media', label: '营销推广设置', icon: 'broadcast',
-      desc: '基于已分析的落地页结论，选择媒体推广平台（FB/Google/Mintegral/Unity/Adsterra/AppLovin/TikTok），按常规方案生成可编辑广告文案，再结合风格/样式/颜色调用大模型生成推广图片素材，并标注实际调用模型' },
   ],
 }
 
@@ -131,7 +128,7 @@ function tabFromHash(): Tab | null {
 function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   return [
-    ...(canEdit ? (['workspace', 'batch', 'creation', 'matprompts', 'media'] as Tab[]) : []),
+    ...(canEdit ? (['workspace', 'batch', 'creation', 'matprompts'] as Tab[]) : []),
     'library', 'specs',
     ...(user.role === 'admin' ? (GROUP_SYSTEM.items.map(i => i.key)) : []),
   ]
@@ -149,7 +146,6 @@ export default function App() {
   const [booting, setBooting] = useState(true)
   const [tab, setTab] = useState<Tab>(() => tabFromHash() || 'workspace')
   const [meta, setMeta] = useState<Meta | null>(null)
-  const [mediaSeed, setMediaSeed] = useState<import('./api').LandingAnalysis | null>(null)
   const [collapsed, setCollapsed] = useState<boolean>(readCollapsed)
   const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ material: true, creation: true, system: true })
 
@@ -192,11 +188,6 @@ export default function App() {
   const go = (t: Tab) => {
     setTab(t)
     if (tabFromHash() !== t) location.hash = '#/' + t
-  }
-
-  const openMedia = (analysis: import('./api').LandingAnalysis) => {
-    setMediaSeed(analysis)
-    go('media')
   }
 
   const logout = () => {
@@ -336,11 +327,8 @@ export default function App() {
           {tab === 'workspace' && isEditor && (
             <Workspace meta={meta} onOpenLibrary={() => go('library')} />
           )}
-          {tab === 'creation' && isEditor && <MaterialCreation meta={meta} onOpenMedia={openMedia} />}
+          {tab === 'creation' && isEditor && <MaterialCreation meta={meta} />}
           {tab === 'matprompts' && isEditor && <MaterialPromptLibrary />}
-          {tab === 'media' && isEditor && (
-            <MediaAdStudio initialAnalysis={mediaSeed} onGotoCreation={() => go('creation')} />
-          )}
           {tab === 'batch' && isEditor && <Batch meta={meta} />}
           {tab === 'library' && <Library user={user} canReview={canReview} isEditor={isEditor} />}
           {tab === 'specs' && <Specs canEdit={canReview} />}

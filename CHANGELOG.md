@@ -803,6 +803,12 @@
 - 后端 `python -m py_compile` 通过；前端 `npx tsc --noEmit` 退出码 0。
 - 端到端烟雾测试：7 平台列表正常返回；文案生成实际使用真实模型（千问大模型 / qwen-plus，fallback=False），字段由落地页分析结论推导；3 张图片按 1080x1080/1080x1350/1080x1920 生成，经 `/files/` 访问返回 HTTP 200，image_model 如实标注（未配图像模型时为 Pillow 模板兜底）。
 
+**修正（模块位置）**
+- 原 V4.25 将「营销推广设置」作为独立一级菜单（tab `media`）承载，与分析结论脱节。按需求改为：**嵌入「素材创作」模块内部**，作为落地页 8 字段分析完成之后的下一步，流程为「落地页分析 → 营销推广设置（选平台 → 文案 → 生成推广图片）」。
+- `App.tsx`：移除 `media` 一级 tab（`Tab`/`TABS`/`GROUP_CREATION`/`allowedTabs` 同步移除），删除 `mediaSeed`/`openMedia` 状态与 `MediaAdStudio` 独立渲染；`MaterialCreation` 不再接收 `onOpenMedia`，直接渲染且不再跳转。
+- `MaterialCreation.tsx`：`ResultView` 末尾的「进入营销推广的媒体平台设置 →」按钮改为页内滚动到下方嵌入区；分析出 `data` 后在同一页面内渲染 `<MediaAdStudio initialAnalysis={data} />`，其 `onGotoCreation` 改为滚动回顶部重新分析。
+- `styles.css`：新增 `.media-studio-section`（顶部 2px 分隔线 + 间距），在视觉上将「分析结论」与「营销推广设置」划分为同一模块内的两个连续步骤。
+
 ## V4.20 403 提示识别 MaaS 工作空间 access_denied
 
 - `backend/llm_catalog.py`：`_classify_error` 的 403 分支检测 body 中的 workspace / access_denied，给出 MaaS 工作空间专属 Key 指引（ws-*.maas.aliyuncs.com / llm-*.maas.aliyuncs.com 需绑定工作空间的专用 Key，且区域需一致）。

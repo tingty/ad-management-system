@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api, LandingAnalysis, LandingChannel, ModelInfo } from '../api'
+import MediaAdStudio from './MediaAdStudio'
 
 // 8 个必要字段的展示元信息（顺序即展示顺序）
 const FIELD_META = [
@@ -16,7 +17,7 @@ function modelLabel(m: ModelInfo): string {
   return `${m.provider} / ${m.model}${role}${fb}`
 }
 
-export default function MaterialCreation({ meta, onOpenMedia }: { meta: any; onOpenMedia: (a: LandingAnalysis) => void }) {
+export default function MaterialCreation({ meta }: { meta: any }) {
   const [url, setUrl] = useState('')
   const [text, setText] = useState('')
   const [showText, setShowText] = useState(false)
@@ -91,12 +92,22 @@ export default function MaterialCreation({ meta, onOpenMedia }: { meta: any; onO
         {err && <div className="alert err">{err}</div>}
       </div>
 
-      {data && <ResultView data={data} onOpenMedia={onOpenMedia} />}
+      {data && (
+        <>
+          <ResultView data={data} />
+          <div id="media-studio" className="media-studio-section">
+            <MediaAdStudio
+              initialAnalysis={data}
+              onGotoCreation={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            />
+          </div>
+        </>
+      )}
     </div>
   )
 }
 
-function ResultView({ data, onOpenMedia }: { data: LandingAnalysis; onOpenMedia: (a: LandingAnalysis) => void }) {
+function ResultView({ data }: { data: LandingAnalysis }) {
   const m = data.model_info
   const llmUsed = data.source === 'llm'
 
@@ -115,8 +126,8 @@ function ResultView({ data, onOpenMedia }: { data: LandingAnalysis; onOpenMedia:
       </div>
 
       <div className="la-next">
-        <span className="muted">分析完成，下一步可据此生成推广图片素材：</span>
-        <button className="btn primary" onClick={() => onOpenMedia(data)}>进入营销推广的媒体平台设置 →</button>
+        <span className="muted">分析完成。以下将基于上述结论进行营销推广设置与推广图片生成：</span>
+        <button className="btn primary" onClick={() => document.getElementById('media-studio')?.scrollIntoView({ behavior: 'smooth' })}>开始营销推广设置 ↓</button>
       </div>
 
       {/* (1) 网站地址：仅展示 */}
