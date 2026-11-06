@@ -472,11 +472,15 @@ def _classify_error(exc, status: int, body: str, preset: Optional[dict]) -> dict
                        "② 该 Key 是否已启用 / 未过期；③ 个别厂商需在控制台为 Key 开通对应模型权限。",
         })
     elif status == 403:
-        base.update({
-            "error_type": "permission",
-            "message": "无权限访问（403）。该 Key 可能无权使用该模型，或所在区域/组织未开通该服务，"
-                       "或请求头缺失（如 Azure 需要 api-version）。请检查账号配额与可用模型列表。",
-        })
+        msg = ("无权限访问（403）。该 Key 可能无权使用该模型，或所在区域/组织未开通该服务，"
+               "或请求头缺失（如 Azure 需要 api-version）。请检查账号配额与可用模型列表。")
+        body_low = (body or "").lower()
+        if "workspace" in body_low or "access_denied" in body_low or "access denied" in body_low:
+            msg += ("\n\n检测到 MaaS / 工作空间端点返回 access denied：形如 ws-*.maas.aliyuncs.com 的端点是"
+                    "「工作空间级别」专属端点，需要使用**绑定到该工作空间/部署的专用 API Key**，"
+                    "而不是账户级 Key；此外请确认所用 Key 的区域（国际站 dashscope-intl / 国内站 dashscope）"
+                    "与该工作空间一致。请到该 MaaS 工作空间/部署控制台复制其专用 API Key 后重试。")
+        base.update({"error_type": "permission", "message": msg})
     elif status == 404:
         base.update({
             "error_type": "not_found",
