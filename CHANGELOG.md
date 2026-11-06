@@ -681,6 +681,30 @@
 - 配色：同方向同风格下 C13(霓虹绿)/C15(国风朱红)/C01(多彩渐变) 的 mean RGB 分别为 `[21.9,36.6,27.4]` / `[56.3,17.3,18.5]` / `[66.8,44.9,91.6]`，配色覆盖确实改变画面主色。
 - `py_compile` 三个改动模块通过。
 
+## V4.21 文生图接入阿里 MaaS 多模态（qwen-image）专属协议
+
+**问题**
+- 用户提供了一个通义千问图像 MaaS 端点（llm-*.maas.aliyuncs.com/.../multimodal-generation/generation，模型 qwen-image-3.0）。实测验证 API 可用（Key 已绑定该工作空间），但其协议与系统现有文生图 Provider 完全不兼容：
+  - 请求路径：整条 URL 即 endpoint（非 `/images/generations`）；
+  - 请求体：`{"input":{"messages":[{"content":[{"text": prompt}]}]},"parameters":{"size":"W*H"}}`（messages 数组，非 `{prompt}`）；
+  - 返回：签名 OSS 临时 URL（需立即下载），非 b64；
+  - 仅同步（带 `X-DashScope-Async` 会被 403 拒绝）。
+- 此前若直接填这个地址，系统的连通测试与出图都会失败或错配。
+
+**新增：dashscope-maas-image 协议**
+- `backend/providers.py`：新增 `DashScopeMaaSImageProvider`，POST 完整 base_url，messages 风格请求体，`parameters.size` 自动对齐到 API 支持的 1024/2048，同步返回后**立即下载签名 URL 落盘**为本地背景图；任一环节失败返回 None（Pillow 模板兜底）。
+- `backend/llm_catalog.py`：新增 `qwen-image-maas` 图像预设（protocol=`dashscope-maas-image`，default_base_url=该 MaaS 完整 endpoint，models=[qwen-image-3.0, qwen-image-3.0-pro]）；新增 `_test_dashscope_maas_image` 测试器（真实出图验证，消耗额度的同步调用）并注册到 `_TESTERS`；顶部协议注释补充该协议。
+- `backend/providers.py`：`get_image()` 按 `image_protocol_of` 路由到新 Provider。
+- `backend/CHANGELOG.md`：本条目 + 补 V4.20。
+
+**验证**
+- `py_compile`：providers / llm_catalog 通过。
+- 端到端冒烟（真实 API）：`DashScopeMaaSImageProvider.generate` 产出 1024×1024 PNG（436KB，签名 URL 下载落盘）；`get_presets("image")` 含 `qwen-image-maas`；`image_protocol_of("qwen-image-maas")="dashscope-maas-image"`。
+
+## V4.20 403 提示识别 MaaS 工作空间 access_denied
+
+- `backend/llm_catalog.py`：`_classify_error` 的 403 分支检测 body 中的 workspace / access_denied，给出 MaaS 工作空间专属 Key 指引（ws-*.maas.aliyuncs.com / llm-*.maas.aliyuncs.com 需绑定工作空间的专用 Key，且区域需一致）。
+
 ## V4.19 通义千问国际站预设 + 404 提示增强
 
 **问题**

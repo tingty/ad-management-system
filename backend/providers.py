@@ -572,6 +572,59 @@ class GenericImageProvider(ImageProvider):
             return None
 
 
+class DashScopeMaaSImageProvider(ImageProvider):
+    """阿里云 MaaS 多模态生成（qwen-image 系列）。
+
+    端点为「完整 URL」，形如 .../api/v1/services/aigc/multimodal-generation/generation，
+    base_url 即整条地址，不再追加路径。
+    请求体：{"model", "input":{"messages":[{"role":"user","content":[{"text":prompt}]}]},
+             "parameters":{"size":"W*H","n":1}}
+    响应：output.choices[0].message.content[0].image = 带签名的 OSS 临时 URL，需立即下载落盘。
+    该端点仅支持同步调用（X-DashScope-Async 会被拒 403），超时设 180s。
+    任意环节失败返回 None，由 Pillow 模板兜底，绝不阻断主流程。
+    """
+    def __init__(self, api_key, base_url, model, params=None):
+        self.api_key = api_key
+        self.base_url = (base_url or "").rstrip("/")
+        self.model = model
+        self.params = params or {}
+
+    @staticmethod
+    def _snap(n: int) -> int:
+        """把任意请求尺寸对齐到 API 支持的 1024 / 2048（已实测均可用）。"""
+        return 2048 if n >= 1536 else 1024
+
+    async def generate(self, prompt, width, height, filename, copy=None):
+        try:
+            async with httpx.AsyncClient(timeout=180) as c:
+                r = await c.post(
+                    self.base_url,
+                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": self.model,
+                        "input": {"messages": [{"role": "user", "content": [{"text": prompt}]}]},
+                        "parameters": {"size": f"{self._snap(width)}*{self._snap(height)}", "n": 1},
+                    },
+                )
+                r.raise_for_status()
+                data = r.json()
+                img_url = (
+                    data.get("output", {}).get("choices", [{}])[0]
+                    .get("message", {}).get("content", [{}])[0].get("image")
+                )
+                if not img_url:
+                    return None
+                # 签名 URL 有效期短，立即下载落盘
+                resp = await c.get(img_url)
+                resp.raise_for_status()
+                path = os.path.join(UPLOAD_DIR, filename)
+                with open(path, "wb") as f:
+                    f.write(resp.content)
+                return path
+        except Exception:
+            return None
+
+
 # ----------------------------- 工厂（按用途返回激活 provider） -----------------------------
 def _active_config(db, usage):
     # 延迟导入避免循环依赖
@@ -606,6 +659,8 @@ def get_image(db) -> Optional[ImageProvider]:
             proto = image_protocol_of(cfg.provider)
             if proto == "openai-image":
                 return OpenAIImage(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
+            if proto == "dashscope-maas-image":
+                return DashScopeMaaSImageProvider(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
             return GenericImageProvider(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
         except Exception:
             pass

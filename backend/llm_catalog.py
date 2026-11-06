@@ -266,6 +266,8 @@ def protocol_of(provider: str) -> str:
 #   generic-image  : 通用图像端点，POST {base_url}{endpoint}，默认 /images/generations；
 #                    不同厂商（通义万相 / 智谱 CogView / SD / Replicate 等）路径与字段差异大，
 #                    由 provider 读取 params.endpoint 调整，并尽量兼容 {model, prompt, size} 形态。
+#   dashscope-maas-image : 阿里云 MaaS 多模态生成（qwen-image 系列）；base_url 即完整 endpoint，
+#                    请求体为 messages 数组、parameters.size=W*H，同步返回签名 OSS URL 需立即下载落盘。
 IMAGE_PRESETS = [
     {
         "key": "dalle3", "name": "OpenAI DALL·E 3 / 2", "protocol": "openai-image",
@@ -348,6 +350,17 @@ IMAGE_PRESETS = [
         "docs_url": "",
         "setup_guide": "适用于任何暴露 {base_url}{endpoint}（默认 /images/generations）且接受 {model, prompt, size} 的图像服务。如需自定义路径/字段，在「参数(JSON)」里填 endpoint，例如 {\"endpoint\":\"/sdapi/v1/txt2img\"}。",
         "notes": "通用兜底：只要端点能接收 prompt 并返回图像（b64/json 或 url）即可。",
+    },
+    {
+        "key": "qwen-image-maas", "name": "通义千问图像（DashScope MaaS 多模态）", "protocol": "dashscope-maas-image",
+        "default_base_url": "https://llm-nqw1vl6mhnuxv7d5.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+        "base_url_editable": True,
+        "models": ["qwen-image-3.0", "qwen-image-3.0-pro"],
+        "api_key_label": "DashScope MaaS API Key", "api_key_placeholder": "sk-...",
+        "model_placeholder": "qwen-image-3.0",
+        "docs_url": "https://help.aliyun.com/zh/model-studio/",
+        "setup_guide": "1) 在对应 MaaS 工作空间/部署控制台复制「绑定该工作空间的专用 API Key」（账户级 Key 会被 403 拒绝）；2) Base URL 用该工作空间的完整多模态生成地址（形如 .../api/v1/services/aigc/multimodal-generation/generation，整条即地址，无需再附加路径）；3) Model 填 qwen-image-3.0；4) 保存并测试。",
+        "notes": "专属协议 dashscope-maas-image：同步调用、请求体为 messages 数组、返回签名 OSS 临时 URL 立即下载。仅同步（禁异步）。注意不同 MaaS 工作空间 Key 不互通，且需与该工作空间区域一致。",
     },
 ]
 
@@ -650,6 +663,40 @@ async def _test_generic_image(req: dict, preset: Optional[dict]) -> dict:
         return _classify_error(e, getattr(e, "status_code", 0) or 0, "", preset)
 
 
+async def _test_dashscope_maas_image(req: dict, preset: Optional[dict]) -> dict:
+    """阿里 MaaS 多模态图像：POST 完整 base_url，同步返回图片签名 URL 即视为通过。
+
+    点击测试即真实生成一次图片（消耗额度）。请求体为 messages 数组格式，非 OpenAI 风格。
+    """
+    api_key, base_url, model = req.get("api_key"), (req.get("base_url") or "").strip(), (req.get("model") or "").strip()
+    if not (api_key and base_url and model):
+        return {"ok": False, "error_type": "bad_request",
+                "message": "缺少必填项：api_key / base_url / model 均不能为空。", "hint_url": "", "hint_url_label": ""}
+    url = base_url.rstrip("/")
+    try:
+        t0 = time.time()
+        async with httpx.AsyncClient(timeout=90) as c:
+            r = await c.post(url,
+                             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                             json={"model": model,
+                                   "input": {"messages": [{"role": "user",
+                                                           "content": [{"text": "a small red dot on white background, simple"}]}]},
+                                   "parameters": {"size": "1024*1024", "n": 1}})
+            if r.status_code >= 400:
+                return _classify_error(None, r.status_code, _safe_body(r), preset)
+            data = r.json()
+            img_url = (
+                data.get("output", {}).get("choices", [{}])[0]
+                .get("message", {}).get("content", [{}])[0].get("image")
+            )
+        return {"ok": bool(img_url), "latency_ms": int((time.time() - t0) * 1000),
+                "reply": ("image url returned" if img_url else "reachable but no image field"),
+                "protocol": "dashscope-maas-image", "provider": req.get("provider"),
+                "note": "已同步返回图片签名 URL，点击测试即真实生成一次图片（消耗额度）。"}
+    except Exception as e:  # noqa
+        return _classify_error(e, getattr(e, "status_code", 0) or 0, "", preset)
+
+
 async def _test_generic_video(req: dict, preset: Optional[dict]) -> dict:
     """通用视频：POST {base_url}/video/generations，验证可达性与鉴权。
 
@@ -678,6 +725,7 @@ async def _test_generic_video(req: dict, preset: Optional[dict]) -> dict:
 
 _TESTERS = {"openai": _test_openai, "anthropic": _test_anthropic, "gemini": _test_gemini,
             "openai-image": _test_openai_image, "generic-image": _test_generic_image,
+            "dashscope-maas-image": _test_dashscope_maas_image,
             "generic-video": _test_generic_video}
 
 
