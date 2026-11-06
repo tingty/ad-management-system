@@ -144,9 +144,10 @@ class PromptConfig(Base):
     """系统提示词：按 key 管理各功能模块使用的提示词，设置页可查可改，保存即生效。"""
     __tablename__ = "prompt_configs"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    key = Column(String(64), unique=True, index=True)   # site_analysis / angle / copy
+    key = Column(String(64), unique=True, index=True)   # site_analysis / angle / copy / landing_*
     name = Column(String(128))                           # 展示名，如「网站核心内容分析」
-    module = Column(String(128))                         # 对应功能模块，如「落地页分析」
+    module = Column(String(128))                         # 对应功能模块，如「素材创作（落地页分析）」
+    category = Column(String(128), nullable=True)        # 分类（如「落地页分析」），用于在「素材提示词」中分门别类展示
     description = Column(Text, nullable=True)            # 用途与编辑注意事项
     content = Column(Text)                               # 提示词正文（系统提示词）
     is_active = Column(Boolean, default=True)            # 停用后回退内置默认

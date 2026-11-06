@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { api, clearToken, getToken, Meta, User } from './api'
 import Workspace from './pages/Workspace'
 import MaterialCreation from './pages/MaterialCreation'
-import MaterialPrompts from './pages/MaterialPrompts'
+import MaterialPromptLibrary from './pages/MaterialPromptLibrary'
 import Batch from './pages/Batch'
 import Library from './pages/Library'
 import Login from './pages/Login'
@@ -13,14 +13,14 @@ import Logs from './pages/Logs'
 import Prompts from './pages/Prompts'
 import Specs from './pages/Specs'
 
-type Tab = 'workspace' | 'batch' | 'creation' | 'mprompts' | 'library' | 'specs'
+type Tab = 'workspace' | 'batch' | 'creation' | 'matprompts' | 'library' | 'specs'
   | 'llm' | 'accounts' | 'logs' | 'prompts'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['workspace', 'batch', 'creation', 'mprompts', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts']
+const TABS: Tab[] = ['workspace', 'batch', 'creation', 'matprompts', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts']
 const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
@@ -48,9 +48,9 @@ const GROUP_CREATION: NavGroup = {
   icon: 'wand',
   items: [
     { key: 'creation', label: '素材创作', icon: 'sparkles',
-      desc: '统一落地页分析后，在「图片创作 / 视频创作」两个子模块间切换，共享同一品牌与方向，保证素材风格一致，一键生成直接投放级素材' },
-    { key: 'mprompts', label: '素材提示词管理', icon: 'tags',
-      desc: '集中展示「素材创作」使用的提示词库：创意方向库、内容风格库、配色方案库，含适用画像与提示词指令，便于查阅与后续运营扩充' },
+      desc: '输入落地页链接或正文，调用已配置的大模型推理，输出网站地址、语言、行业、类型、对象、竞品、优势、推广途径 8 项关键分析；并标注本次实际调用的模型，便于持续跟踪其优劣势' },
+    { key: 'matprompts', label: '素材提示词', icon: 'tags',
+      desc: '分门别类展示「素材创作」使用的提示词框架（分析总纲 / 基础识别 / 竞争分析 / 价值提炼 / 增长推广），可查阅并编辑保存，保存即生效' },
   ],
 }
 
@@ -127,7 +127,7 @@ function tabFromHash(): Tab | null {
 function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   return [
-    ...(canEdit ? (['workspace', 'batch', 'creation', 'mprompts'] as Tab[]) : []),
+    ...(canEdit ? (['workspace', 'batch', 'creation', 'matprompts'] as Tab[]) : []),
     'library', 'specs',
     ...(user.role === 'admin' ? (GROUP_SYSTEM.items.map(i => i.key)) : []),
   ]
@@ -327,7 +327,7 @@ export default function App() {
             <Workspace meta={meta} onOpenLibrary={() => go('library')} />
           )}
           {tab === 'creation' && isEditor && <MaterialCreation meta={meta} />}
-          {tab === 'mprompts' && isEditor && <MaterialPrompts />}
+          {tab === 'matprompts' && isEditor && <MaterialPromptLibrary />}
           {tab === 'batch' && isEditor && <Batch meta={meta} />}
           {tab === 'library' && <Library user={user} canReview={canReview} isEditor={isEditor} />}
           {tab === 'specs' && <Specs canEdit={canReview} />}

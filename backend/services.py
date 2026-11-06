@@ -189,6 +189,103 @@ PROMPT_REGISTRY = [
     },
 ]
 
+# ----------------------------- 素材创作（落地页分析）：8 字段 LLM 推理提示词框架 -----------------------------
+# 5 段提示词在运行时拼接为「系统提示词」一次调用大模型，输出 8 个必要字段。
+# 每段可单独在「素材提示词」中编辑；category 用于在提示词库里分门别类展示。
+# 注意：本框架不依赖 MARKER 标记（解析走稳健 JSON 提取），编辑时无需保留特定结尾标记。
+LANDING_MODULE = "素材创作（落地页分析）"
+
+SYS_LANDING_FRAMEWORK = (
+    "你是海外效果广告投放策略师。给定落地页 URL 与正文，请基于页面真实内容，用大模型推理能力提炼该网站的关键信息。\n"
+    "任务：输出以下 8 个字段的结构化 JSON（只输出 JSON，不要任何解释文字）：\n"
+    "{\n"
+    '  "language": "网站主要语言（如 中文 / English / Español）",\n'
+    '  "industry": "从网站主营信息推断出的行业（如 在线教育 / 跨境电商 / SaaS 工具 / 移动游戏）",\n'
+    '  "type": "网站属性/类型（如 电商网站 / 技术服务 / 公益平台 / 政府网站 / 旅游服务 / 家政服务 / 营销·广告平台 / SaaS 工具 / 其他）",\n'
+    '  "audience": "目标对象：面向哪些人群 / 企业 / 渠道 / 地区",\n'
+    '  "competitors": ["全球排名 top 3 的主要竞品名称"],\n'
+    '  "advantages": ["核心优势/卖点，提炼而非功能罗列，最多 5 条"],\n'
+    '  "channels": [{"platform": "推荐用于用户增长的媒体平台", "reason": "推荐理由 / 数据依据"}]\n'
+    "}\n"
+    "硬性约束：\n"
+    "1. 所有结论必须来自给定正文与页面结构，禁止编造；缺信息时对应字段填空字符串或空数组，不要补通用套话。\n"
+    "2. type 与 industry 要区分：industry 是所处行业，type 是『这个网站是什么』（它的本质属性）。\n"
+    "3. competitors 最多 3 个、advantages 最多 5 条、channels 最多 5 个；不足则少给，不要硬凑。\n"
+    "4. channels 的 reason 必须具体（结合受众 / 产品形态 / 行业惯例或数据依据），避免『流量大』这类空话。"
+)
+
+SYS_LANDING_BASIC = (
+    "请重点核对以下字段的提取准确性：\n"
+    "- language：以页面正文与 <html lang> 的实际语言为准，不要被个别英文术语误导；多语站点取主语言。\n"
+    "- industry：依据网站『在做什么业务、服务谁』来定，而不是页面装饰。页面有教程/博客不代表就是教育行业——要看它实际售卖/提供的核心服务。\n"
+    "- type：判定网站本质属性，从「电商网站 / 技术服务 / 公益平台 / 政府网站 / 旅游服务 / 家政服务 / 媒体平台 / SaaS 工具 / 其他」中选最贴切者；"
+    "若网站用于帮助广告主获客、对接渠道与流量、提供广告/营销/变现/代理服务，应判为「营销·广告平台」相关类型，不要因页面含教程或案例就误判。\n"
+    "- audience：明确对象是谁（终端消费者 / 企业客户 / 渠道代理 / 流量主），以及主要覆盖地区。"
+)
+
+SYS_LANDING_COMPETITORS = (
+    "competitors：列出该网站在『全球市场』上最主要的 3 个竞品（按知名度 / 市场份额 / 直接替代关系取 top 3），仅给名称数组。\n"
+    "若网站为 niche / 新兴产品导致难以判定，给出最相近的 3 个替代方案名称；实在无参考则给空数组。不要编造不存在的竞品。"
+)
+
+SYS_LANDING_ADVANTAGES = (
+    "advantages：从该网站的真实卖点中提炼『核心优势 / 差异化价值』，而不是罗列功能清单。\n"
+    "每条是一句可独立成立的价值陈述（如『覆盖 200+ 国家的一件代发网络』『AI 自动生成投放创意，节省 70% 素材制作时间』）。\n"
+    "聚焦技术特质、服务承诺、资源壁垒、性价比等真正构成竞争力的点；默认最多 5 条，不足则少给，不要硬凑。"
+)
+
+SYS_LANDING_CHANNELS = (
+    "channels：推荐该网站用于『获取用户增长』的媒体 / 广告平台，最多 5 个。\n"
+    "每个对象含 platform（平台名，如 Google / Meta / TikTok / 行业垂直媒体 / 应用商店 ASO）与 reason（为什么适合它的推荐理由，"
+    "可结合受众、产品形态、行业惯例或数据依据，如『目标用户为 Z 世代，TikTok 短视频种草转化高』）。"
+)
+
+LANDING_PROMPTS = [
+    {
+        "key": "landing_framework",
+        "name": "落地页分析 · 分析总框架",
+        "module": LANDING_MODULE,
+        "category": "分析框架",
+        "description": "落地页分析的顶层指令：明确任务、输出 JSON 结构与硬性约束。其余提示词分别细化各字段的提取规则。",
+        "content": SYS_LANDING_FRAMEWORK,
+    },
+    {
+        "key": "landing_basic",
+        "name": "落地页分析 · 基础识别",
+        "module": LANDING_MODULE,
+        "category": "基础识别",
+        "description": "细化 language / industry / type / audience 四个字段的提取规则与判定要点（行业与类型区分、本质属性判定）。",
+        "content": SYS_LANDING_BASIC,
+    },
+    {
+        "key": "landing_competitors",
+        "name": "落地页分析 · 竞品识别",
+        "module": LANDING_MODULE,
+        "category": "竞争分析",
+        "description": "细化 competitors 字段：全球排名 top 3 竞品，含判定口径，禁止编造。",
+        "content": SYS_LANDING_COMPETITORS,
+    },
+    {
+        "key": "landing_advantages",
+        "name": "落地页分析 · 优势提炼",
+        "module": LANDING_MODULE,
+        "category": "价值提炼",
+        "description": "细化 advantages 字段：提炼核心优势，非功能罗列，默认 ≤5 条。",
+        "content": SYS_LANDING_ADVANTAGES,
+    },
+    {
+        "key": "landing_channels",
+        "name": "落地页分析 · 推广途径",
+        "module": LANDING_MODULE,
+        "category": "增长推广",
+        "description": "细化 channels 字段：推荐用于用户增长的媒体平台，每个含平台名 + 推荐理由/数据依据，默认 ≤5 个。",
+        "content": SYS_LANDING_CHANNELS,
+    },
+]
+
+# 把落地页分析提示词并入注册表（提示词管理 / 素材提示词 单一数据源）
+PROMPT_REGISTRY = PROMPT_REGISTRY + LANDING_PROMPTS
+
 _PROMPT_FALLBACK = {p["key"]: p["content"] for p in PROMPT_REGISTRY}
 
 # 旧版默认提示词快照，只用于升级迁移：库里内容仍是这段未改动的默认值时刷新为新版，
@@ -227,9 +324,10 @@ def sync_prompt_defaults(db) -> list:
         if not row:
             continue
         changed = False
-        meta = (item["name"], item["module"], item["description"])
-        if (row.name, row.module, row.description) != meta:
-            row.name, row.module, row.description = meta
+        meta = (item["name"], item["module"], item["description"], item.get("category"))
+        if (row.name, row.module, row.description, row.category) != meta:
+            row.name, row.module, row.description = item["name"], item["module"], item["description"]
+            row.category = item.get("category")
             changed = True
         legacy = (_PROMPT_LEGACY.get(item["key"]) or "").strip()
         if legacy and (row.content or "").strip() == legacy:
@@ -667,6 +765,165 @@ async def analyze_landing_page(db, url, text, page=None) -> Framework:
     lp.parsed_json = {**data, "page": page_slim} if page_slim else data
     db.commit()
     return fw
+
+
+# ----------------------------- 素材创作：落地页分析（8 字段 LLM 推理） -----------------------------
+# 调用已配置的「分析 / 文案」大模型（统一走系统「大模型配置」），用推理能力产出 8 个必要字段，
+# 并回传实际调用了哪个模型，便于持续跟踪各模型优劣势。
+LANDING_KEYS = ["landing_framework", "landing_basic", "landing_competitors", "landing_advantages", "landing_channels"]
+
+
+def get_landing_prompt(db) -> str:
+    """拼接 5 段提示词为一份系统提示词（按注册顺序）。每段都可单独在「素材提示词」编辑。"""
+    parts = [get_prompt(db, k) for k in LANDING_KEYS]
+    return "\n\n".join([p for p in parts if p]).strip()
+
+
+def build_landing_prompt(url: str, text: str, page: dict) -> str:
+    """构造落地页分析的用户提示词：URL（展示）+ 页面结构 + 正文。"""
+    meta_bits = []
+    if page:
+        if page.get("title"):
+            meta_bits.append(f"标题: {page.get('title')}")
+        if page.get("h1"):
+            meta_bits.append(f"H1: {page.get('h1')}")
+        if page.get("h2"):
+            meta_bits.append(f"H2: {page.get('h2')}")
+        if page.get("ctas"):
+            meta_bits.append(f"CTA: {page.get('ctas')}")
+        if page.get("description"):
+            meta_bits.append(f"META描述: {page.get('description')}")
+    meta_str = "；".join(meta_bits) if meta_bits else "无"
+    return (
+        f"落地页 URL: {url or '无'}\n"
+        f"页面结构: {meta_str}\n"
+        f"正文:\n{(text or '')[:4000]}\n\n"
+        "请基于以上页面真实内容，输出 8 字段 JSON。"
+    )
+
+
+def _resolve_model(db):
+    """返回 (llm, info)。info 记录实际调用的模型与用途，前端据此展示"用了哪个模型"。
+
+    优先用「分析」模型；若未单独配置分析模型，但已配置「文案」文本模型，则复用「文案」模型
+    （V4.22 模式：避免只配了一个大模型却让落地页分析默默走 Mock）。
+    """
+    candidates = []
+    for c in db.query(ModelConfig).filter_by(is_active=True).all():
+        us = c.usages if c.usages is not None else [c.usage]
+        if "analysis" in us and c.api_key and c.base_url and c.model:
+            candidates.append((c, "analysis"))
+        elif "copy" in us and c.api_key and c.base_url and c.model:
+            candidates.append((c, "copy"))
+    cfg, usage = None, None
+    for want in ("analysis", "copy"):
+        best = None
+        for c, role in candidates:
+            if role == want and (best is None or c.id > best.id):
+                best = c
+        if best:
+            cfg, usage = best, want
+            break
+    llm = get_llm(db, usage or "analysis")   # 带 Mock 兜底
+    info = {"provider": "", "model": "", "role": usage or "analysis", "fallback": True}
+    if cfg:
+        info["provider"] = cfg.provider
+        info["model"] = cfg.model or ""
+        info["fallback"] = bool(getattr(llm, "used_fallback", False))
+    return llm, info
+
+
+def _normalize_landing(raw: dict, url: str) -> dict:
+    """把模型原始输出规整为 8 字段结构（裁剪长度、保证类型）。"""
+    raw = raw if isinstance(raw, dict) else {}
+
+    def as_str(v):
+        return (str(v).strip() if v is not None else "")
+
+    def as_str_list(v, limit):
+        out = []
+        if isinstance(v, list):
+            for x in v:
+                s = as_str(x)
+                if s:
+                    out.append(s)
+                if len(out) >= limit:
+                    break
+        return out
+
+    chs = []
+    for c in (raw.get("channels") or []):
+        if isinstance(c, dict):
+            p = as_str(c.get("platform"))
+            r = as_str(c.get("reason"))
+            if p:
+                chs.append({"platform": p, "reason": r})
+        elif isinstance(c, str):
+            s = as_str(c)
+            if s:
+                chs.append({"platform": s, "reason": ""})
+        if len(chs) >= 5:
+            break
+
+    return {
+        "url": url or as_str(raw.get("url")),
+        "language": as_str(raw.get("language")),
+        "industry": as_str(raw.get("industry")),
+        "type": as_str(raw.get("type")),
+        "audience": as_str(raw.get("audience")),
+        "competitors": as_str_list(raw.get("competitors"), 3),
+        "advantages": as_str_list(raw.get("advantages"), 5),
+        "channels": chs,
+    }
+
+
+def _local_landing(url: str, page: dict) -> dict:
+    """无模型 / 模型失败时的本地兜底：只做最小识别（语言），其余留空，明确表示未用大模型推理。
+
+    用户要求必须用大模型推理，因此兜底结果必须如实标注 source=local，前端提示需配置大模型。
+    """
+    lang = (page or {}).get("lang") or ""
+    return {
+        "url": url, "language": lang, "industry": "", "type": "", "audience": "",
+        "competitors": [], "advantages": [], "channels": [],
+    }
+
+
+async def analyze_landing_concise(db, url, text, page=None) -> dict:
+    """素材创作：落地页分析。抓取（无正文时）→ 拼接提示词 → 调用已配置大模型推理 → 规整 8 字段。
+
+    返回 dict 含 8 字段 + model_info + source。source=llm 表示真用了大模型；local 表示走了兜底。
+    """
+    url = (url or "").strip()
+    text = (text or "").strip()
+    if page is None and url and not text:
+        page = await fetch_page(url)
+    page = page or {}
+    if not text and page.get("text"):
+        text = page["text"]
+
+    sys_prompt = get_landing_prompt(db)
+    user_prompt = build_landing_prompt(url, text, page)
+    llm, info = _resolve_model(db)
+
+    # 没有任何可用的真实模型配置：直接走本地兜底，明确标注
+    if not info["provider"]:
+        return {**_local_landing(url, page), "model_info": info, "source": "local"}
+
+    try:
+        resp = await llm.chat(sys_prompt, user_prompt)
+        raw = parse_json(resp)
+        if isinstance(raw, dict) and (
+            raw.get("industry") or raw.get("type") or raw.get("audience")
+            or raw.get("language") or raw.get("advantages") or raw.get("channels")
+        ):
+            data = _normalize_landing(raw, url)
+            return {**data, "model_info": info, "source": "mock" if info["fallback"] else "llm"}
+        print(f"[landing] 模型返回无法解析为 8 字段 JSON（len={len(resp)}），回退本地构造")
+    except Exception as e:
+        print("[landing] llm failed:", str(e)[:140])
+    # 模型调用 / 解析失败：本地兜底，但保留已识别到的模型信息进行追溯
+    return {**_local_landing(url, page), "model_info": info, "source": "local"}
 
 
 # ----------------------------- 创意方向 -----------------------------

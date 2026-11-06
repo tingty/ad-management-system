@@ -14,10 +14,11 @@ from schemas import (AnalyzeRequest, FrameworkOut, GenerateRequest, CampaignOut,
                      JobCreate, JobOut, BatchParseRequest, SlotVersionsOut,
                      LoginRequest, UserOut, UserCreate, UserUpdate, ReviewRequest, SpecUpdate,
                      AngleOut, AnglePlanRequest, ProduceRequest, BrandUpdate, EstimateRequest,
-                     ReportRequest, OptimizeRequest, PromptOut, PromptUpdate)
+                     ReportRequest, OptimizeRequest, PromptOut, PromptUpdate,
+                     LandingAnalysisRequest, LandingAnalysis)
 from services import (analyze_landing_page, generate_campaign_materials, regenerate_material,
                       plan_angles, produce_campaign, fetch_page, optimize_campaign,
-                      IMAGE_MAX_SIZES, PROMPT_REGISTRY)
+                      IMAGE_MAX_SIZES, PROMPT_REGISTRY, analyze_landing_concise)
 from creative import COPY_SCHEMA, ANGLE_LIBRARY, ANGLE_MAP
 from report import build_report, report_markdown
 from batch import parse_csv, run_job, template_csv, CSV_HEADERS
@@ -79,6 +80,18 @@ async def analyze(req: AnalyzeRequest, db: Session = Depends(get_db),
         raise HTTPException(400, "请提供落地页 URL 或文本")
     fw = await analyze_landing_page(db, req.url, req.text)
     return fw
+
+
+@router.post("/landing-analysis", response_model=LandingAnalysis)
+async def landing_analysis(req: LandingAnalysisRequest, db: Session = Depends(get_db),
+                          user: User = Depends(require_roles(*CAN_EDIT))):
+    """素材创作：落地页分析。调用已配置的「分析 / 文案」大模型推理，产出 8 个必要字段，
+    并回传实际调用了哪个模型（provider/model/role/fallback），便于持续跟踪各模型优劣势。结果不落库。"""
+    url, text = (req.url or "").strip(), (req.text or "").strip()
+    if not url and not text:
+        raise HTTPException(400, "请提供落地页 URL 或正文")
+    result = await analyze_landing_concise(db, url or None, text or None)
+    return LandingAnalysis(**result)
 
 # ----------------------------- 产品分析报告 -----------------------------
 @router.post("/report")
@@ -716,18 +729,23 @@ def _prompt_reg(key: str):
 
 
 @router.get("/settings/prompts", response_model=list[PromptOut])
-def list_prompts(db: Session = Depends(get_db), _: User = Depends(require_roles("admin"))):
-    """按注册表顺序输出全部提示词；未落库的用内置默认兜底展示（与运行时 get_prompt 行为一致）。"""
+def list_prompts(db: Session = Depends(get_db),
+                 module: str = Query(None, description="按功能模块筛选，如：素材创作（落地页分析）"),
+                 _: User = Depends(require_roles("admin"))):
+    """按注册表顺序输出提示词；未落库的用内置默认兜底展示（与运行时 get_prompt 行为一致）。
+    传入 module 时只返回该模块的提示词（供「素材提示词」分门别类展示）。"""
     rows = {p.key: p for p in db.query(PromptConfig).all()}
     out = []
     for item in PROMPT_REGISTRY:
+        if module and item.get("module") != module:
+            continue
         row = rows.get(item["key"])
         if row:
             out.append(row)
         else:
             out.append(PromptConfig(id=0, key=item["key"], name=item["name"], module=item["module"],
-                                    description=item["description"], content=item["content"],
-                                    is_active=True, updated_at=None))
+                                    category=item.get("category"), description=item["description"],
+                                    content=item["content"], is_active=True, updated_at=None))
     return out
 
 
@@ -741,7 +759,9 @@ def update_prompt(key: str, req: PromptUpdate, db: Session = Depends(get_db),
     content = (req.content or "").strip()
     if not content:
         raise HTTPException(400, "提示词内容不能为空")
-    if "MARKER" not in content:
+    # 仅对「默认提示词本身含 MARKER 标记」的提示词强制保留 MARKER（如 site_analysis/angle/copy 等）；
+    # 落地页分析等不含 MARKER 的提示词可自由编辑，不再被误拦截。
+    if "MARKER" in reg["content"] and "MARKER" not in content:
         raise HTTPException(400, "提示词需保留结尾 MARKER 标记（Mock 兜底与日志定位依赖它），请勿删除")
     row = db.query(PromptConfig).filter_by(key=key).first()
     if not row:
@@ -753,6 +773,8 @@ def update_prompt(key: str, req: PromptUpdate, db: Session = Depends(get_db),
         row.name = req.name
     if req.description is not None:
         row.description = req.description
+    if req.category is not None:
+        row.category = req.category
     if req.is_active is not None:
         row.is_active = req.is_active
     db.commit(); db.refresh(row)

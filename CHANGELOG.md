@@ -744,6 +744,31 @@
 - 后端流程测试：创建 [analysis,copy] 文本配置 + [image] 配置 + 仅 [analysis] 配置后，getter 正确——analysis 取较新的 deepseek、copy 仍取 qwen、image 取 custom-image；旧单字符串行经 `usages` 推导正常。
 - 预设接口 `usage=all` 返回 33 项，含 `modality` 与 `extra_fields`（generic-image 正确带出 endpoint）。
 
+## V4.24 素材创作重构：落地页分析（8 字段 LLM 推理）+ 素材提示词库
+
+**需求**
+1. 「素材创作」只保留「落地页分析与评价」，删除图片/视频创作、创意方向、媒体与品牌设置等子模块，逐步重建。
+2. 落地页分析必须调用大模型推理（非本地规则），输出 8 个必要字段：①网站地址（仅展示）②语言 ③行业 ④类型 ⑤对象 ⑥竞品（全球 Top3）⑦优势（≤5，提炼非罗列）⑧推广途径（≤5，含平台+推荐理由）。
+3. 素材创作统一调用「大模型配置」已配置模型，按需要用正确模型，并在结果后标注本次实际调用的模型（便于持续跟踪优劣势）。
+4. 删除「素材提示词管理」模块；新增二级菜单「素材提示词」，把改造后的提示词分门别类展示，可编辑/保存。
+
+**后端**
+- 新增 `PromptConfig.category` 列（`migrations.ensure_schema` 自动 ALTER 补齐）。
+- `services.PROMPT_REGISTRY` 并入 5 段落地页分析提示词（`landing_framework / landing_basic / landing_competitors / landing_advantages / landing_channels`），统一 `module=素材创作（落地页分析）`、各自 `category`（分析框架 / 基础识别 / 竞争分析 / 价值提炼 / 增长推广）；运行时拼接为一份系统提示词一次调用。
+- 新增 `analyze_landing_concise()`：抓取（无正文时）→ 拼接提示词 → 调用已配置「分析」模型（未配则按 V4.22 模式复用「文案」模型）→ 稳健解析 8 字段；返回 `model_info`（provider/model/role/fallback）与 `source`（llm/local）。未配置有效模型时如实标注本地兜底。
+- `routers`：新增 `POST /api/landing-analysis`；`GET /api/settings/prompts` 支持 `module` 过滤；`update_prompt` 的 MARKER 强校验改为「仅对默认提示词本身含 MARKER 的提示词生效」，落地页分析等无 MARKER 提示词可自由编辑。
+
+**前端**
+- `api.ts`：新增 `LandingAnalysis / ModelInfo / LandingChannel` 类型与 `api.landingAnalysis()`；`prompts(module?)` 支持按模块过滤；`PromptConfig` 增加 `category`。
+- `App.tsx`：删除 `mprompts`/MaterialPrompts，新增 `matprompts`/MaterialPromptLibrary（素材创作平台二级菜单：素材创作、素材提示词）。
+- `MaterialCreation.tsx` 重写为纯落地页分析：输入 → 分析 → 展示 8 字段 + 模型信息横幅（明确"本次由哪个模型推理"）；本地兜底时提示需配置大模型。
+- 新增 `MaterialPromptLibrary.tsx`：按 `category` 分门别类展示 5 段提示词，复用提示词编辑/恢复默认弹窗，保存即生效。
+
+**验证**
+- 后端 `python -m py_compile` 通过；`migrations.ensure_schema` 自动补齐 `prompt_configs.category` 列。
+- 烟雾测试：5 段提示词正确播种（module/分类一致）；拼接提示词非空且含 8 字段键；`analyze_landing_concise` 返回结构经 `LandingAnalysis(**result)` 校验通过（channels→list、model_info→ModelInfo 正确）。
+- 前端 `npm run build` 通过（47 模块）。
+
 ## V4.20 403 提示识别 MaaS 工作空间 access_denied
 
 - `backend/llm_catalog.py`：`_classify_error` 的 403 分支检测 body 中的 workspace / access_denied，给出 MaaS 工作空间专属 Key 指引（ws-*.maas.aliyuncs.com / llm-*.maas.aliyuncs.com 需绑定工作空间的专用 Key，且区域需一致）。

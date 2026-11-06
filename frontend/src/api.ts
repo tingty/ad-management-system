@@ -222,6 +222,7 @@ export interface PromptConfig {
   key: string
   name: string
   module: string
+  category?: string | null
   description?: string
   content: string
   is_active: boolean
@@ -335,6 +336,32 @@ export interface ReportResponse {
   framework: Framework
   report: AnalysisReport
   angles: Angle[]
+}
+
+/** 素材创作：落地页分析（8 字段 LLM 推理）输出 */
+export interface LandingChannel {
+  platform: string
+  reason: string
+}
+
+export interface ModelInfo {
+  provider: string
+  model: string
+  role: string        // 实际用途：analysis / copy（分析模型未配则复用文案模型）
+  fallback: boolean   // true = 实际走了 Mock 兜底（未配置有效模型）
+}
+
+export interface LandingAnalysis {
+  url: string              // (1) 网站地址 —— 仅展示
+  language: string         // (2) 语言
+  industry: string         // (3) 行业
+  type: string             // (4) 类型（网站属性）
+  audience: string         // (5) 对象
+  competitors: string[]    // (6) 竞品（top 3）
+  advantages: string[]     // (7) 优势（≤5）
+  channels: LandingChannel[]  // (8) 推广途径（≤5，含平台+理由）
+  model_info: ModelInfo
+  source: string           // llm / local —— 结果是否真的来自大模型推理
 }
 
 export interface OptimizeChange {
@@ -472,6 +499,9 @@ export const api = {
     req<OptimizeResult>(`/api/campaigns/${cid}/optimize`, {
       method: 'POST', body: JSON.stringify(payload),
     }),
+  // 素材创作：落地页分析（8 字段 LLM 推理）
+  landingAnalysis: (payload: { url?: string; text?: string }) =>
+    req<LandingAnalysis>('/api/landing-analysis', { method: 'POST', body: JSON.stringify(payload) }),
   planAngles: (framework_id: number, platforms: string[], extra_prompt?: string, lang?: string) =>
     req<Angle[]>('/api/angles/plan', {
       method: 'POST', body: JSON.stringify({ framework_id, platforms, extra_prompt, lang }),
@@ -546,8 +576,9 @@ export const api = {
   testModel: (m: Partial<ModelConfig> & { endpoint?: string; protocol?: string }) =>
     req<ModelTestResult>(
       '/api/settings/models/test', { method: 'POST', body: JSON.stringify(m) }),
-  // 提示词管理
-  prompts: () => req<PromptConfig[]>('/api/settings/prompts'),
+  // 提示词管理（可传 module 按功能模块筛选，如「素材创作（落地页分析）」）
+  prompts: (module?: string) =>
+    req<PromptConfig[]>(`/api/settings/prompts${module ? `?module=${encodeURIComponent(module)}` : ''}`),
   updatePrompt: (key: string, payload: { content: string; name?: string; description?: string; is_active?: boolean }) =>
     req<PromptConfig>(`/api/settings/prompts/${key}`, { method: 'PUT', body: JSON.stringify(payload) }),
   resetPrompt: (key: string) =>

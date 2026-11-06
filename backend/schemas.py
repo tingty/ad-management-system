@@ -122,6 +122,7 @@ class PromptOut(BaseModel):
     key: str
     name: str
     module: str
+    category: Optional[str] = None
     description: Optional[str] = None
     content: str
     is_active: bool = True
@@ -134,7 +135,46 @@ class PromptUpdate(BaseModel):
     content: str
     name: Optional[str] = None
     description: Optional[str] = None
+    category: Optional[str] = None
     is_active: Optional[bool] = None
+
+
+# ----------------------------- 素材创作：落地页分析（8 字段 LLM 推理） -----------------------------
+class LandingAnalysisRequest(BaseModel):
+    """落地页分析请求：给 URL 抓取，或直接给正文。"""
+    url: Optional[str] = None
+    text: Optional[str] = None
+
+
+class LandingChannel(BaseModel):
+    """推广途径：媒体平台 + 推荐理由 / 数据依据。"""
+    platform: str
+    reason: str
+
+
+class ModelInfo(BaseModel):
+    """本次分析实际调用的大模型信息（用于前端展示"用了哪个模型"）。"""
+    model_config = {"protected_namespaces": ()}   # 允许字段名 model_info 不被 "model_" 保护前缀拦截
+    provider: str = ""          # 厂商，如 openai / dashscope / anthropic
+    model: str = ""             # 具体模型标识
+    role: str = "analysis"      # 实际用途：analysis / copy（分析模型未配时复用文案模型）
+    fallback: bool = True       # True = 实际走了 Mock 兜底（未配置有效模型）
+
+
+class LandingAnalysis(BaseModel):
+    """落地页分析结果：8 个必要字段 + 模型信息 + 来源标记。"""
+    url: str = ""               # (1) 网站地址 —— 仅展示，不做分析
+    language: str = ""          # (2) 语言
+    industry: str = ""          # (3) 行业
+    type: str = ""              # (4) 类型（网站属性：公益/电商/技术服务/家政/旅游/政府…）
+    audience: str = ""          # (5) 对象（目标人群 / 对象 / 地区）
+    competitors: List[str] = []  # (6) 竞品（全球排名 top 3）
+    advantages: List[str] = []   # (7) 优势（提炼核心卖点，非功能罗列，默认 ≤5）
+    channels: List[LandingChannel] = []  # (8) 推广途径（媒体平台 + 推荐理由，默认 ≤5）
+    model_info: ModelInfo = ModelInfo()
+    source: str = "local"       # llm / local —— 结果真的来自大模型推理，还是本地兜底
+    class Config:
+        from_attributes = True
 
 class RegenerateRequest(BaseModel):
     extra_prompt: str
