@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -484,6 +485,72 @@ def parse_page_meta(html: str, final_url: str = "") -> dict:
     }
 
 
+def extract_logo(html: str, base_url: str = "") -> str:
+    """从落地页 HTML 中启发式提取品牌 / 公司 logo 的绝对 URL。
+
+    优先级：含 'logo' 关键字的 <img> > apple-touch-icon > og:image > favicon。
+    内联 data: URI 与无法解析的相对路径均跳过。返回空串表示未抓到。
+    """
+    if not html:
+        return ""
+
+    def _abs(u: str) -> str:
+        u = (u or "").strip()
+        if not u or u.startswith("data:"):
+            return ""
+        if u.startswith("//"):
+            scheme = (urlparse(base_url).scheme or "https")
+            return f"{scheme}:{u}"
+        if u.startswith("http://") or u.startswith("https://"):
+            return u
+        if base_url:
+            try:
+                return urljoin(base_url, u)
+            except Exception:
+                return ""
+        return ""
+
+    # 1) 含 logo 关键字的 <img>（class / id / alt / title / src）
+    for m in re.finditer(r"(?is)<img\b([^>]*)>", html):
+        attrs = m.group(1)
+        if (re.search(r"(?i)(class|id|alt|title)\s*=\s*[\"'][^\"']*logo[^\"']*[\"']", attrs)
+                or re.search(r"(?i)\bsrc\s*=\s*[\"'][^\"']*logo[^\"']*[\"']", attrs)):
+            src = re.search(r"(?i)\bsrc\s*=\s*[\"']([^\"']+)[\"']", attrs)
+            if src:
+                a = _abs(src.group(1))
+                if a:
+                    return a
+
+    # 2) apple-touch-icon
+    m = re.search(r"(?i)<link\b[^>]*rel=[\"'][^\"']*apple-touch-icon[^\"']*[\"'][^>]*>", html)
+    if m:
+        href = re.search(r"(?i)\bhref\s*=\s*[\"']([^\"']+)[\"']", m.group(0))
+        if href:
+            a = _abs(href.group(1))
+            if a:
+                return a
+
+    # 3) og:image
+    m = re.search(r"(?i)<meta\b[^>]*property=[\"']og:image[\"'][^>]*content=[\"']([^\"']+)[\"']", html)
+    if not m:
+        m = re.search(r"(?i)<meta\b[^>]*content=[\"']([^\"']+)[\"'][^>]*property=[\"']og:image[\"']", html)
+    if m:
+        a = _abs(m.group(1))
+        if a:
+            return a
+
+    # 4) favicon / icon
+    for rel in ("icon", "shortcut icon"):
+        m = re.search(r"(?i)<link\b[^>]*rel=[\"'][^\"']*" + re.escape(rel) + r"[^\"']*[\"'][^>]*>", html)
+        if m:
+            href = re.search(r"(?i)\bhref\s*=\s*[\"']([^\"']+)[\"']", m.group(0))
+            if href:
+                a = _abs(href.group(1))
+                if a:
+                    return a
+    return ""
+
+
 async def fetch_page(url: str) -> dict:
     """抓一次落地页，返回正文 + 页面结构。
 
@@ -491,7 +558,7 @@ async def fetch_page(url: str) -> dict:
     """
     empty = {"text": "", "chars": 0, "status": 0, "fetched": False,
              "title": "", "description": "", "lang": "", "h1": [], "h2": [],
-             "ctas": [], "images": 0, "has_video": False, "final_url": url}
+             "ctas": [], "images": 0, "has_video": False, "final_url": url, "html": ""}
     if not url:
         return empty
     html, status = "", 0
@@ -518,7 +585,7 @@ async def fetch_page(url: str) -> dict:
     text = html_lib.unescape(text)
     lines = [re.sub(r"\s+", " ", l).strip() for l in text.splitlines()]
     body = "\n".join([l for l in lines if l])
-    return {**empty, **meta, "text": body, "chars": len(body), "status": status, "fetched": True}
+    return {**empty, **meta, "text": body, "chars": len(body), "status": status, "fetched": True, "html": html}
 
 
 async def fetch_page_text(url: str) -> str:
@@ -902,13 +969,16 @@ async def analyze_landing_concise(db, url, text, page=None) -> dict:
     if not text and page.get("text"):
         text = page["text"]
 
+    # 启发式提取品牌 logo（即使走本地兜底也尽量给出，供后续图片合成复用）
+    logo = extract_logo(page.get("html") or "", url)
+
     sys_prompt = get_landing_prompt(db)
     user_prompt = build_landing_prompt(url, text, page)
     llm, info = _resolve_model(db)
 
     # 没有任何可用的真实模型配置：直接走本地兜底，明确标注
     if not info["provider"]:
-        return {**_local_landing(url, page), "model_info": info, "source": "local"}
+        return {**_local_landing(url, page), "model_info": info, "source": "local", "logo": logo}
 
     try:
         resp = await llm.chat(sys_prompt, user_prompt)
@@ -918,12 +988,12 @@ async def analyze_landing_concise(db, url, text, page=None) -> dict:
             or raw.get("language") or raw.get("advantages") or raw.get("channels")
         ):
             data = _normalize_landing(raw, url)
-            return {**data, "model_info": info, "source": "mock" if info["fallback"] else "llm"}
+            return {**data, "model_info": info, "source": "mock" if info["fallback"] else "llm", "logo": logo}
         print(f"[landing] 模型返回无法解析为 8 字段 JSON（len={len(resp)}），回退本地构造")
     except Exception as e:
         print("[landing] llm failed:", str(e)[:140])
     # 模型调用 / 解析失败：本地兜底，但保留已识别到的模型信息进行追溯
-    return {**_local_landing(url, page), "model_info": info, "source": "local"}
+    return {**_local_landing(url, page), "model_info": info, "source": "local", "logo": logo}
 
 
 # ----------------------------- 创意方向 -----------------------------

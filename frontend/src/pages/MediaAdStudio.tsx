@@ -6,6 +6,7 @@ type Step = 1 | 2 | 3
 interface Props {
   initialAnalysis: LandingAnalysis | null
   onGotoCreation: () => void
+  selectedLogo?: string
 }
 
 function ModelBadge({ info, fallbackText }: { info: ModelInfo; fallbackText?: string }) {
@@ -20,7 +21,7 @@ function ModelBadge({ info, fallbackText }: { info: ModelInfo; fallbackText?: st
   )
 }
 
-export default function MediaAdStudio({ initialAnalysis, onGotoCreation }: Props) {
+export default function MediaAdStudio({ initialAnalysis, onGotoCreation, selectedLogo }: Props) {
   const [analysis, setAnalysis] = useState<LandingAnalysis | null>(initialAnalysis)
   const [platforms, setPlatforms] = useState<MediaPlatform[]>([])
   const [presets, setPresets] = useState<CreativePresets | null>(null)
@@ -127,6 +128,7 @@ export default function MediaAdStudio({ initialAnalysis, onGotoCreation }: Props
         copy_fields: payloadCopy,
         style_opts: { creative_direction: direction, content_style: styleName, color_scheme: colorName },
         slots,
+        logo: selectedLogo || "",
       })
       setImages(res.images)
       setImageModel(res.image_model)

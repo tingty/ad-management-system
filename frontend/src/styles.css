@@ -1010,7 +1010,7 @@ select {
 .sp-count input, .sp-lang select { width: auto; }
 
 /* 文案编辑 */
-.copy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin: 14px 0; }
+.copy-grid { display: flex; flex-direction: column; gap: 14px; margin: 14px 0; }
 .copy-field { display: flex; flex-direction: column; gap: 6px; }
 .copy-field label { font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
 .copy-field .cf-limit { font-weight: 500; color: var(--muted); font-size: 11.5px; }
@@ -1033,4 +1033,18 @@ select {
 /* 落地页分析：下一步入口 */
 .la-next { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--border);
   display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
+/* 落地页分析：品牌 Logo 区块 */
+.la-logo .la-value { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.logo-preview { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.logo-preview .logo-img { max-width: 160px; max-height: 80px; object-fit: contain;
+  border: 1px solid var(--border); border-radius: 8px; background: #fff; padding: 6px; }
+.logo-empty { color: var(--muted); font-style: italic; }
+.logo-toggle { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+.logo-toggle input { width: auto; margin: 0; accent-color: var(--primary); }
+.logo-upload { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.logo-upload-btn { display: inline-block; padding: 8px 14px; border: 1px dashed var(--primary);
+  color: var(--primary); border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;
+  background: #f7faff; }
+.logo-upload-btn:hover { background: #eef4ff; }
 

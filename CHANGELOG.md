@@ -827,6 +827,32 @@
 - 前端 `tsc --noEmit` 退出码 0。
 - 注：若线上仍为空，请确认已 `git pull && docker compose up -d --build` 同步最新构建，并在浏览器 Network 中确认 `/api/settings/models/presets` 返回 200 与数据。
 
+## V4.27 素材创作：展示文案竖向布局 + 品牌 Logo 抓取/选择/合成
+
+**需求**
+1. 「素材创作 → 营销推广设置 → 展示文案」子模块中，推荐文案的展示布局改为从上到下的竖向流（原为双列网格）。
+2. 落地页分析新增品牌 Logo：从网站抓取品牌/公司 logo 并展示，支持选择是否使用抓取的 logo，也支持手动上传本地 logo；所选 logo 用于后续推广图片合成。
+
+**交付**
+- 文案布局：`frontend/src/styles.css` 将 `.copy-grid` 由 `display:grid` 双列改为 `display:flex; flex-direction:column` 单列竖向流，字段依次从上向下排布。
+- 品牌 Logo 抓取（后端）：
+  - `backend/services.py`：`fetch_page` 现一并返回原始 `html`；新增 `extract_logo(html, base_url)`，按优先级（含 'logo' 关键字的 `<img>` > apple-touch-icon > og:image > favicon）启发式提取品牌/公司 logo 并解析为绝对 URL；`analyze_landing_concise` 在抓取后计算 `logo` 并随 8 字段一并返回（兜底路径同样返回，便于后续合成复用）。
+  - `backend/schemas.py`：`LandingAnalysis` 新增 `logo: str = ""`。
+- 品牌 Logo 合成（后端）：
+  - `backend/imaging.py`：`render_ad_png` 新增 `logo_path` 参数，将 logo 合成到广告图右上角安全区（小 banner 贴右中）；自动处理透明通道，并对无透明通道的 JPG 做近白背景去除。
+  - `backend/media_ad.py`：`generate_media_images` 新增 `logo` 入参，支持 `/files/...`（已上传）与远程 http(s) URL 两种来源，下载/映射到本地后传入合成；`_cleanup_ai_bgs` 一并清理临时下载的 `_mlogo_*`。
+  - `backend/schemas.py`：`MediaImageRequest` 新增 `logo: str = ""`；`backend/routers.py`：`/api/media-campaign/images` 透传 `req.logo`。
+- 品牌 Logo 展示与选择（前端）：
+  - `frontend/src/api.ts`：`LandingAnalysis` 增加 `logo` 字段；`mediaImages` 入参增加 `logo`。
+  - `frontend/src/pages/MaterialCreation.tsx`：分析结论 `ResultView` 新增「⑨ 品牌 Logo」区块——展示抓取的 logo、提供「使用抓取到的 Logo 合成图片」开关（默认开启）、以及「上传本地 Logo」按钮（复用 `api.uploadAsset`）；选中的 logo 经 `selectedLogo` 传入 `MediaAdStudio`。
+  - `frontend/src/pages/MediaAdStudio.tsx`：接收 `selectedLogo`，在「生成推广图片」时随请求携带。
+  - `frontend/src/styles.css`：新增 `.la-logo` / `.logo-preview` / `.logo-img` / `.logo-toggle` / `.logo-upload` 等样式。
+
+**验证**
+- 单元：`extract_logo` 正确优先抓取 logo 图、跳过空与 data: URI；`render_ad_png` 方版与 banner 均能合成 logo 不出错。
+- 后端 `py_compile` 通过；前端 `tsc --noEmit` 退出码 0、`npm run build` 通过。
+- 端到端：① `POST /api/landing-analysis` 响应含 `logo` 字段；② `POST /api/media-campaign/images` 传 `logo=''` 与 `logo='/files/不存在'` 均优雅出图；③ 上传真实 PNG → 返回 `/files/...` → 生成图片成功，像素校验确认 logo 已落到图片右上角。
+
 ## V4.20 403 提示识别 MaaS 工作空间 access_denied
 
 - `backend/llm_catalog.py`：`_classify_error` 的 403 分支检测 body 中的 workspace / access_denied，给出 MaaS 工作空间专属 Key 指引（ws-*.maas.aliyuncs.com / llm-*.maas.aliyuncs.com 需绑定工作空间的专用 Key，且区域需一致）。

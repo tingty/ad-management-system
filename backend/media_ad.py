@@ -17,6 +17,9 @@
 """
 import os
 import asyncio
+import uuid
+import urllib.request
+import urllib.parse
 from typing import Optional
 
 from providers import get_llm, get_image, parse_json, UPLOAD_DIR, _active_config
@@ -389,12 +392,51 @@ def _cleanup_ai_bgs():
                 os.remove(f)
             except Exception:
                 pass
+        for f in glob.glob(os.path.join(UPLOAD_DIR, "_mlogo_*.png")):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
     except Exception:
         pass
 
 
+_LOGO_EXT = {".png": ".png", ".jpg": ".jpg", ".jpeg": ".jpg", ".webp": ".webp"}
+
+
+def _resolve_logo_local(logo_url: str):
+    """把前端传来的 logo（已上传的 /files/... 或远程抓取到的 http(s) URL）解析为本地文件路径。
+
+    远程 URL 会下载到 UPLOAD_DIR 并缓存为 _mlogo_*.xxx；无法解析/下载则返回 None（不走 logo）。
+    """
+    if not logo_url:
+        return None
+    if logo_url.startswith("/files/"):
+        name = logo_url[len("/files/"):]
+        local = os.path.join(UPLOAD_DIR, name)
+        return local if os.path.exists(local) else None
+    if logo_url.startswith("http://") or logo_url.startswith("https://"):
+        try:
+            ext = os.path.splitext(urllib.parse.urlparse(logo_url).path)[1].lower()
+            ext = _LOGO_EXT.get(ext, ".png")
+            fn = f"_mlogo_{uuid.uuid4().hex}{ext}"
+            dst = os.path.join(UPLOAD_DIR, fn)
+            req = urllib.request.Request(
+                logo_url, headers={"User-Agent": "Mozilla/5.0 (compatible; AdFactory/3.2)"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = resp.read()
+            with open(dst, "wb") as f:
+                f.write(data)
+            return dst
+        except Exception:
+            return None
+    local = os.path.join(UPLOAD_DIR, os.path.basename(logo_url))
+    return local if os.path.exists(local) else None
+
+
 async def generate_media_images(db, analysis: dict, platform: str, lang: str,
-                                copy_fields: dict, style_opts: dict, slots: list) -> dict:
+                                copy_fields: dict, style_opts: dict, slots: list,
+                                logo: str = "") -> dict:
     """基于「编辑后的文案 + 落地页分析结论 + 风格/样式/颜色」生成推广图片素材。
 
     - 文生图大模型已配置 → 按创意方向/风格/配色生成 AI 背景，再叠加文案合成 PNG；
@@ -424,6 +466,8 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
 
     brand = (copy_fields or {}).get("brand") or _brand_of(analysis)
     headline, sub, cta = _overlay_text(copy_fields or {}, platform, brand)
+    # 把 logo（上传的 /files/... 或远程抓取 URL）解析为本地可合成路径
+    logo_path = await asyncio.to_thread(_resolve_logo_local, logo or "")
 
     img = get_image(db)
     img_cfg = _active_config(db, "image")
@@ -443,9 +487,9 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         bg_prompt = _media_image_prompt(analysis, platform, directives, design)
         fn = f"media_{platform}_{size}_{abs(hash((placement, size, headline, sub))) % 100000:05d}.png"
         out = os.path.join(UPLOAD_DIR, fn)
-        tasks.append((out, w, h, bg_prompt, fn, size, placement))
+        tasks.append((out, w, h, bg_prompt, fn, size, placement, logo_path))
 
-    async def _render_one(out, w, h, bg_prompt, fn, size, placement):
+    async def _render_one(out, w, h, bg_prompt, fn, size, placement, logo_path):
         nonlocal ai_used
         bg_path = None
         if img is not None:
@@ -459,7 +503,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         await asyncio.to_thread(
             render_ad_png, out, w, h,
             (headline or "")[:200], (sub or "")[:200], (cta or "")[:60], (brand or "")[:40],
-            bg_path or None,
+            bg_path or None, logo_path or None,
         )
         return {"url": out, "file": fn, "size": size, "w": w, "h": h, "placement": placement}
 

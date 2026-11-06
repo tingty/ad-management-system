@@ -122,9 +122,46 @@ def _prepare_bg(w: int, h: int, bg_path: str | None) -> Image.Image:
     return _gradient(w, h)
 
 
+def _composite_logo(img: Image.Image, logo_path: str | None, w: int, h: int) -> Image.Image:
+    """把品牌 logo 合成到广告图右上角安全区（小 banner 则贴右侧居中）。
+
+    自动处理透明通道；针对无透明通道的 JPG 做近白背景去除，避免白块。
+    """
+    if not logo_path or not os.path.exists(logo_path):
+        return img
+    try:
+        logo = Image.open(logo_path).convert("RGBA")
+    except Exception:
+        return img
+    if logo.height <= 0 or logo.width <= 0:
+        return img
+    is_small = h <= 120 or w / h > 4
+    target_h = int(h * 0.40) if is_small else int(min(w, h) * 0.13)
+    target_h = max(18, min(target_h, 140))
+    ratio = target_h / float(logo.height)
+    tw, th = max(1, int(logo.width * ratio)), target_h
+    logo = logo.resize((tw, th), Image.LANCZOS)
+    if logo.mode != "RGBA":
+        logo = logo.convert("RGBA")
+    # 近白背景去除（仅作用于原本不透明的像素）
+    datas = logo.getdata()
+    new_data = []
+    for r, g, b, a in datas:
+        if a > 0 and r > 245 and g > 245 and b > 245:
+            new_data.append((r, g, b, 0))
+        else:
+            new_data.append((r, g, b, a))
+    logo.putdata(new_data)
+    margin = max(8, int(min(w, h) * 0.04))
+    x = w - tw - margin
+    y = margin if not is_small else (h - th) // 2
+    img.paste(logo, (x, y), logo)
+    return img
+
+
 def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: str,
                   cta: str, brand: str = "", bg_path: str | None = None,
-                  accent: tuple = None) -> str:
+                  logo_path: str | None = None, accent: tuple = None) -> str:
     accent = accent or PALETTE["accent"]
     img = _prepare_bg(width, height, bg_path)
     d = ImageDraw.Draw(img)
@@ -206,6 +243,8 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
             by = y + int(h * 0.055)
             d.rounded_rectangle([pad, by, pad + bw, by + bh], radius=int(bh / 2), fill=accent)
             d.text((pad + cfs * 1.1, by + bh / 2 - cfs * 0.66), cta, font=cf, fill=(25, 30, 38))
+
+    img = _composite_logo(img, logo_path, w, h)
 
     img.save(out_path, "PNG", optimize=True)
     return out_path

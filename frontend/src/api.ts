@@ -353,6 +353,7 @@ export interface ModelInfo {
 
 export interface LandingAnalysis {
   url: string              // (1) 网站地址 —— 仅展示
+  logo: string             // 从落地页抓取到的品牌 / 公司 logo（绝对 URL，可空）
   language: string         // (2) 语言
   industry: string         // (3) 行业
   type: string             // (4) 类型（网站属性）
@@ -560,6 +561,7 @@ export const api = {
   mediaImages: (payload: {
     analysis: LandingAnalysis; platform: string; lang?: string
     copy_fields: Record<string, any>; style_opts: Record<string, string>; slots: { size: string; placement: string }[]
+    logo?: string
   }) =>
     req<MediaImageResult>('/api/media-campaign/images', { method: 'POST', body: JSON.stringify(payload) }),
   planAngles: (framework_id: number, platforms: string[], extra_prompt?: string, lang?: string) =>

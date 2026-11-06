@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, ChangeEvent } from 'react'
 import { api, LandingAnalysis, LandingChannel, ModelInfo } from '../api'
 import MediaAdStudio from './MediaAdStudio'
 
@@ -25,10 +25,13 @@ export default function MaterialCreation({ meta }: { meta: any }) {
   const [err, setErr] = useState('')
   // 单条分析记录（逐步重建：一次只分析一个落地页）
   const [data, setData] = useState<LandingAnalysis | null>(null)
+  // 品牌 logo 选择状态：auto=用抓取的；upload=用本地上传的；none=不使用 logo
+  const [logoMode, setLogoMode] = useState<'auto' | 'upload' | 'none'>('auto')
+  const [uploadedLogo, setUploadedLogo] = useState('')
 
   const run = async () => {
     if (!url.trim() && !text.trim()) { setErr('请填写落地页链接或正文'); return }
-    setErr(''); setBusy(true); setData(null)
+    setErr(''); setBusy(true); setData(null); setLogoMode('auto'); setUploadedLogo('')
     try {
       const res = await api.landingAnalysis({
         url: url.trim() || undefined,
@@ -94,11 +97,20 @@ export default function MaterialCreation({ meta }: { meta: any }) {
 
       {data && (
         <>
-          <ResultView data={data} />
+          <ResultView
+            data={data}
+            logoMode={logoMode}
+            uploadedLogo={uploadedLogo}
+            onLogoMode={setLogoMode}
+            onUploaded={setUploadedLogo}
+            onUpload={(e) => onUploadLogo(e, setUploadedLogo, setErr, setLogoMode)}
+            onErr={setErr}
+          />
           <div id="media-studio" className="media-studio-section">
             <MediaAdStudio
               initialAnalysis={data}
               onGotoCreation={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+              selectedLogo={logoMode === 'upload' ? uploadedLogo : logoMode === 'none' ? '' : (data.logo || '')}
             />
           </div>
         </>
@@ -107,7 +119,29 @@ export default function MaterialCreation({ meta }: { meta: any }) {
   )
 }
 
-function ResultView({ data }: { data: LandingAnalysis }) {
+async function onUploadLogo(e: ChangeEvent<HTMLInputElement>, onUploaded: (url: string) => void, onErr: (msg: string) => void, onMode: (m: 'auto' | 'upload' | 'none') => void) {
+  const file = e.target.files?.[0]
+  if (!file) return
+  try {
+    const r = await api.uploadAsset(file)
+    onUploaded(r.url)
+    onMode('upload')
+  } catch (err: any) {
+    onErr(err?.message || '上传失败')
+  } finally {
+    e.target.value = ''
+  }
+}
+
+function ResultView({ data, logoMode, uploadedLogo, onLogoMode, onUploaded, onUpload, onErr }: {
+  data: LandingAnalysis
+  logoMode: 'auto' | 'upload' | 'none'
+  uploadedLogo: string
+  onLogoMode: (m: 'auto' | 'upload' | 'none') => void
+  onUploaded: (url: string) => void
+  onUpload: (e: ChangeEvent<HTMLInputElement>) => void
+  onErr: (msg: string) => void
+}) {
   const m = data.model_info
   const llmUsed = data.source === 'llm'
 
@@ -188,6 +222,56 @@ function ResultView({ data }: { data: LandingAnalysis }) {
               ))}
             </div>
           ) : '—'}
+        </div>
+      </div>
+
+      {/* (9) 品牌 Logo：抓取展示 + 可选使用 / 上传 */}
+      <div className="la-field la-logo">
+        <div className="la-label">⑨ 品牌 Logo<span className="la-hint">用于后续推广图合成，可选择使用或上传</span></div>
+        <div className="la-value">
+          {data.logo ? (
+            <div className="logo-preview">
+              <img src={data.logo} alt="抓取到的品牌 Logo" className="logo-img" referrerPolicy="no-referrer" />
+              <span className="muted">已从落地页抓取</span>
+            </div>
+          ) : (
+            <div className="logo-preview logo-empty">未抓取到 Logo</div>
+          )}
+
+          {data.logo && (
+            <label className="logo-toggle">
+              <input
+                type="checkbox"
+                checked={logoMode === 'auto'}
+                onChange={e => onLogoMode(e.target.checked ? 'auto' : 'none')}
+              />
+              使用抓取到的 Logo 合成图片
+            </label>
+          )}
+
+          <div className="logo-upload">
+            <label className="logo-upload-btn">
+              {logoMode === 'upload' ? '重新上传本地 Logo' : '上传本地 Logo'}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                hidden
+                onChange={onUpload}
+              />
+            </label>
+            {logoMode === 'upload' && uploadedLogo && (
+              <div className="logo-preview">
+                <img src={api.fileUrl(uploadedLogo)} alt="已上传品牌 Logo" className="logo-img" />
+                <button
+                  type="button"
+                  className="linkbtn"
+                  onClick={() => onLogoMode(data.logo ? 'auto' : 'none')}
+                >
+                  移除，改用{data.logo ? '抓取到的 Logo' : '不使用 Logo'}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

@@ -164,6 +164,7 @@ class ModelInfo(BaseModel):
 class LandingAnalysis(BaseModel):
     """落地页分析结果：8 个必要字段 + 模型信息 + 来源标记。"""
     url: str = ""               # (1) 网站地址 —— 仅展示，不做分析
+    logo: str = ""              # 从落地页抓取到的品牌 / 公司 logo（绝对 URL，可空）
     language: str = ""          # (2) 语言
     industry: str = ""          # (3) 行业
     type: str = ""              # (4) 类型（网站属性：公益/电商/技术服务/家政/旅游/政府…）
@@ -200,6 +201,7 @@ class MediaImageRequest(BaseModel):
     copy_fields: dict = {}       # 编辑后的文案字段（覆盖平台 schema）
     style_opts: dict = {}         # {creative_direction, content_style, color_scheme}
     slots: List[MediaImageSlot] = []
+    logo: str = ""               # 品牌 logo（/files/... 已上传路径 或 远程 http(s) URL），用于合成到图片
 
 class RegenerateRequest(BaseModel):
     extra_prompt: str

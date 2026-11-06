@@ -120,7 +120,7 @@ async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depend
     """
     slots = [s.model_dump() for s in req.slots]
     result = await generate_media_images(db, req.analysis.model_dump(), req.platform, req.lang,
-                                         req.copy_fields, req.style_opts, slots)
+                                         req.copy_fields, req.style_opts, slots, req.logo or "")
     return result
 
 # ----------------------------- 产品分析报告 -----------------------------
