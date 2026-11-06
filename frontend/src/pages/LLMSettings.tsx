@@ -171,11 +171,11 @@ export default function LLMSettings() {
     try { await api.deleteModel(id); await load() } catch (e: any) { setErr(e.message) }
   }
 
-  // 预设按模态分组，供下拉展示
+  // 预设按模态分组，供下拉展示；(p.modality || 'text') 兜底，避免个别预设缺字段时整组消失
   const grouped = [
-    { modality: 'text', label: MODALITY_LABEL.text, items: allPresets.filter(p => p.modality === 'text') },
-    { modality: 'image', label: MODALITY_LABEL.image, items: allPresets.filter(p => p.modality === 'image') },
-    { modality: 'video', label: MODALITY_LABEL.video, items: allPresets.filter(p => p.modality === 'video') },
+    { modality: 'text', label: MODALITY_LABEL.text, items: allPresets.filter(p => (p.modality || 'text') === 'text') },
+    { modality: 'image', label: MODALITY_LABEL.image, items: allPresets.filter(p => (p.modality || 'text') === 'image') },
+    { modality: 'video', label: MODALITY_LABEL.video, items: allPresets.filter(p => (p.modality || 'text') === 'video') },
   ].filter(g => g.items.length > 0)
 
   return (

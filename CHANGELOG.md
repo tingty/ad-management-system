@@ -809,6 +809,24 @@
 - `MaterialCreation.tsx`：`ResultView` 末尾的「进入营销推广的媒体平台设置 →」按钮改为页内滚动到下方嵌入区；分析出 `data` 后在同一页面内渲染 `<MediaAdStudio initialAnalysis={data} />`，其 `onGotoCreation` 改为滚动回顶部重新分析。
 - `styles.css`：新增 `.media-studio-section`（顶部 2px 分隔线 + 间距），在视觉上将「分析结论」与「营销推广设置」划分为同一模块内的两个连续步骤。
 
+## V4.26 大模型配置：厂商目录扩容 + 下拉兜底
+
+**问题**
+- 「大模型配置 → 添加大模型」的「大模型」下拉为空（无可选厂商）。排查确认：后端 `/api/settings/models/presets?usage=all` 正常返回、且每条带 `modality`，前端按 `modality` 分组渲染逻辑正确；空下拉多为部署侧未同步最新后端/前端构建所致。同时按需求扩充可选厂商。
+
+**交付**
+- `backend/llm_catalog.py`：厂商目录由 33 家扩容至 **60 家**（文本 32 / 文生图 16 / 文生视频 12）。新增国产与海外主流厂商：
+  - 文本：豆包/火山方舟、腾讯混元、百度文心一言(千帆)、零一万物 Yi、阶跃星辰 StepFun、Cohere、xAI Grok、NVIDIA NIM、Cloudflare Workers AI、Novita、Upstage、Lemonfox、PPIO。
+  - 文生图：Stability AI(SD3.5)、Ideogram、Recraft、腾讯混元图像、Lemonfox 图像、302.AI 图像、MiniMax 图像。
+  - 文生视频：Luma Dream Machine、PixVerse、Haiper、Vidu(生数)、腾讯智影、Higgsfield、302.AI 视频。
+  - 每家均带默认 Base URL、常见模型名、Key 标签、setup_guide 与官方文档链接，选中即带出。
+- `frontend/src/pages/LLMSettings.tsx`：下拉分组 `(p.modality || 'text')` 兜底，避免个别预设缺 `modality` 字段时整组消失、下拉为空。
+
+**验证**
+- `python -m py_compile` 通过；认证调用 `GET /api/settings/models/presets?usage=all` 返回 60 条，全部带 `modality`（text 32 / image 16 / video 12）。
+- 前端 `tsc --noEmit` 退出码 0。
+- 注：若线上仍为空，请确认已 `git pull && docker compose up -d --build` 同步最新构建，并在浏览器 Network 中确认 `/api/settings/models/presets` 返回 200 与数据。
+
 ## V4.20 403 提示识别 MaaS 工作空间 access_denied
 
 - `backend/llm_catalog.py`：`_classify_error` 的 403 分支检测 body 中的 workspace / access_denied，给出 MaaS 工作空间专属 Key 指引（ws-*.maas.aliyuncs.com / llm-*.maas.aliyuncs.com 需绑定工作空间的专用 Key，且区域需一致）。
