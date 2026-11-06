@@ -68,6 +68,17 @@ LLM_PRESETS = [
         "notes": "务必使用 compatible-mode/v1 端点，否则模型找不到（404）。",
     },
     {
+        "key": "qwen-intl", "name": "通义千问（DashScope 国际站 / International）", "protocol": "openai",
+        "default_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "base_url_editable": True,
+        "models": ["qwen-plus", "qwen-max", "qwen-turbo", "qwen2.5-72b-instruct", "qwen-long"],
+        "api_key_label": "DashScope API Key", "api_key_placeholder": "sk-...",
+        "model_placeholder": "qwen-plus",
+        "docs_url": "https://www.alibabacloud.com/help/en/model-studio/",
+        "setup_guide": "1) 在国际站开通模型并获取 API Key；2) Base URL 必须用兼容模式 https://dashscope-intl.aliyuncs.com/compatible-mode/v1（国际站 /api/v1 会 404）；3) Model 填 qwen-plus / qwen-max 等；4) 保存并测试。",
+        "notes": "国际站域名 dashscope-intl.aliyuncs.com，同样需要 /compatible-mode/v1 路径；与国内站（dashscope.aliyuncs.com）的 Key 不互通。",
+    },
+    {
         "key": "moonshot", "name": "Kimi（月之暗面 Moonshot）", "protocol": "openai",
         "default_base_url": "https://api.moonshot.cn/v1",
         "base_url_editable": True,
@@ -469,8 +480,9 @@ def _classify_error(exc, status: int, body: str, preset: Optional[dict]) -> dict
     elif status == 404:
         base.update({
             "error_type": "not_found",
-            "message": "接口或模型不存在（404）。最常见原因：① Base URL 路径不对（如 DashScope 漏掉 /compatible-mode/v1、"
-                       "Groq 漏掉 /openai）；② Model 名称拼写错误或未部署。请核对预设给出的默认 Base URL 与 Model。",
+            "message": "接口或模型不存在（404）。最常见原因：① Base URL 路径不对（如 DashScope 国内站漏掉 /compatible-mode/v1、"
+                       "DashScope 国际站 dashscope-intl 误用 /api/v1、Groq 漏掉 /openai）；② Model 名称拼写错误或未部署。"
+                       "请核对预设给出的默认 Base URL 与 Model（国际站统一为 .../compatible-mode/v1）。",
         })
     elif status == 429:
         base.update({

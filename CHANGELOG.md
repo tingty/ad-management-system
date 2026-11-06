@@ -681,6 +681,15 @@
 - 配色：同方向同风格下 C13(霓虹绿)/C15(国风朱红)/C01(多彩渐变) 的 mean RGB 分别为 `[21.9,36.6,27.4]` / `[56.3,17.3,18.5]` / `[66.8,44.9,91.6]`，配色覆盖确实改变画面主色。
 - `py_compile` 三个改动模块通过。
 
+## V4.19 通义千问国际站预设 + 404 提示增强
+
+**问题**
+- 用户配置 DashScope 国际站（`dashscope-intl.aliyuncs.com`）时，Base URL 误填为 `/api/v1`（正确为 `/compatible-mode/v1`），导致连通测试 `404 not_found`。原 `qwen` 预设默认是国内站地址，国际站用户需手动改路径，易踩坑。
+
+**修复**
+- `backend/llm_catalog.py`：新增 `qwen-intl` 预设（通义千问 DashScope 国际站），默认 `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`，模型含 qwen-plus/qwen-max/qwen-turbo 等，setup_guide 明确国际站路径；`_classify_error` 的 404 提示补充"国际站 dashscope-intl 误用 /api/v1"的易错点。
+- `CHANGELOG.md`：本条目。
+
 ## V4.18 文生图大模型配置模块 + 文生图真正接入生成链
 
 **问题**
