@@ -97,7 +97,7 @@ class ModelConfigOut(BaseModel):
     id: int
     name: Optional[str] = None
     usage: Optional[str] = None        # 主用途（兼容旧数据）
-    usages: List[str] = []             # 多用途数组
+    usages: Optional[List[str]] = None # 多用途数组（旧数据可能为 NULL）
     provider: str
     api_key: Optional[str] = None
     base_url: Optional[str] = None
@@ -107,14 +107,13 @@ class ModelConfigOut(BaseModel):
     class Config:
         from_attributes = True
 
-    @model_validator(mode="before")
-    @classmethod
-    def _fill_usages(cls, data):
-        # 兼容未迁移的旧数据：usages 为 NULL 时由 usage(单字符串) 推导。
-        if isinstance(data, dict) and data.get("usages") is None:
-            u = data.get("usage")
-            data = {**data, "usages": [u] if u else []}
-        return data
+    @model_validator(mode="after")
+    def _fill_usages(self):
+        # 兼容未迁移的旧数据：usages 为 NULL 时由 usage(单字符串) 推导；
+        # 始终保证返回的是 list（前端依赖 m.usages.length / .map），避免序列化直接 500。
+        if self.usages is None:
+            self.usages = [self.usage] if self.usage else []
+        return self
 
 
 class PromptOut(BaseModel):

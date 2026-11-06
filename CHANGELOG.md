@@ -1042,3 +1042,31 @@
 
 **线上运维配合**
 - 无。旧配置（provider 存厂商 key）仍可正常解析与运行，无需迁移。
+
+## V4.32 修复「大模型配置不显示」+ 千问 qwen-plus 对接
+
+**发布日期**：2026-11-06
+
+**需求**
+- 排查：在「大模型配置」中添加并测试成功的大模型，列表却无法显示。
+- 对接：千问文本大模型 qwen-plus，URL `https://llm-nqw1vl6mhnuxv7d5.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`，Key `sk-80af895cd9f2410d82fd65b8d735ef25`。
+
+**根因（列表不显示）**
+- `schemas.ModelConfigOut` 用 `mode="before"` 校验器在 `usages IS NULL` 时回填 `usages`；但该校验器仅在入参为 dict 时生效，对 ORM 对象（FastAPI `from_attributes` 路径）不触发。
+- 旧数据（早期 UI 写入）`usages` 列为 NULL，导致 `/api/settings/models` 列表接口整体 500，前端 `load()` 捕获异常后列表恒为空——表现为"测试成功却看不到模型"。
+- 测试接口 `/settings/models/test` 不序列化 `ModelConfigOut`，故不受此影响，解释了"测试成功、列表不显示"的割裂现象。
+
+**交付**
+- `schemas.ModelConfigOut`：`usages` 改为 `Optional[List[str]]`，校验器改为 `mode="after"`，始终保证返回 list（旧数据由 `usage` 推导），彻底消除 `usages=None` 引起的序列化 500。
+- 数据修正：原 2 条脏数据（provider 存中文名"千问大模型"、URL 为旧 `dashscope-intl` 国际版、params 为 JSON 字符串、usages 为 NULL）合并并纠正为 1 条：
+  - name=千问文本大模型，provider=openai（compatible-mode=OpenAI 兼容），model=qwen-plus，
+  - base_url=新 MaaS 地址，usages=\[analysis, copy\]，params={}（JSON 对象），is_active=true。
+- 实测连通：`test_llm_connection` 对 qwen-plus 返回 `ok=True`（延迟 ~595ms），对接生效。
+
+**验证**
+- `ModelConfigOut.model_validate(orm, from_attributes=True)` 对两条旧脏数据均通过，列表接口不再 500。
+- 连通测试 `ok=True`，确认新 MaaS 端点与密钥可用。
+- `schemas.py` `py_compile` 通过。
+
+**线上运维配合**
+- 无。代码修复后任意 `usages` 缺失的配置都能正常显示；新 MaaS 地址与密钥已写入 DB，部署机 `git pull` 后重启后端即可在「大模型配置」看到千问文本大模型。
