@@ -238,6 +238,20 @@ def on_startup():
     seed_prompts()
     seed_default_model()
 
+
+@app.on_event("startup")
+async def start_model_health_scheduler():
+    """V4.34：启动「每日大模型连通性测试」后台协程（需在建表/补列之后）。"""
+    from model_health import start_daily_scheduler
+    start_daily_scheduler()
+
+
+@app.on_event("shutdown")
+async def stop_model_health_scheduler():
+    from model_health import stop_daily_scheduler
+    stop_daily_scheduler()
+
+
 @app.get("/api/health")
 def health():
     return {"service": "ad-material-platform", "status": "ok", "version": app.version}

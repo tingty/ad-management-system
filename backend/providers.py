@@ -635,16 +635,50 @@ def _usages_of(cfg) -> list:
         return [str(u)]
     return []
 
+def _usable(cfg) -> bool:
+    """配置具备真实调用的最少三要素（缺任一项只能退回 Mock）。"""
+    return bool(cfg.api_key and cfg.base_url and cfg.model)
+
+
+def _pick_config(rows, usage):
+    """V4.34：挑选某用途实际生效的配置。
+
+    优先级（同一用途保存了多条时）：
+      1. 连通测试成功（last_test_ok=True）的配置 —— 用「已验证可用」的模型支撑系统功能；
+         多条成功时优先激活的，其次 id 最大（最近添加）。
+      2. 没有任何测试成功的配置时，退回原逻辑：仅看激活配置，取 id 最大者。
+    说明：仅 `is_active` 不再能决定谁生效——用户可能保留多条备用配置，只要其中一条
+    每日测试通过，系统就自动用它；全部失败/未测试时保持旧行为，避免破坏既有部署。
+    """
+    candidates = [c for c in rows if usage in _usages_of(c) and _usable(c)]
+    if not candidates:
+        return None
+    oks = [c for c in candidates if c.last_test_ok is True]
+    if oks:
+        return max(oks, key=lambda c: (1 if c.is_active else 0, c.id))
+    actives = [c for c in candidates if c.is_active]
+    return max(actives, key=lambda c: c.id) if actives else None
+
+
+def effective_config_ids(db) -> set:
+    """返回当前被系统功能实际采用的全部配置 id（供设置页标注「系统采用」）。"""
+    from models import ModelConfig
+    rows = db.query(ModelConfig).all()
+    usages = set()
+    for c in rows:
+        usages.update(_usages_of(c))
+    ids = set()
+    for u in usages:
+        c = _pick_config(rows, u)
+        if c:
+            ids.add(c.id)
+    return ids
+
+
 def _active_config(db, usage):
     # 延迟导入避免循环依赖
     from models import ModelConfig
-    # 同用途仅一个激活：遍历激活配置，取「usages 包含该用途且 id 最大（最近创建）」者，
-    # 这样多用途配置与单用途配置并存时，较新的配置按其用途接管，旧配置仍服务其它用途。
-    best = None
-    for c in db.query(ModelConfig).filter_by(is_active=True).all():
-        if usage in _usages_of(c) and (best is None or c.id > best.id):
-            best = c
-    return best
+    return _pick_config(db.query(ModelConfig).all(), usage)
 
 def get_llm(db, usage="analysis") -> LLMProvider:
     cfg = _active_config(db, usage)

@@ -1,5 +1,6 @@
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, model_validator, field_serializer
 from typing import Optional, List, Any
+from datetime import datetime, timezone
 
 class AnalyzeRequest(BaseModel):
     url: Optional[str] = None
@@ -104,6 +105,13 @@ class ModelConfigOut(BaseModel):
     model: Optional[str] = None
     params: Optional[Any] = None
     is_active: bool = True
+    # V4.34 连通性健康状态（由每日自动测试 / 手动测试写回）
+    last_test_ok: Optional[bool] = None          # None=未测试 / True=成功 / False=失败
+    last_test_at: Optional[datetime] = None
+    last_test_http_code: Optional[int] = None
+    last_test_error: Optional[str] = None
+    last_test_latency_ms: Optional[int] = None
+    in_use: bool = False                          # 是否为该用途当前实际生效（被系统功能采用）的配置
     class Config:
         from_attributes = True
 
@@ -114,6 +122,15 @@ class ModelConfigOut(BaseModel):
         if self.usages is None:
             self.usages = [self.usage] if self.usage else []
         return self
+
+    @field_serializer("last_test_at")
+    def _ser_last_test_at(self, v: Optional[datetime]) -> Optional[str]:
+        # SQLite 取回的是 naive UTC；补 +00:00 让前端按本地时区正确显示，避免差 8 小时
+        if v is None:
+            return None
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        return v.isoformat()
 
 
 class PromptOut(BaseModel):

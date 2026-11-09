@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, ModelConfig, ModelPreset, ModelTestResult } from '../api'
+import { api, ModelConfig, ModelPreset, ModelTestResult, ModelHealthInfo, ModelTestAllResult } from '../api'
 
 const USAGE_LABEL: Record<string, string> = {
   analysis: '落地页分析 / 框架',
@@ -109,6 +109,12 @@ export default function LLMSettings() {
   const [testTargetLoading, setTestTargetLoading] = useState(false)
   const [testTargetResult, setTestTargetResult] = useState<ModelTestResult | null>(null)
 
+  // V4.34 每日连通性健康：运行信息、手动全量测试、失败 log 查看
+  const [health, setHealth] = useState<ModelHealthInfo | null>(null)
+  const [testAllLoading, setTestAllLoading] = useState(false)
+  const [testAllResult, setTestAllResult] = useState<ModelTestAllResult | null>(null)
+  const [logTarget, setLogTarget] = useState<ModelConfig | null>(null)
+
   const load = async () => {
     try {
       const models = await api.models(); setList(models)
@@ -117,6 +123,9 @@ export default function LLMSettings() {
       // 与 models() 解耦：其一失败不应导致下拉厂商列表被清空
       const ps = await api.modelPresetsAll(); setAllPresets(ps)
     } catch (e: any) { setErr(e.message) }
+    try {
+      const h = await api.modelHealth(); setHealth(h)
+    } catch { /* 健康检查不可用时不影响主流程 */ }
   }
   useEffect(() => { load() }, [])
 
@@ -246,8 +255,15 @@ export default function LLMSettings() {
     const saved = await save()
     if (!saved) return
     setOk('已保存配置，正在发起第一次连通测试…')
-    await runTest({ provider: saved.provider, protocol: saved.provider, api_key: saved.api_key, base_url: saved.base_url,
-                    model: saved.model, endpoint: form.params?.endpoint })
+    setTesting(true); setTestResult(null)
+    try {
+      // 用落库值测试并写回连通状态/log，保证「测试状态」列立即反映本次结果
+      const r = await api.testSavedModel(saved.id)
+      setTestResult(r)
+      await load()
+    } catch (e: any) {
+      setTestResult({ ok: false, error_type: 'unknown', message: e.message })
+    } finally { setTesting(false) }
   }
   const testOnly = async () => {
     if (!form.api_key?.trim() || !form.model?.trim() || !form.base_url?.trim()) {
@@ -271,18 +287,29 @@ export default function LLMSettings() {
     if (!testTarget) return
     setTestTargetLoading(true); setTestTargetResult(null)
     try {
-      const params = (testTarget.params && typeof testTarget.params === 'object') ? testTarget.params as Record<string, any> : {}
-      const r = await api.testModel({
-        provider: testTarget.provider,
-        api_key: testTarget.api_key,
-        base_url: testTarget.base_url,
-        model: testTarget.model,
-        endpoint: params.endpoint,
-      })
+      // 直接用落库值测试，并把成功/失败状态与 log 写回，列表随即刷新
+      const r = await api.testSavedModel(testTarget.id)
       setTestTargetResult(r)
+      await load()
     } catch (e: any) {
       setTestTargetResult({ ok: false, error_type: 'unknown', message: e.message })
     } finally { setTestTargetLoading(false) }
+  }
+
+  const runTestAll = async () => {
+    setTestAllLoading(true); setTestAllResult(null); setErr('')
+    try {
+      const r = await api.testAllModels()
+      setTestAllResult(r)
+      await load()
+    } catch (e: any) { setErr('全量测试失败：' + e.message) }
+    finally { setTestAllLoading(false) }
+  }
+
+  const fmtTime = (s?: string | null) => {
+    if (!s) return '—'
+    const d = new Date(s)
+    return isNaN(d.getTime()) ? s : d.toLocaleString('zh-CN', { hour12: false })
   }
   // 已保存配置的类型展示名（与列表一致：协议选项优先，回退到厂商目录）。
   const testTargetLabel = testTarget
@@ -336,12 +363,34 @@ export default function LLMSettings() {
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h2>已配置模型（{list.length}）</h2>
-          <button className="btn" onClick={openAdd}>＋ 添加大模型</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn ghost" onClick={runTestAll} disabled={testAllLoading || list.length === 0}>
+              {testAllLoading ? '全量测试中…' : '⟳ 立即测试全部'}
+            </button>
+            <button className="btn" onClick={openAdd}>＋ 添加大模型</button>
+          </div>
         </div>
         <div className="muted">按用途配置大模型接口，保存即热切换，无需重启后端。未配置 Key 时自动使用内置 Mock 兜底。同一用途仅一个激活配置，新增/编辑同用途配置会停用其它。</div>
+        <div className="health-bar">
+          <span className="hb-item">
+            <span className="hb-dot" />
+            {health?.enabled === false
+              ? '每日自动连通测试已关闭'
+              : `每日自动连通测试：每天 ${String(health?.hour ?? 3).padStart(2, '0')}:00 之后自动执行一次`}
+          </span>
+          {health?.last_daily_at && <span className="hb-item">上次自动测试：{fmtTime(health.last_daily_at)}</span>}
+          <span className="hb-item hb-note">同一用途保存多条时，系统默认采用「测试成功」的配置支撑功能。</span>
+        </div>
+        {testAllResult && (
+          <div className={'alert ' + (testAllResult.failed > 0 ? 'err' : 'ok')} style={{ marginTop: 8 }}>
+            全量测试完成（{fmtTime(testAllResult.tested_at)}）：共 {testAllResult.total} 条，
+            成功 {testAllResult.ok} 条，失败 {testAllResult.failed} 条。
+            {testAllResult.failed > 0 && '失败详情请在下方「连通状态」列点击查看日志。'}
+          </div>
+        )}
         {list.length === 0 ? <div className="muted" style={{ marginTop: 10 }}>暂无配置，将使用 Mock 兜底。</div> : (
           <table style={{ marginTop: 10 }}>
-            <thead><tr><th>名称</th><th>大模型</th><th>用途</th><th>模型版本</th><th>请求链接</th><th>状态</th><th>操作</th></tr></thead>
+            <thead><tr><th>名称</th><th>大模型</th><th>用途</th><th>模型版本</th><th>请求链接</th><th>状态</th><th>连通状态</th><th>操作</th></tr></thead>
             <tbody>
               {list.map(m => {
                 const p = PROTOCOL_OPTIONS.find(x => x.key === m.provider) || allPresets.find(x => x.key === m.provider)
@@ -357,7 +406,30 @@ export default function LLMSettings() {
                     </td>
                     <td>{m.model}</td>
                     <td className="muted">{m.base_url}</td>
-                    <td><span className={'pill ' + (m.is_active ? 'ok' : 'off')}>{m.is_active ? '激活' : '停用'}</span></td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        <span className={'pill ' + (m.is_active ? 'ok' : 'off')}>{m.is_active ? '激活' : '停用'}</span>
+                        {m.in_use && <span className="pill inuse" title="该用途当前实际由此配置支撑系统功能">系统采用</span>}
+                      </div>
+                    </td>
+                    <td>
+                      {m.last_test_ok === null || m.last_test_ok === undefined ? (
+                        <span className="conn-tag untested" title="尚未进行连通性测试">未测试</span>
+                      ) : m.last_test_ok ? (
+                        <div className="conn-cell">
+                          <span className="conn-tag ok">成功</span>
+                          <span className="conn-meta">HTTP {m.last_test_http_code ?? 200} · {m.last_test_latency_ms ?? '—'}ms</span>
+                          <span className="conn-meta">{fmtTime(m.last_test_at)}</span>
+                        </div>
+                      ) : (
+                        <div className="conn-cell">
+                          <span className="conn-tag fail">失败</span>
+                          <span className="conn-meta">HTTP {m.last_test_http_code || 'N/A'}</span>
+                          <button className="btn small ghost" onClick={() => setLogTarget(m)}>查看日志</button>
+                          <span className="conn-meta">{fmtTime(m.last_test_at)}</span>
+                        </div>
+                      )}
+                    </td>
                     <td>
                       <div style={{ display: 'flex', gap: 6 }}>
                         <button className="btn small ghost" onClick={() => edit(m)}>编辑</button>
@@ -515,7 +587,7 @@ export default function LLMSettings() {
             </div>
 
             <div className="muted" style={{ marginTop: 8 }}>
-              将使用配置中保存的 API Key 直接发起一次最小真实调用（与保存时的连通测试一致），不会修改任何配置。
+              将使用配置中保存的 API Key 直接发起一次最小真实调用（与每日自动测试一致），并把成功/失败状态与错误 log 写回；不会改动 Key、链接、模型等配置内容。
             </div>
 
             <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -545,6 +617,31 @@ export default function LLMSettings() {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {logTarget && (
+        <div className="modal-overlay" onMouseDown={() => setLogTarget(null)}>
+          <div className="modal modal-wide" onMouseDown={e => e.stopPropagation()}>
+            <h3>最近一次测试 log：{logTarget.name || '未命名'}</h3>
+            <div className="log-summary">
+              <div><span className="ts-k">测试状态</span><span className="conn-tag fail">失败</span></div>
+              <div><span className="ts-k">HTTP Code</span><span className="log-code">{logTarget.last_test_http_code || 'N/A（网络层未获得响应）'}</span></div>
+              <div><span className="ts-k">模型版本</span><span className="ts-v">{logTarget.model || '—'}</span></div>
+              <div><span className="ts-k">请求链接</span><span className="ts-v ts-url">{logTarget.base_url || '—'}</span></div>
+              <div><span className="ts-k">测试时间</span><span className="ts-v">{fmtTime(logTarget.last_test_at)}</span></div>
+            </div>
+            <label style={{ marginTop: 12 }}>错误详情（HTTP code + 服务器返回的错误信息）</label>
+            <pre className="log-pre">{logTarget.last_test_error || '（本次未记录到错误日志）'}</pre>
+            <div style={{ marginTop: 14, display: 'flex', gap: 10 }}>
+              <button className="btn" onClick={async () => {
+                const t = logTarget
+                setLogTarget(null)
+                setTestTarget(t); setTestTargetResult(null); setTestTargetLoading(false)
+              }}>重新测试该配置</button>
+              <button className="btn ghost" onClick={() => setLogTarget(null)}>关闭</button>
+            </div>
           </div>
         </div>
       )}

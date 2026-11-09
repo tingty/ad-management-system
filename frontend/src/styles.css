@@ -865,6 +865,40 @@ select {
 .ts-v { color: var(--text); font-weight: 600; word-break: break-all; }
 .ts-url { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; font-weight: 500; }
 
+/* ==================== V4.34 连通性健康 ==================== */
+.health-bar {
+  margin-top: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: #f7fafc; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; font-size: 12px;
+}
+.hb-item { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+.hb-note { color: var(--muted); }
+.hb-dot { width: 7px; height: 7px; border-radius: 50%; background: #2e9e6b; display: inline-block; }
+
+.pill.inuse { background: #e7f6ee; color: #1b7a4e; border: 1px solid #bfe6d0; font-weight: 600; }
+.conn-cell { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; min-width: 118px; }
+.conn-tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1.5; }
+.conn-tag.ok { background: #e7f6ee; color: #1b7a4e; border: 1px solid #bfe6d0; }
+.conn-tag.fail { background: #fdecec; color: #c0392b; border: 1px solid #f4c7c3; }
+.conn-tag.untested { background: #f0f2f5; color: #7a8694; border: 1px solid #dfe4ea; }
+.conn-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.conn-cell .btn.small { padding: 1px 8px; font-size: 11px; }
+
+.log-summary {
+  margin: 10px 0 4px; border: 1px solid var(--border); border-radius: 10px;
+  background: #fafbfc; padding: 12px 14px; display: flex; flex-direction: column; gap: 7px;
+}
+.log-summary > div { display: flex; gap: 10px; font-size: 13px; align-items: baseline; }
+.log-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px; font-weight: 700; color: #c0392b;
+}
+.log-pre {
+  margin-top: 6px; padding: 12px 14px; border: 1px solid #f0d5d2; border-radius: 10px;
+  background: #fff8f7; color: #4a2b28; font-size: 12px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 /* ==================== 素材提示词管理 ==================== */
 .pill.img { background: #e8f1fb; color: var(--primary2); border: 1px solid #cfe3f5; }
 .pill.vid { background: #f1e9fb; color: #7b4fc4; border: 1px solid #e2d4f3; }

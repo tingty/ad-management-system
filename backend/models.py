@@ -138,6 +138,21 @@ class ModelConfig(Base):
     params = Column(JSON, nullable=True)            # 厂商专属附加字段，如 endpoint
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=utcnow)
+    # V4.34 连通性健康状态：由「每日自动测试 / 手动测试」写回。
+    # last_test_ok: NULL=尚未测试, True=成功, False=失败
+    last_test_ok = Column(Boolean, nullable=True)
+    last_test_at = Column(DateTime, nullable=True)          # 最后一次测试时间（UTC）
+    last_test_http_code = Column(Integer, nullable=True)   # 服务器返回的 HTTP code；网络层失败为 0/NULL
+    last_test_error = Column(Text, nullable=True)          # 失败 log：HTTP code + 服务器返回错误 + 诊断
+    last_test_latency_ms = Column(Integer, nullable=True) # 成功时记录延迟
+
+
+class SystemState(Base):
+    """轻量 KV：记录全局运行戳（如每日连通测试的最后执行日期），跨进程/多 worker 去重。"""
+    __tablename__ = "system_state"
+    key = Column(String(64), primary_key=True)
+    value = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class PromptConfig(Base):

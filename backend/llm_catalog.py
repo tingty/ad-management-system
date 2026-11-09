@@ -855,6 +855,7 @@ def _classify_error(exc, status: int, body: str, preset: Optional[dict]) -> dict
         "ok": False,
         "error_type": "unknown",
         "message": "",
+        "http_status": int(status or 0),   # V4.34：服务器返回的 HTTP code；网络层失败为 0
         "hint_url": docs,
         "hint_url_label": docs_label if docs else "",
         "raw": (str(exc)[:240] if exc else "") or (body[:240] if body else ""),
@@ -1129,4 +1130,10 @@ async def test_llm_connection(req: dict) -> dict:
     preset = get_preset(provider) or get_image_preset(provider) or get_video_preset(provider)
     protocol = req.get("protocol") or _resolve_protocol(provider)
     tester = _TESTERS.get(protocol, _test_openai)
-    return await tester(req, preset)
+    res = await tester(req, preset)
+    # V4.34：统一补齐 http_status，供每日自动测试落库。
+    # - 失败分支（_classify_error）已带真实 HTTP code；网络层异常为 0
+    # - 成功分支 / 缺参提前返回未带，这里补 200 / 0
+    if "http_status" not in res:
+        res["http_status"] = 200 if res.get("ok") else 0
+    return res

@@ -691,7 +691,19 @@ def _dup_model_config(db, provider: str, base_url: str, model: str, exclude_id: 
 
 @router.get("/settings/models", response_model=list[ModelConfigOut])
 def list_models(db: Session = Depends(get_db)):
-    return db.query(ModelConfig).order_by(ModelConfig.id).all()
+    rows = db.query(ModelConfig).order_by(ModelConfig.id).all()
+    # V4.34：标注哪些配置是各用途「当前实际生效」的（测试成功优先），供设置页展示
+    from providers import effective_config_ids
+    try:
+        in_use = effective_config_ids(db)
+    except Exception:
+        in_use = set()
+    out = []
+    for m in rows:
+        o = ModelConfigOut.model_validate(m, from_attributes=True)
+        o.in_use = m.id in in_use
+        out.append(o)
+    return out
 
 @router.post("/settings/models", response_model=ModelConfigOut)
 def create_model(req: ModelConfigIn, db: Session = Depends(get_db),
@@ -799,6 +811,41 @@ async def test_model(req: ModelTestIn):
         "endpoint": req.endpoint,
     })
     return result
+
+
+# ----------------------------- V4.34 连通性健康 -----------------------------
+@router.get("/settings/models/health")
+def model_health_info():
+    """每日自动测试的运行信息（开关、执行小时、上次自动测试日期/时间、配置总数）。"""
+    from model_health import health_info
+    return health_info()
+
+
+@router.post("/settings/models/test-all")
+async def test_all_saved_models(admin: User = Depends(require_roles("admin"))):
+    """手动触发：对全部已保存配置跑一次真实连通测试，写回成功/失败与失败 log。"""
+    from model_health import run_all
+    return await run_all(reason="manual")
+
+
+@router.post("/settings/models/{mid}/test")
+async def test_saved_model(mid: int, db: Session = Depends(get_db),
+                           admin: User = Depends(require_roles("admin"))):
+    """按 id 测试一条「已保存」配置（使用落库的 Key，不依赖前端回填），并写回测试状态。"""
+    from model_health import test_one
+    m = db.query(ModelConfig).filter_by(id=mid).first()
+    if not m:
+        raise HTTPException(404, "配置不存在")
+    res = await test_one(db, m)
+    db.commit()
+    db.refresh(m)
+    out = ModelConfigOut.model_validate(m, from_attributes=True)
+    try:
+        from providers import effective_config_ids
+        out.in_use = m.id in effective_config_ids(db)
+    except Exception:
+        pass
+    return {**res, "config": out}
 
 
 # ----------------------------- 设置：提示词管理 -----------------------------

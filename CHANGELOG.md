@@ -1096,3 +1096,44 @@
 
 **线上运维配合**
 - 无。部署机 `git pull` 后重启后端即可生效；既有千问配置不受影响，若再次以预设方式添加同地址同模型会被「已添加」拦截。
+
+## V4.34 大模型连通性健康：每日自动测试 + 状态/log + 测试成功优先选配
+
+**发布日期**：2026-11-09
+
+**需求**
+- 每天针对**已保存**的大模型自动做一次 API 接口连通性测试，测试完反馈状态（成功 / 失败）。
+- 若测试失败，显示最后一次测试的 log，主要展示获取到的 **HTTP code** 与**服务器返回的错误信息**。
+- 同一用途保存了多个大模型、且其中有测试成功的，系统功能默认使用「测试成功」的那条。
+  （需求原文「同一种用户」按「同一种用途 usage」理解实现，见下方说明。）
+
+**交付**
+- 数据层 `models.py` / `migrations.py`：`ModelConfig` 新增 `last_test_ok`(NULL/True/False)、`last_test_at`、`last_test_http_code`、`last_test_error`、`last_test_latency_ms`；新增 `system_state` KV 表存放每日执行日期戳。启动时由 `ensure_schema()` 自动 `ALTER TABLE ADD COLUMN`，旧库无需手工迁移。
+- 测试链路 `llm_catalog.py`：`_classify_error` 与 `test_llm_connection` 统一补齐 `http_status`（真实 HTTP code；网络层失败为 0），供落库与展示。
+- 新模块 `model_health.py`：
+  - `test_one()` 用落库值发起真实最小调用并写回状态；失败时把「HTTP Code + 错误类型 + 服务器返回的错误信息 + 中文诊断 + 文档」拼成 `last_test_error` log。
+  - `run_all()` 串行测试全部配置并返回汇总（total / ok / failed / 逐条结果）。
+  - 后台协程 `_daily_loop()`：FastAPI startup 启动、shutdown 取消，**每天只跑一次**（`system_state` 原子条件 UPDATE 抢占日期戳，天然兼容多 worker）；支持 `LLM_DAILY_TEST_HOUR`（默认 3 点）与 `LLM_DAILY_TEST_ENABLED`（默认开）；进程在目标时刻之后启动会当天补跑。无新增依赖。
+- 接口 `routers.py`：`GET /settings/models/health`（运行信息）、`POST /settings/models/test-all`（手动全量测试，admin）、`POST /settings/models/{id}/test`（按 id 测试并写回状态，不依赖前端回填 Key）；`GET /settings/models` 额外返回 `in_use`（是否为该用途当前实际生效的配置）。
+- 选配 `providers.py`：新增 `_pick_config()` / `effective_config_ids()`。同一用途候选按「**测试成功 > 激活 > id 最大**」优先级挑选；全部未测试或全部失败时完全退回原逻辑（仅激活、取 id 最大），不破坏既有部署；`is_active` 不再单独决定谁生效。
+- 前端 `api.ts` / `LLMSettings.tsx` / `styles.css`：
+  - 卡片顶部显示每日自动测试开关/执行时刻/上次自动测试时间，新增「⟳ 立即测试全部」按钮与全量测试汇总。
+  - 列表新增「连通状态」列：未测试 / 成功（HTTP code + 延迟 + 时间）/ 失败（HTTP code + 查看日志 + 时间）；状态列新增「系统采用」标记。
+  - 失败可打开 log 弹窗，集中展示 HTTP Code、服务器返回的错误信息、诊断、请求链接与测试时间，并支持「重新测试该配置」。
+  - 「保存并测试」「测试已保存配置」改为调用按 id 的测试接口，使状态写回并即时刷新列表。
+  - `last_test_at` 序列化补 `+00:00` 时区，避免前端按本地时区显示差 8 小时。
+
+**验证**
+- 后端全量 `py_compile` 通过；前端 `tsc --noEmit` 与 `vite build` 均通过。
+- DB 副本集成测试：自动补列 5 个字段 + 建 `system_state` 表成功；全量测试 4 条（3 成功 1 失败），失败条 `last_test_http_code=401` 且 log 含 HTTP Code 与服务器返回的 `{"error":...Invalid API key...}`。
+- 选配 5 场景实测：A 失败 / B 失败 / C 成功 → 采用 C；全部失败 → 退回激活；全部未测试 → 退回激活；多条成功 → 优先激活；激活配置缺 Key 但 C 成功 → 采用 C。
+- TestClient HTTP 实测：`/health`、`/models`、`/presets`、`/test-all`、`/{id}/test` 均 200，不存在的 id 返回 404；状态、`http_status`、`in_use`、log 均正确返回。
+- 每日调度：首次抢占成功、同日再次抢占失败（不重复跑）、跨天补跑判定正确。
+
+**运维配置（可选环境变量）**
+- `LLM_DAILY_TEST_ENABLED=0` 关闭每日自动测试（手动测试仍可用）。
+- `LLM_DAILY_TEST_HOUR=3` 每天执行时刻（本地时间，0–23，默认 3）；当天该时刻之后启动会补跑一次。
+
+**说明**
+- 「同一种用户」按「同一种用途（usage：analysis / copy / image / video）」理解；若确需按用户维度隔离配置，需另行设计多租户模型归属字段。
+- 部署机 `git pull` 后重启后端即自动补列并启动调度；重启后约 10 秒进行当天首次判定。

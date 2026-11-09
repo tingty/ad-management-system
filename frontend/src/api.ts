@@ -193,6 +193,13 @@ export interface ModelConfig {
   model?: string
   params?: any
   is_active: boolean
+  // V4.34 连通性健康（每日自动测试 / 手动测试写回）
+  last_test_ok?: boolean | null        // null = 尚未测试
+  last_test_at?: string | null
+  last_test_http_code?: number | null
+  last_test_error?: string | null      // 失败 log：HTTP code + 服务器返回错误 + 诊断
+  last_test_latency_ms?: number | null
+  in_use?: boolean                     // 是否为该用途当前实际生效（被系统功能采用）
 }
 
 export interface ModelPreset {
@@ -223,6 +230,32 @@ export interface ModelTestResult {
   hint_url?: string
   hint_url_label?: string
   raw?: string
+  http_status?: number               // V4.34：服务器返回的 HTTP code（网络层失败为 0）
+}
+
+export interface ModelHealthInfo {
+  enabled: boolean
+  hour: number
+  last_daily_date?: string | null
+  last_daily_at?: string | null
+  total_configs: number
+}
+
+export interface ModelTestAllResult {
+  reason: string
+  total: number
+  ok: number
+  failed: number
+  tested_at: string
+  results: {
+    id: number
+    name?: string | null
+    ok: boolean
+    http_status: number
+    latency_ms?: number | null
+    error?: string | null
+    message?: string | null
+  }[]
 }
 
 export interface PromptConfig {
@@ -648,6 +681,11 @@ export const api = {
   testModel: (m: Partial<ModelConfig> & { endpoint?: string; protocol?: string }) =>
     req<ModelTestResult>(
       '/api/settings/models/test', { method: 'POST', body: JSON.stringify(m) }),
+  // V4.34 连通性健康
+  modelHealth: () => req<ModelHealthInfo>('/api/settings/models/health'),
+  testAllModels: () => req<ModelTestAllResult>('/api/settings/models/test-all', { method: 'POST' }),
+  testSavedModel: (id: number) =>
+    req<ModelTestResult & { config?: ModelConfig }>(`/api/settings/models/${id}/test`, { method: 'POST' }),
   // 提示词管理（可传 module 按功能模块筛选，如「素材创作（落地页分析）」）
   prompts: (module?: string) =>
     req<PromptConfig[]>(`/api/settings/prompts${module ? `?module=${encodeURIComponent(module)}` : ''}`),
