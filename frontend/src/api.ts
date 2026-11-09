@@ -9,6 +9,16 @@ export const getToken = () => localStorage.getItem(TOKEN_KEY) || ''
 export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t)
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY)
 
+/** 把可选筛选条件拼成 query string（忽略空值） */
+const qs = (o: object) => {
+  const p = new URLSearchParams()
+  Object.entries(o).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') p.set(k, String(v))
+  })
+  const s = p.toString()
+  return s ? '?' + s : ''
+}
+
 export interface Framework {
   id: number
   product: string
@@ -264,10 +274,74 @@ export interface PromptConfig {
   name: string
   module: string
   category?: string | null
+  func_type?: string | null
+  usage_type?: string | null
   description?: string
   content: string
   is_active: boolean
   updated_at?: string | null
+}
+
+/** V4.35 素材提示词：分类维度（功能类型 / 使用类型） */
+export interface PromptTaxonomyItem {
+  key: string
+  label: string
+  desc: string
+  count: number
+}
+export interface PromptTaxonomy {
+  func_types: PromptTaxonomyItem[]
+  usage_types: PromptTaxonomyItem[]
+  total: number
+}
+
+/** V4.35 优秀提示词总结库条目（四维标签） */
+export interface PromptLibraryItem {
+  id: string
+  kind: string
+  name: string
+  type: string
+  style: string
+  scene: string
+  audience: string
+  platforms: string[]
+  source: string
+  summary: string
+  content: string
+  tags: string[]
+}
+export interface PromptDefaultInfo {
+  kind: string
+  label: string
+  target_key: string
+  id: string | null
+  name: string
+  source: string
+  builtin: boolean
+  customized: boolean
+}
+export interface PromptLibraryResponse {
+  kinds: { key: string; label: string; target_key: string; desc: string }[]
+  dimensions: { key: string; label: string; options: string[] }[]
+  items: PromptLibraryItem[]
+  total: number
+  all_total: number
+  defaults: Record<string, PromptDefaultInfo>
+}
+
+export interface PromptListOpts {
+  module?: string
+  scope?: string
+  func_type?: string
+  usage_type?: string
+}
+export interface PromptLibraryFilters {
+  kind?: string
+  type?: string
+  style?: string
+  scene?: string
+  audience?: string
+  q?: string
 }
 
 /** 素材创作三大提示词库中的单条预设 */
@@ -686,13 +760,24 @@ export const api = {
   testAllModels: () => req<ModelTestAllResult>('/api/settings/models/test-all', { method: 'POST' }),
   testSavedModel: (id: number) =>
     req<ModelTestResult & { config?: ModelConfig }>(`/api/settings/models/${id}/test`, { method: 'POST' }),
-  // 提示词管理（可传 module 按功能模块筛选，如「素材创作（落地页分析）」）
-  prompts: (module?: string) =>
-    req<PromptConfig[]>(`/api/settings/prompts${module ? `?module=${encodeURIComponent(module)}` : ''}`),
-  updatePrompt: (key: string, payload: { content: string; name?: string; description?: string; is_active?: boolean }) =>
+  // V4.35 统一提示词目录（可传字符串=按 module 筛选，兼容旧调用；或传筛选对象）
+  prompts: (opts?: string | PromptListOpts) => {
+    const o: PromptListOpts = typeof opts === 'string' ? { module: opts } : (opts || {})
+    return req<PromptConfig[]>(`/api/settings/prompts${qs(o)}`)
+  },
+  updatePrompt: (key: string, payload: { content: string; name?: string; description?: string;
+    category?: string; func_type?: string; usage_type?: string; is_active?: boolean }) =>
     req<PromptConfig>(`/api/settings/prompts/${key}`, { method: 'PUT', body: JSON.stringify(payload) }),
   resetPrompt: (key: string) =>
     req<PromptConfig>(`/api/settings/prompts/${key}/reset`, { method: 'POST' }),
+  // V4.35 分类维度 / 优秀提示词总结库 / 系统默认
+  promptTaxonomy: () => req<PromptTaxonomy>('/api/settings/prompt-taxonomy'),
+  promptLibrary: (f?: PromptLibraryFilters) =>
+    req<PromptLibraryResponse>(`/api/settings/prompt-library${qs(f || {})}`),
+  setPromptDefault: (kind: string, id: string | null) =>
+    req<{ ok: boolean; kind: string; target_key: string; id: string | null; name: string;
+          defaults: Record<string, PromptDefaultInfo> }>(
+      '/api/settings/prompt-defaults', { method: 'PUT', body: JSON.stringify({ kind, id }) }),
   // 规格库
   specs: () => req<PlatformSpec[]>('/api/platform-specs'),
   updateSpec: (id: number, patch: Partial<PlatformSpec>) =>

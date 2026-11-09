@@ -163,6 +163,9 @@ class PromptConfig(Base):
     name = Column(String(128))                           # 展示名，如「网站核心内容分析」
     module = Column(String(128))                         # 对应功能模块，如「素材创作（落地页分析）」
     category = Column(String(128), nullable=True)        # 分类（如「落地页分析」），用于在「素材提示词」中分门别类展示
+    # V4.35「素材提示词」两套分类维度：功能类型（落在哪个生成环节）/ 使用类型（提示词如何被使用）
+    func_type = Column(String(64), nullable=True)
+    usage_type = Column(String(64), nullable=True)
     description = Column(Text, nullable=True)            # 用途与编辑注意事项
     content = Column(Text)                               # 提示词正文（系统提示词）
     is_active = Column(Boolean, default=True)            # 停用后回退内置默认

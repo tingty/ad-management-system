@@ -8,13 +8,13 @@ import httpx
 
 from database import get_db
 from models import (Campaign, Material, Framework, ModelConfig, PlatformSpec, LandingPage, Job,
-                    User, ReviewRecord, AuditLog, Angle, PromptConfig)
+                    User, ReviewRecord, AuditLog, Angle, PromptConfig, SystemState)
 from schemas import (AnalyzeRequest, FrameworkOut, GenerateRequest, CampaignOut,
                      MaterialOut, ModelConfigIn, ModelConfigOut, ModelTestIn, RegenerateRequest,
                      JobCreate, JobOut, BatchParseRequest, SlotVersionsOut,
                      LoginRequest, UserOut, UserCreate, UserUpdate, ReviewRequest, SpecUpdate,
                      AngleOut, AnglePlanRequest, ProduceRequest, BrandUpdate, EstimateRequest,
-                     ReportRequest, OptimizeRequest, PromptOut, PromptUpdate,
+                     ReportRequest, OptimizeRequest, PromptOut, PromptUpdate, PromptDefaultIn,
                      LandingAnalysisRequest, LandingAnalysis, MediaCopyRequest, MediaImageRequest)
 from services import (analyze_landing_page, generate_campaign_materials, regenerate_material,
                       plan_angles, produce_campaign, fetch_page, optimize_campaign,
@@ -25,6 +25,9 @@ from batch import parse_csv, run_job, template_csv, CSV_HEADERS
 from specs_data import PLATFORMS, MATERIAL_TYPES, LANGUAGES
 from llm_catalog import LLM_PRESETS, test_llm_connection, _resolve_protocol
 from presets import build_directives, creative_presets_payload
+from prompt_catalog import (load_preset_overrides, library_dimensions, library_entries,
+                            get_practice, target_key_for_kind, KINDS, FUNC_TYPES,
+                            USAGE_TYPES, PRESET_FUNCS, BEST_PRACTICES)
 from media_platforms import list_media_platforms
 from media_ad import generate_media_copy, generate_media_images
 from auth import (current_user, require_roles, verify_password, hash_password, create_token,
@@ -276,7 +279,8 @@ async def produce(req: ProduceRequest, db: Session = Depends(get_db),
                                content_style=req.content_style,
                                color_scheme=req.color_scheme,
                                market_insight=req.market_insight,
-                               lang=langs[0] if langs else "en"))
+                               lang=langs[0] if langs else "en",
+                               overrides=load_preset_overrides(db)))
     db.refresh(campaign)
     _ = list(campaign.materials)
     return campaign
@@ -855,23 +859,157 @@ def _prompt_reg(key: str):
 
 @router.get("/settings/prompts", response_model=list[PromptOut])
 def list_prompts(db: Session = Depends(get_db),
-                 module: str = Query(None, description="按功能模块筛选，如：素材创作（落地页分析）"),
-                 _: User = Depends(require_roles("admin"))):
-    """按注册表顺序输出提示词；未落库的用内置默认兜底展示（与运行时 get_prompt 行为一致）。
-    传入 module 时只返回该模块的提示词（供「素材提示词」分门别类展示）。"""
+                 module: str = Query(None, description="按功能模块筛选"),
+                 scope: str = Query(None, description="core=仅系统级提示词；creation/空=素材创作全量"),
+                 func_type: str = Query(None, description="按功能类型筛选"),
+                 usage_type: str = Query(None, description="按使用类型筛选"),
+                 _: User = Depends(require_roles(*ROLES))):
+    """V4.35 统一提示词目录：一次输出「素材创作」涉及的全部提示词。
+
+    13 条系统级提示词（含从 media_ad.py 抽出的广告推广文案/图片）+ 62 条预设片段。
+    未落库的用内置默认兜底展示（与运行时 get_prompt 行为一致）。
+    菜单对 editor 可见，故读取放宽为所有已登录角色；写操作仍限 admin。
+    scope=core 供「系统设置 → 提示词管理」只看系统级条目，避免被 62 条预设淹没。
+    """
     rows = {p.key: p for p in db.query(PromptConfig).all()}
     out = []
     for item in PROMPT_REGISTRY:
         if module and item.get("module") != module:
+            continue
+        if scope == "core" and item.get("func_type") in PRESET_FUNCS:
+            continue
+        if func_type and item.get("func_type") != func_type:
+            continue
+        if usage_type and item.get("usage_type") != usage_type:
             continue
         row = rows.get(item["key"])
         if row:
             out.append(row)
         else:
             out.append(PromptConfig(id=0, key=item["key"], name=item["name"], module=item["module"],
-                                    category=item.get("category"), description=item["description"],
+                                    category=item.get("category"),
+                                    func_type=item.get("func_type"), usage_type=item.get("usage_type"),
+                                    description=item["description"],
                                     content=item["content"], is_active=True, updated_at=None))
     return out
+
+
+# ----------------------------- V4.35 素材提示词：分类 / 总结库 / 系统默认 -----------------------------
+
+def _state_get(db, key: str) -> str:
+    row = db.query(SystemState).filter_by(key=key).first()
+    return (row.value or "").strip() if row else ""
+
+
+def _state_set(db, key: str, value: str):
+    row = db.query(SystemState).filter_by(key=key).first()
+    if not row:
+        row = SystemState(key=key, value="")
+        db.add(row)
+    row.value = value or ""
+
+
+def _prompt_defaults(db) -> dict:
+    """当前两类「直接影响最终结果」的提示词所选的总结库模板。
+
+    customized=True 表示管理员在「提示词目录」里又手改过正文，前端会标注以免误认为
+    当前生效内容仍等于总结库原模板。
+    """
+    out = {}
+    for kind in KINDS:
+        ident = _state_get(db, "prompt_default_" + kind["key"])
+        practice = get_practice(kind["key"], ident) if ident else None
+        reg = _prompt_reg(kind["target_key"])
+        row = db.query(PromptConfig).filter_by(key=kind["target_key"]).first()
+        baseline = practice["content"] if practice else (reg or {}).get("content", "")
+        live = (row.content if row and row.content else baseline) or ""
+        customized = bool(baseline and live.strip() != baseline.strip())
+        out[kind["key"]] = {
+            "kind": kind["key"],
+            "label": kind["label"],
+            "target_key": kind["target_key"],
+            "id": ident or None,
+            "name": practice["name"] if practice else "系统内置默认",
+            "source": practice["source"] if practice else "内置提示词（可在目录中编辑）",
+            "builtin": not bool(ident),
+            "customized": customized,
+        }
+    return out
+
+
+@router.get("/settings/prompt-taxonomy")
+def prompt_taxonomy(db: Session = Depends(get_db),
+                    _: User = Depends(require_roles(*ROLES))):
+    """两套分类维度 + 各分类条目数，供「素材提示词」渲染筛选器与分类总览。"""
+    counts: dict[str, int] = {}
+    for item in PROMPT_REGISTRY:
+        counts[item["func_type"]] = counts.get(item["func_type"], 0) + 1
+    usage_counts: dict[str, int] = {}
+    for item in PROMPT_REGISTRY:
+        usage_counts[item["usage_type"]] = usage_counts.get(item["usage_type"], 0) + 1
+    return {
+        "func_types": [{**x, "count": counts.get(x["key"], 0)} for x in FUNC_TYPES],
+        "usage_types": [{**x, "count": usage_counts.get(x["key"], 0)} for x in USAGE_TYPES],
+        "total": len(PROMPT_REGISTRY),
+    }
+
+
+@router.get("/settings/prompt-library")
+def prompt_library(kind: str = Query(None), type: str = Query(None),
+                   style: str = Query(None), scene: str = Query(None),
+                   audience: str = Query(None), q: str = Query(None),
+                   db: Session = Depends(get_db),
+                   _: User = Depends(require_roles(*ROLES))):
+    """优秀提示词总结库：按 类型 / 风格 / 场景 / 覆盖对象 四维筛选（可叠加关键词）。"""
+    items = library_entries(kind, type=type, style=style, scene=scene,
+                            audience=audience, q=q)
+    return {
+        **library_dimensions(),
+        "items": items,
+        "total": len(items),
+        "all_total": len(BEST_PRACTICES),
+        "defaults": _prompt_defaults(db),
+    }
+
+
+@router.put("/settings/prompt-defaults")
+def set_prompt_default(req: PromptDefaultIn, db: Session = Depends(get_db),
+                       admin: User = Depends(require_roles("admin"))):
+    """把总结库中一条优秀提示词设为系统默认。
+
+    实现：把该模板正文写入对应系统提示词（media_copy_sys / media_image_sys），
+    生成链路经 get_prompt 读取，因此**保存即生效**，无需重启。id 为空则恢复内置默认。
+    """
+    target_key = target_key_for_kind(req.kind)
+    if not target_key:
+        raise HTTPException(400, "未知的提示词类别（应为 ad_copy / ad_image）")
+    reg = _prompt_reg(target_key)
+    if not reg:
+        raise HTTPException(500, "默认提示词目标未注册：" + target_key)
+
+    if req.id:
+        practice = get_practice(req.kind, req.id)
+        if not practice:
+            raise HTTPException(404, "总结库中不存在该提示词：" + req.id)
+        content = practice["content"]
+        label = practice["name"]
+    else:
+        content = reg["content"]
+        label = "系统内置默认"
+
+    row = db.query(PromptConfig).filter_by(key=target_key).first()
+    if not row:
+        row = PromptConfig(key=target_key, name=reg["name"], module=reg["module"],
+                           category=reg.get("category"), func_type=reg.get("func_type"),
+                           usage_type=reg.get("usage_type"), description=reg["description"])
+        db.add(row)
+    row.content = content
+    row.is_active = True
+    _state_set(db, "prompt_default_" + req.kind, req.id or "")
+    db.commit()
+    _audit(db, admin, "prompt.default", target_key, {"kind": req.kind, "id": req.id or "builtin"})
+    return {"ok": True, "kind": req.kind, "target_key": target_key,
+            "id": req.id or None, "name": label, "defaults": _prompt_defaults(db)}
 
 
 @router.put("/settings/prompts/{key}", response_model=PromptOut)
@@ -891,6 +1029,8 @@ def update_prompt(key: str, req: PromptUpdate, db: Session = Depends(get_db),
     row = db.query(PromptConfig).filter_by(key=key).first()
     if not row:
         row = PromptConfig(key=key, name=reg["name"], module=reg["module"],
+                           category=reg.get("category"), func_type=reg.get("func_type"),
+                           usage_type=reg.get("usage_type"),
                            description=reg["description"], content=reg["content"])
         db.add(row)
     row.content = req.content
@@ -900,6 +1040,10 @@ def update_prompt(key: str, req: PromptUpdate, db: Session = Depends(get_db),
         row.description = req.description
     if req.category is not None:
         row.category = req.category
+    if req.func_type is not None:
+        row.func_type = req.func_type
+    if req.usage_type is not None:
+        row.usage_type = req.usage_type
     if req.is_active is not None:
         row.is_active = req.is_active
     db.commit(); db.refresh(row)
@@ -917,13 +1061,22 @@ def reset_prompt(key: str, db: Session = Depends(get_db),
     row = db.query(PromptConfig).filter_by(key=key).first()
     if not row:
         row = PromptConfig(key=key, name=reg["name"], module=reg["module"],
+                           category=reg.get("category"), func_type=reg.get("func_type"),
+                           usage_type=reg.get("usage_type"),
                            description=reg["description"], content=reg["content"], is_active=True)
         db.add(row)
     else:
         row.content = reg["content"]
         row.name = reg["name"]
         row.description = reg["description"]
+        row.category = reg.get("category")
+        row.func_type = reg.get("func_type")
+        row.usage_type = reg.get("usage_type")
         row.is_active = True
+    # 恢复内置默认时，一并清除总结库里该类提示词的默认选择标记
+    for kind in KINDS:
+        if kind["target_key"] == key:
+            _state_set(db, "prompt_default_" + kind["key"], "")
     db.commit(); db.refresh(row)
     _audit(db, admin, "prompt.reset", key, {"name": row.name})
     return row

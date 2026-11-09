@@ -214,6 +214,9 @@ def seed_prompts():
         for item in PROMPT_REGISTRY:
             if db.query(PromptConfig).filter_by(key=item["key"]).count() == 0:
                 db.add(PromptConfig(key=item["key"], name=item["name"], module=item["module"],
+                                    category=item.get("category"),
+                                    func_type=item.get("func_type"),
+                                    usage_type=item.get("usage_type"),
                                     description=item["description"], content=item["content"],
                                     is_active=True))
                 created.append(item["key"])

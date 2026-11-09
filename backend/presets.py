@@ -367,6 +367,7 @@ def build_directives(
     color_scheme: Optional[str] = None,
     market_insight: Optional[str] = None,
     lang: str = "en",
+    overrides: Optional[dict] = None,
 ) -> dict:
     """把用户所选的 方向 / 风格 / 配色 / 视频市场洞察 解析成生成链路可直接使用的指令。
 
@@ -382,9 +383,17 @@ def build_directives(
     s = get_preset("styles", content_style)
     c = get_preset("colors", color_scheme)
 
-    direction_text = d["prompt"] if d else ""
-    style_text = s["prompt"] if s else ""
-    color_text = c["prompt"] if c else ""
+    # V4.35：管理员在「素材提示词」里编辑过的预设片段（key=preset_D01 等）优先，
+    # 否则用内置默认文本。overrides 由调用方用 prompt_catalog.load_preset_overrides(db) 传入。
+    def _text(preset, pid):
+        if not preset:
+            return ""
+        custom = (overrides or {}).get(pid)
+        return custom if custom and custom.strip() else preset.get("prompt", "")
+
+    direction_text = _text(d, creative_direction)
+    style_text = _text(s, content_style)
+    color_text = _text(c, color_scheme)
 
     parts = [p for p in (direction_text, style_text, color_text) if p]
     extra_prompt = "；".join(parts)

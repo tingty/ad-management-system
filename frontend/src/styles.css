@@ -986,11 +986,127 @@ select {
   padding: 8px 10px; font: inherit; font-size: 12.8px; resize: vertical;
 }
 
-/* ---------------- 素材创作：素材提示词库（按分类展示） ---------------- */
-.mpl-group { margin-top: 6px; }
-.mpl-cat {
-  font-size: 14px; font-weight: 700; color: var(--primary);
-  margin: 16px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+/* ==================== V4.35 素材提示词：全量目录 + 优秀提示词总结库 ==================== */
+.mpl-page { display: flex; flex-direction: column; gap: 14px; }
+.mpl-topbar .alert { margin-top: 12px; }
+
+/* 视图切换 */
+.mpl-viewtabs, .mpl-kindtabs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mpl-viewtabs { margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+.mpl-viewtabs button, .mpl-kindtabs button {
+  border: 1px solid var(--border); background: #fff; color: var(--text);
+  padding: 8px 16px; border-radius: 8px; font-size: 13.5px; font-weight: 600; cursor: pointer;
+  transition: .15s ease;
+}
+.mpl-viewtabs button:hover, .mpl-kindtabs button:hover { border-color: var(--primary2); }
+.mpl-viewtabs button.on, .mpl-kindtabs button.on {
+  background: var(--primary); border-color: var(--primary); color: #fff;
+}
+.mpl-kindtabs .muted { margin-left: auto; font-size: 12.5px; }
+
+/* 分类总览 */
+.mpl-tax-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.mpl-tax-head h3 { margin: 0; font-size: 14px; }
+.mpl-tax-head .muted { font-size: 12.3px; }
+.mpl-chips { display: flex; gap: 7px; flex-wrap: wrap; }
+.mpl-chip {
+  border: 1px solid var(--border); background: #fff; color: var(--text);
+  border-radius: 999px; padding: 6px 13px; font-size: 12.6px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; transition: .15s ease;
+}
+.mpl-chip b {
+  background: #eef3f9; color: var(--primary); border-radius: 999px;
+  padding: 1px 7px; font-size: 11.4px;
+}
+.mpl-chip:hover { border-color: var(--primary2); }
+.mpl-chip.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.mpl-chip.on b { background: rgba(255,255,255,.22); color: #fff; }
+.mpl-chip.alt.on { background: var(--primary2); border-color: var(--primary2); }
+.mpl-tax-desc { margin-top: 10px; font-size: 12.5px; line-height: 1.6; }
+
+/* 工具栏 */
+.mpl-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.mpl-search, .mpl-filters input, .mpl-filters select, .mpl-edit-meta select {
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px;
+  font: inherit; font-size: 13px; color: var(--text); background: #fff;
+}
+.mpl-search { flex: 1 1 300px; min-width: 220px; }
+.mpl-search:focus, .mpl-filters input:focus, .mpl-filters select:focus { outline: 2px solid #cfe0f3; }
+
+/* 分组 */
+.mpl-group { margin-top: 22px; }
+.mpl-group-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border-bottom: 1px solid var(--border); padding-bottom: 9px; margin-bottom: 12px;
+}
+.mpl-group-head > div:first-child { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.mpl-cat { font-size: 14.5px; font-weight: 700; color: var(--primary); }
+.mpl-group-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* 提示词卡片 */
+.mpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+.mpl-grid.preset { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.mpl-item { margin: 0; padding: 14px 15px; display: flex; flex-direction: column; gap: 8px; }
+.mpl-item.inactive { opacity: .72; }
+.mpl-item-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.mpl-item-head b { font-size: 13.6px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+.mpl-badge {
+  background: #eaf2fb; color: var(--primary2); border-radius: 5px;
+  padding: 2px 7px; font-size: 11.4px; font-weight: 600;
+}
+.mpl-meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11.8px; }
+.mpl-desc { font-size: 12.4px; line-height: 1.6; }
+.mpl-pre {
+  margin: 0; max-height: 220px; overflow: auto; font-size: 12.1px;
+  line-height: 1.62; white-space: pre-wrap; word-break: break-word;
+}
+.mpl-item-foot { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 4px; }
+
+/* 当前系统默认 */
+.mpl-defaults h3 { margin: 0 0 12px; font-size: 14.5px; }
+.mpl-default-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.mpl-default-card {
+  border: 1px solid var(--border); border-left: 3px solid var(--primary2);
+  border-radius: 9px; padding: 12px 14px; background: #f8fbff;
+}
+.mpl-default-card b { display: block; font-size: 14px; margin: 5px 0; color: var(--primary); }
+.mpl-default-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+/* 总结库筛选 */
+.mpl-kindtabs { padding-bottom: 12px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.mpl-filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.mpl-filters label { display: flex; flex-direction: column; gap: 5px; font-size: 12.2px; color: var(--muted); }
+.mpl-filters select { min-width: 138px; }
+.mpl-filter-q { flex: 1 1 200px; }
+.mpl-filter-q input { width: 100%; }
+.mpl-result { margin: 14px 0 10px; font-size: 12.5px; }
+
+/* 总结库卡片 */
+.mpl-lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+.mpl-lib-card { margin: 0; padding: 15px; display: flex; flex-direction: column; gap: 9px; }
+.mpl-lib-card.is-default { border-color: var(--ok); box-shadow: 0 0 0 1px rgba(47,158,68,.18); }
+.mpl-lib-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mpl-lib-head b { font-size: 13.8px; color: var(--primary); }
+.mpl-tags { display: flex; gap: 5px; flex-wrap: wrap; }
+.mpl-tag { border-radius: 5px; padding: 2px 7px; font-size: 11.2px; font-weight: 600; }
+.mpl-tag.t1 { background: #e7f1fb; color: #1f4e79; }
+.mpl-tag.t2 { background: #f0eafb; color: #6741d9; }
+.mpl-tag.t3 { background: #e6f7f1; color: #087f5b; }
+.mpl-tag.t4 { background: #fff0e0; color: #b35c00; }
+.mpl-source { font-size: 11.7px; line-height: 1.6; }
+.mpl-lib-pre {
+  margin: 0; max-height: 340px; overflow: auto; font-size: 12.2px;
+  line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+}
+.mpl-edit-meta { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+.mpl-edit-meta label { display: flex; flex-direction: column; gap: 5px; font-size: 12.2px; color: var(--muted); }
+.mpl-edit-meta select { min-width: 160px; }
+code { background: #eef3f9; padding: 1px 4px; border-radius: 4px; font-size: 11.6px; }
+
+@media (max-width: 760px) {
+  .mpl-grid, .mpl-grid.preset, .mpl-lib-grid, .mpl-default-grid { grid-template-columns: 1fr; }
+  .mpl-kindtabs .muted { margin-left: 0; width: 100%; }
 }
 
 /* ---------------- 素材创作：落地页分析结果（8 字段） ---------------- */

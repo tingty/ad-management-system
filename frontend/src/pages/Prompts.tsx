@@ -11,7 +11,8 @@ export default function Prompts() {
   const [expanded, setExpanded] = useState<string | null>(null)
 
   const load = async () => {
-    try { setList(await api.prompts()) } catch (e: any) { setErr(e.message) }
+    // V4.35：这里只管理 13 条系统级提示词；62 条创意预设片段在「素材创作平台 → 素材提示词」中管理
+    try { setList(await api.prompts({ scope: 'core' })) } catch (e: any) { setErr(e.message) }
   }
   useEffect(() => { load() }, [])
 

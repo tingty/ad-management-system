@@ -25,6 +25,10 @@ from typing import Optional
 from providers import get_llm, get_image, parse_json, UPLOAD_DIR, _active_config
 from presets import (build_directives, style_visual, palette_prompt,
                      DIRECTION_MOOD, STYLE_TO_BG, DIRECTION_TO_BG, COLOR_TO_PALETTE)
+# V4.35：广告推广文案 / 推广图片的提示词改由「素材提示词」统一管理，保存即生效
+from services import get_prompt
+from prompt_catalog import (render_prompt, compose_copy_prompt, compose_image_prompt,
+                            load_preset_overrides, MEDIA_IMAGE_SYS)
 from imaging import render_ad_png
 from creative import fit_text
 from media_platforms import get_media_platform
@@ -134,8 +138,12 @@ def re_host(url: str):
 
 
 # ----------------------------- 文案生成 -----------------------------
-def _analysis_context(analysis: dict, platform: str, lang: str) -> str:
-    """把落地页 8 字段分析结论拼成「生成依据」提示词（必须作为文案/图片的事实基础）。"""
+def _analysis_context(analysis: dict, platform: str, lang: str, db=None) -> str:
+    """把落地页 8 字段分析结论拼成「生成依据」提示词（必须作为文案/图片的事实基础）。
+
+    V4.35：结尾的指令部分改由「素材提示词 → 广告推广文案 · 分析结论注入」(media_context) 提供，
+    可在页面编辑；db 为 None 时沿用内置兜底，保证任何调用点都不会因缺 db 而失败。
+    """
     lines = []
     ind = (analysis.get("industry") or "").strip()
     typ = (analysis.get("type") or "").strip()
@@ -167,9 +175,12 @@ def _analysis_context(analysis: dict, platform: str, lang: str) -> str:
                     recs.append(f"- {p}: {r}")
         if recs:
             lines.append("推广途径建议（来自落地页分析）:\n" + "\n".join(recs))
-    lines.append(f"请基于以上真实分析结论，为媒体平台【{platform}】撰写贴合其版位与受众调性的广告文案，"
-                 f"不得编造页面未呈现的事实。")
-    return "\n".join(lines)
+    facts = "\n".join(lines)
+    if db is None:
+        return (facts + f"\n请基于以上真实分析结论，为媒体平台【{platform}】"
+                "撰写贴合其版位与受众调性的广告文案，不得编造页面未呈现的事实。")
+    return render_prompt(get_prompt(db, "media_context"),
+                         {"CONTEXT": facts, "PLATFORM": platform})
 
 
 def _schema_instr(schema) -> str:
@@ -286,13 +297,15 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
     spec = get_media_platform(platform) or {}
     lim = spec.get("copy_limits", {})
 
-    ctx = _analysis_context(analysis, platform, lang)
-    sys_prompt = (
-        "你是一名海外效果广告资深文案。必须依据下方「落地页分析结论」为该媒体平台撰写可直接投放的广告文案。"
-        "只输出 JSON、不要任何解释或 markdown。COPY_JSON\n"
-        "字段结构（key 必须完全匹配，count>1 的字段用字符串数组）：" + _schema_instr(schema) + "\n"
-        "字数红线（务必遵守，超长会被平台拒投）：" + _limits_instr(lim, schema) + "\n"
-        f"语言要求：用 {LANG_NAME.get(lang, 'English')} 撰写，语气贴合平台与目标人群。"
+    # V4.35：主提示词来自「素材提示词」目录（可由总结库一键设为系统默认）；
+    # 字段结构 / 字数红线 / 语言等动态约束由 compose_copy_prompt 注入，模板缺失时自动追加输出契约。
+    ctx = _analysis_context(analysis, platform, lang, db)
+    sys_prompt = compose_copy_prompt(
+        get_prompt(db, "media_copy_sys"),
+        schema=_schema_instr(schema),
+        limits=_limits_instr(lim, schema),
+        language=LANG_NAME.get(lang, "English"),
+        platform=platform,
     )
     user_prompt = ctx
 
@@ -346,29 +359,24 @@ def _overlay_text(copy_fields: dict, platform: str, brand: str):
     return (headline or "").strip(), (sub or "").strip(), (cta or "").strip()
 
 
-def _media_image_prompt(analysis: dict, platform: str, directives: dict, design: dict) -> str:
-    """结合落地页分析结论 + 创意方向/风格/配色，拼文生图背景提示词（不含文字）。"""
+def _media_image_prompt(analysis: dict, platform: str, directives: dict, design: dict, db=None) -> str:
+    """结合落地页分析结论 + 创意方向/风格/配色，拼文生图背景提示词（不含文字）。
+
+    V4.35：提示词模板改为「素材提示词 → 广告推广图片 · 文生图背景提示词」(media_image_sys)，
+    可由总结库一键设为系统默认；db 为 None 时退回内置模板，保证任何调用点都不会失败。
+    """
     ind = (analysis.get("industry") or "").strip()
     typ = (analysis.get("type") or "").strip()
     aud = (analysis.get("audience") or "").strip()
     adv = analysis.get("advantages") or []
     comp = analysis.get("competitors") or []
-    prod = (typ or ind or "product").strip()
 
-    parts = [
-        f"High-quality advertising background visual for a {typ or ind or 'product'} in the {ind or 'market'}.",
-        "No text, no logo, no letters, no watermark, no UI; clean negative space for overlaid ad copy.",
-    ]
     dir_id = directives.get("direction_id") or ""
     mood = DIRECTION_MOOD.get(dir_id, "")
-    if mood:
-        parts.append(f"Creative direction mood: {mood}.")
     style_keys = design.get("styles") or []
     style_desc = "; ".join(style_visual(s) for s in style_keys[:3]) or "modern advertising visual backdrop"
-    parts.append(f"Visual style: {style_desc}.")
     pal = design.get("palette")
-    if pal:
-        parts.append(palette_prompt(pal))
+
     # 结合落地页分析结论（需求要求：一定要按网站已有分析结论作为生成依据）
     ctx_bits = []
     if adv:
@@ -377,11 +385,22 @@ def _media_image_prompt(analysis: dict, platform: str, directives: dict, design:
         ctx_bits.append(f"Target audience: {aud}")
     if comp:
         ctx_bits.append("Differentiate from competitors: " + ", ".join(comp[:3]))
-    if ctx_bits:
-        parts.append("Brand context from landing page analysis: " + " | ".join(ctx_bits) + ".")
-    parts.append("Photorealistic or illustrative, consistent with the described style, high detail, "
-                 "professional advertising quality.")
-    return " ".join(parts)
+
+    variables = {
+        "INDUSTRY": ind or "market",
+        "SITE_TYPE": typ or ind or "product",
+        "AUDIENCE": aud,
+        "STRENGTHS": "; ".join(adv[:3]),
+        "COMPETITORS": ", ".join(comp[:3]),
+        "PLATFORM": platform,
+        "MOOD": ("Creative direction mood: %s." % mood) if mood else "",
+        "STYLE": style_desc,
+        "PALETTE": palette_prompt(pal) or "",
+        "BRAND_CONTEXT": ("Brand context from landing page analysis: "
+                          + " | ".join(ctx_bits) + ".") if ctx_bits else "",
+    }
+    template = get_prompt(db, "media_image_sys") if db is not None else MEDIA_IMAGE_SYS
+    return compose_image_prompt(template, variables)
 
 
 def _cleanup_ai_bgs():
@@ -452,7 +471,8 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
     spec = get_media_platform(platform) or {}
     spec_sizes = spec.get("image_sizes") or ["1080x1080"]
 
-    directives = build_directives(creative_direction, content_style, color_scheme, lang=lang)
+    directives = build_directives(creative_direction, content_style, color_scheme, lang=lang,
+                                  overrides=load_preset_overrides(db))
     design = {}
     bg_key = None
     if content_style and content_style in STYLE_TO_BG:
@@ -484,7 +504,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         size = slot.get("size") or spec_sizes[0]
         placement = slot.get("placement") or ""
         w, h = _size_wh(size)
-        bg_prompt = _media_image_prompt(analysis, platform, directives, design)
+        bg_prompt = _media_image_prompt(analysis, platform, directives, design, db)
         fn = f"media_{platform}_{size}_{abs(hash((placement, size, headline, sub))) % 100000:05d}.png"
         out = os.path.join(UPLOAD_DIR, fn)
         tasks.append((out, w, h, bg_prompt, fn, size, placement, logo_path))

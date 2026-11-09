@@ -51,7 +51,7 @@ const GROUP_CREATION: NavGroup = {
     { key: 'creation', label: '素材创作', icon: 'sparkles',
       desc: '输入落地页链接或正文，调用已配置的大模型推理，输出 8 项关键分析并标注实际调用模型；分析完成后，直接在本模块内基于分析结论进行营销推广设置（选平台 → 文案 → 生成推广图片）' },
     { key: 'matprompts', label: '素材提示词', icon: 'tags',
-      desc: '分门别类展示「素材创作」使用的提示词框架（分析总纲 / 基础识别 / 竞争分析 / 价值提炼 / 增长推广），可查阅并编辑保存，保存即生效' },
+      desc: '集中管理「素材创作」全部提示词：按功能类型 / 使用类型分类检索与编辑；内置广告推广文案与推广图片的优秀提示词总结库，可按类型 / 风格 / 场景 / 覆盖对象四维筛选并选择系统默认，保存即生效' },
   ],
 }
 
@@ -354,7 +354,7 @@ export default function App() {
             <Workspace meta={meta} onOpenLibrary={() => go('library')} />
           )}
           {tab === 'creation' && isEditor && <MaterialCreation meta={meta} />}
-          {tab === 'matprompts' && isEditor && <MaterialPromptLibrary />}
+          {tab === 'matprompts' && isEditor && <MaterialPromptLibrary isAdmin={isAdmin} />}
           {tab === 'batch' && isEditor && <Batch meta={meta} />}
           {tab === 'library' && <Library user={user} canReview={canReview} isEditor={isEditor} />}
           {tab === 'specs' && <Specs canEdit={canReview} />}

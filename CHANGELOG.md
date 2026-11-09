@@ -1137,3 +1137,55 @@
 **说明**
 - 「同一种用户」按「同一种用途（usage：analysis / copy / image / video）」理解；若确需按用户维度隔离配置，需另行设计多租户模型归属字段。
 - 部署机 `git pull` 后重启后端即自动补列并启动调度；重启后约 10 秒进行当天首次判定。
+
+## V4.35 素材提示词：全量统一目录 + 双维度分类 + 优秀提示词总结库
+
+**发布日期**：2026-11-09
+
+**需求**
+1. 把「素材创作」模块涉及的**所有提示词**全部展示、整理到「素材提示词」子模块。
+2. 按「功能类型」「使用类型」两套维度分门别类管理与区分，方便今后修改与查阅。
+3. 针对直接影响最终结果的「广告推广文案」「广告推广图片」建立**提示词总结库**，收集整理市面优秀提示词，可按**类型 / 风格 / 场景 / 覆盖对象**等维度选择系统默认的提示词类型。
+
+**根因（改造前）**
+- 提示词散落 4 处：`services.py` 注册表 10 条、`presets.py` 预设库 62 条、`media_ad.py` 硬编码的文案/图片提示词、前端 `materialPresets.ts` 副本。
+- 「素材提示词」页只过滤 `module='素材创作（落地页分析）'`，仅展示 5 条；62 条预设与广告文案/图片提示词**完全不可见、不可改**。
+- 只有单一 `category` 字段，没有功能类型 / 使用类型维度；也不存在可选默认模板的机制。
+
+**交付**
+
+*统一目录与分类（需求 1 + 2）*
+- 新模块 `backend/prompt_catalog.py`：定义 8 个**功能类型**（落地页分析 / 广告推广文案 / 广告推广图片 / 视频分镜 / 创意方向库 / 内容风格库 / 配色方案库 / 通用素材生产）与 5 个**使用类型**（系统提示词 / 用户提示词 / 输出约束 / 提示词片段 / 生成指令），并给既有 10 条提示词逐条打标（不改内容）。
+- 把 `media_ad.py` 里硬编码的 3 条提示词抽成可管理模板：`media_copy_sys`（广告推广文案主提示词）、`media_context`（分析结论注入）、`media_image_sys`（推广图片文生图背景提示词）。
+- 三大预设库 D01–D20 / S01–S26 / C01–C16 共 62 条以 `preset_<编号>` 纳入同一注册表。`PROMPT_REGISTRY` 由 10 条扩为 **75 条**，`seed_prompts()` 启动时自动播种、`sync_prompt_defaults()` 回填元数据。
+- `PromptConfig` 新增 `func_type` / `usage_type` 两列，`migrations.ensure_schema()` 自动补列，旧库无需手工迁移。
+- 预设片段编辑后经 `load_preset_overrides(db)` 覆盖 `presets.build_directives()` 的注入文本，编辑真正影响生成（此前只读）。
+
+*优秀提示词总结库（需求 3）*
+- `prompt_catalog.BEST_PRACTICES` 收录 **20 条**业界公认框架的成体系提示词：文案 AIDA / PAS / BAB / FAB / 4P / Hook-Story-Offer / 社会证明 / 稀缺紧迫 / Before-After / 本地化；图片 Hero Shot / Lifestyle / 分屏对比 / UGC / 极简留白 / 数据权威 / 大促氛围 / 情绪人像 / 3D CGI / 本地文化。
+- 每条带四维标签（类型 / 风格 / 场景 / 覆盖对象，各 8 个选项）+ 适用平台 + 方法论来源 + 摘要 + 完整提示词正文，支持四维交集筛选与关键词检索。
+- 「设为系统默认」把选中模板正文写入对应系统提示词（`media_copy_sys` / `media_image_sys`），生成链路经 `get_prompt()` 读取 —— **保存即生效，无需重启**；`system_state` 记录当前选择，`customized` 标记可识别管理员后续在目录里的手改。
+- 模板采用 `[[NAME]]` 安全占位符（不用 `str.format`，避免提示词正文里的 JSON 花括号被误解析）；模板不含结构占位符时，系统自动追加**输出契约块**（字段结构 / 字数红线 / 语言 / no-text 等硬约束），保证更换模板不丢失底线规则。
+- `media_ad.py` 三处运行时接入改由 `get_prompt()` 读取；`_analysis_context` / `_media_image_prompt` 保留无 db 的内置兜底。
+
+*API 与前端*
+- `GET /api/settings/prompts` 支持 `scope` / `func_type` / `usage_type` / `module` 筛选；菜单对 editor 可见，因此**读取放宽为所有已登录角色**，写操作仍限 admin。
+- 新增 `GET /api/settings/prompt-taxonomy`（两套维度 + 各类计数）、`GET /api/settings/prompt-library`（四维筛选 + 当前默认）、`PUT /api/settings/prompt-defaults`（设为默认 / 恢复内置）。
+- `MaterialPromptLibrary.tsx` 重写为两大视图：**全量提示词目录**（分类 chips + 使用类型筛选 + 关键词检索 + 分组折叠 + 编辑/停用/恢复默认，编辑弹窗可调整双维度）、**优秀提示词总结库**（当前系统默认卡片 + 类别切换 + 四维筛选 + 模板卡片 + 正文弹窗 + 一键设为默认）。
+- `Prompts.tsx`（系统设置 → 提示词管理）改用 `scope=core`，仍只显示 13 条系统级提示词，避免被 62 条预设淹没。
+- `App.tsx` 更新菜单描述并传入 `isAdmin`：非管理员为只读视图，不显示写操作按钮。
+
+**验证**
+- 后端全量 `py_compile` 通过；`import main` 无循环导入，注册表 75 条分类统计正确（6/2/2/1/20/26/16/2）。
+- 前端 `tsc --noEmit` 与 `vite build` 均通过。
+- DB 副本 TestClient 实测：全量目录 200 且 75 条（含 `media_copy_sys` / `media_image_sys` / `media_context` / `preset_D01`…）；`scope=core` 13 条无预设；`func_type=ad_copy` 2 条、`usage_type=fragment` 62 条；分类总览计数一致。
+- 总结库筛选：`ad_copy` 10 条；`痛点唤醒 + 情绪张力` → `copy_pas`；`大促节点` → `copy_scarcity` + `img_promo`。
+- 「设为默认 → 生成链路生效」端到端：设 `copy_pas` 后 `get_prompt(media_copy_sys)` 含 PAS、合成提示词自动补出输出契约；设 `img_hero` 后实际文生图提示词含 Hero Shot + no-text 契约、无残留占位符；分析结论注入读自 `media_context`。恢复内置默认后回到内置模板。
+- 权限：editor 三个 GET 均 200，两个 PUT 均 403。
+- 预设编辑：`PUT /prompts/preset_D01` 后 `load_preset_overrides` 生效，`build_directives(D01)` 的 `extra_prompt` 含自定义指令。
+
+**说明 / 默认约定**
+- 总结库内容按「公开营销方法论 + 合规写作准则」整理为可直接投放的提示词模板，非逐字复制任何厂商内部提示词；涉及折扣、倒计时、评分与案例均要求**只用落地页真实出现的信息**，避免生成违规文案。
+- 设为默认后仍可在「全量提示词目录」里继续手改正文，此时总结库卡片会标注「已在目录中自定义」。
+- 部署机 `git pull` 后重启后端：自动补 `func_type` / `usage_type` 列、播种 65 条新提示词；既有提示词正文不受影响（仅元数据同步）。
+- 「提示词总结库」当前为内置精选集（20 条）；若后续需要运营自行增补条目，可扩展为独立数据表，现有 API 结构无需改动。

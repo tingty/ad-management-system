@@ -287,6 +287,33 @@ LANDING_PROMPTS = [
 # 把落地页分析提示词并入注册表（提示词管理 / 素材提示词 单一数据源）
 PROMPT_REGISTRY = PROMPT_REGISTRY + LANDING_PROMPTS
 
+# V4.35「素材提示词」全量目录：
+#   1) 既有 10 条系统提示词补齐「功能类型 / 使用类型」标签（prompt_catalog.PROMPT_META）；
+#   2) 合入从 media_ad.py 抽出的 3 条广告推广文案 / 图片提示词（此前硬编码、不可管理）；
+#   3) 合入三大预设库 D/S/C 共 62 条提示词片段（此前页面完全看不到，编辑后可回写生效）。
+# 这样「素材创作」涉及的全部提示词都在同一注册表里，「素材提示词」页一次展示、统一编辑。
+from prompt_catalog import PROMPT_META, EXTRA_PROMPTS, preset_prompt_entries
+
+
+def _normalize_prompt_registry(items: list) -> list:
+    out = []
+    for item in items:
+        d = dict(item)
+        meta = PROMPT_META.get(d["key"], {})
+        for field in ("func_type", "usage_type", "category"):
+            if not d.get(field) and meta.get(field):
+                d[field] = meta[field]
+        d.setdefault("func_type", "production")
+        d.setdefault("usage_type", "system")
+        d.setdefault("category", "未分类")
+        out.append(d)
+    return out
+
+
+PROMPT_REGISTRY = _normalize_prompt_registry(
+    PROMPT_REGISTRY + EXTRA_PROMPTS + preset_prompt_entries()
+)
+
 _PROMPT_FALLBACK = {p["key"]: p["content"] for p in PROMPT_REGISTRY}
 
 # 旧版默认提示词快照，只用于升级迁移：库里内容仍是这段未改动的默认值时刷新为新版，
@@ -325,10 +352,14 @@ def sync_prompt_defaults(db) -> list:
         if not row:
             continue
         changed = False
-        meta = (item["name"], item["module"], item["description"], item.get("category"))
-        if (row.name, row.module, row.description, row.category) != meta:
+        meta = (item["name"], item["module"], item["description"], item.get("category"),
+                item.get("func_type"), item.get("usage_type"))
+        if (row.name, row.module, row.description, row.category,
+                row.func_type, row.usage_type) != meta:
             row.name, row.module, row.description = item["name"], item["module"], item["description"]
             row.category = item.get("category")
+            row.func_type = item.get("func_type")
+            row.usage_type = item.get("usage_type")
             changed = True
         legacy = (_PROMPT_LEGACY.get(item["key"]) or "").strip()
         if legacy and (row.content or "").strip() == legacy:
