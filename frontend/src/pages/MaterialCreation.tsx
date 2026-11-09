@@ -1,5 +1,9 @@
-import { useState, ChangeEvent } from 'react'
+import { useState, useEffect, ChangeEvent } from 'react'
 import { api, LandingAnalysis, LandingChannel, ModelInfo } from '../api'
+
+/** 「素材历史 → 复用分析继续创作」的跨页面握手（sessionStorage + 自定义事件） */
+export const REUSE_HISTORY_KEY = 'admb:reuseHistory'
+export const REUSE_HISTORY_EVENT = 'admb:reuseHistory'
 import MediaAdStudio from './MediaAdStudio'
 
 // 8 个必要字段的展示元信息（顺序即展示顺序）
@@ -25,18 +29,52 @@ export default function MaterialCreation({ meta }: { meta: any }) {
   const [err, setErr] = useState('')
   // 单条分析记录（逐步重建：一次只分析一个落地页）
   const [data, setData] = useState<LandingAnalysis | null>(null)
+  // V4.36：本次创作会话对应的「素材历史」id，文案 / 图片会增量写回
+  const [historyId, setHistoryId] = useState<number | null>(null)
   // 品牌 logo 选择状态：auto=用抓取的；upload=用本地上传的；none=不使用 logo
   const [logoMode, setLogoMode] = useState<'auto' | 'upload' | 'none'>('auto')
   const [uploadedLogo, setUploadedLogo] = useState('')
 
+  // 从「素材历史」复用已保存的分析结论：不重新抓站、不重新调用大模型，直接进入推广设置。
+  // 若当前不在本页，组件挂载时读取 sessionStorage；若已在本页，由自定义事件触发。
+  useEffect(() => {
+    const apply = () => {
+      const raw = sessionStorage.getItem(REUSE_HISTORY_KEY)
+      if (!raw) return
+      sessionStorage.removeItem(REUSE_HISTORY_KEY)
+      try {
+        const p = JSON.parse(raw)
+        if (!p?.analysis) return
+        setData(p.analysis)
+        setHistoryId(p.historyId ?? null)
+        setUrl(p.analysis.url || '')
+        setText('')
+        setLogoMode('auto'); setUploadedLogo('')
+        setErr('')
+        setTimeout(() => document.getElementById('media-studio')?.scrollIntoView({ behavior: 'smooth' }), 120)
+      } catch { /* 忽略损坏的暂存数据 */ }
+    }
+    apply()
+    window.addEventListener(REUSE_HISTORY_EVENT, apply)
+    return () => window.removeEventListener(REUSE_HISTORY_EVENT, apply)
+  }, [])
+
   const run = async () => {
     if (!url.trim() && !text.trim()) { setErr('请填写落地页链接或正文'); return }
-    setErr(''); setBusy(true); setData(null); setLogoMode('auto'); setUploadedLogo('')
+    setErr(''); setBusy(true); setData(null); setHistoryId(null)
+    setLogoMode('auto'); setUploadedLogo('')
     try {
       const res = await api.landingAnalysis({
         url: url.trim() || undefined,
         text: text.trim() || undefined,
       })
+      // 分析完成即建立历史会话（本地 DB 写入，失败不阻断创作主流程）
+      let hid: number | null = null
+      try {
+        const h = await api.createCreationHistory({ analysis: res })
+        hid = h.id
+      } catch { /* 历史写入失败不影响本次生成 */ }
+      setHistoryId(hid)
       setData(res)
     } catch (e: any) {
       setErr(e.message)
@@ -99,6 +137,7 @@ export default function MaterialCreation({ meta }: { meta: any }) {
         <>
           <ResultView
             data={data}
+            historyId={historyId}
             logoMode={logoMode}
             uploadedLogo={uploadedLogo}
             onLogoMode={setLogoMode}
@@ -111,6 +150,7 @@ export default function MaterialCreation({ meta }: { meta: any }) {
               initialAnalysis={data}
               onGotoCreation={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
               selectedLogo={logoMode === 'upload' ? uploadedLogo : logoMode === 'none' ? '' : (data.logo || '')}
+              historyId={historyId}
             />
           </div>
         </>
@@ -133,8 +173,9 @@ async function onUploadLogo(e: ChangeEvent<HTMLInputElement>, onUploaded: (url: 
   }
 }
 
-function ResultView({ data, logoMode, uploadedLogo, onLogoMode, onUploaded, onUpload, onErr }: {
+function ResultView({ data, historyId, logoMode, uploadedLogo, onLogoMode, onUploaded, onUpload, onErr }: {
   data: LandingAnalysis
+  historyId: number | null
   logoMode: 'auto' | 'upload' | 'none'
   uploadedLogo: string
   onLogoMode: (m: 'auto' | 'upload' | 'none') => void
@@ -163,6 +204,12 @@ function ResultView({ data, logoMode, uploadedLogo, onLogoMode, onUploaded, onUp
         <span className="muted">分析完成。以下将基于上述结论进行营销推广设置与推广图片生成：</span>
         <button className="btn primary" onClick={() => document.getElementById('media-studio')?.scrollIntoView({ behavior: 'smooth' })}>开始营销推广设置 ↓</button>
       </div>
+      {historyId && (
+        <div className="la-hist-hint muted">
+          本次分析已自动存入「素材历史」#{historyId}；后续生成的文案与推广图片会一并归档，
+          可在「素材历史」中查阅、放大与再下载，无需重复生成。
+        </div>
+      )}
 
       {/* (1) 网站地址：仅展示 */}
       <div className="la-field">

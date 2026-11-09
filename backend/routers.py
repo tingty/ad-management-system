@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request
 from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import or_
@@ -8,7 +8,8 @@ import httpx
 
 from database import get_db
 from models import (Campaign, Material, Framework, ModelConfig, PlatformSpec, LandingPage, Job,
-                    User, ReviewRecord, AuditLog, Angle, PromptConfig, SystemState)
+                    User, ReviewRecord, AuditLog, Angle, PromptConfig, SystemState,
+                    CreationHistory, utcnow)
 from schemas import (AnalyzeRequest, FrameworkOut, GenerateRequest, CampaignOut,
                      MaterialOut, ModelConfigIn, ModelConfigOut, ModelTestIn, RegenerateRequest,
                      JobCreate, JobOut, BatchParseRequest, SlotVersionsOut,
@@ -31,7 +32,12 @@ from prompt_catalog import (load_preset_overrides, library_dimensions, library_e
 from media_platforms import list_media_platforms
 from media_ad import generate_media_copy, generate_media_images
 from auth import (current_user, require_roles, verify_password, hash_password, create_token,
-                  user_dict, ROLE_LABELS, CAN_EDIT, CAN_REVIEW, ROLES)
+                  user_dict, ROLE_LABELS, CAN_EDIT, CAN_REVIEW, ROLES, decode_token)
+from creation_history import (
+    history_to_dict, derive_title, site_name_of, safe_image_path,
+    media_type_of, image_files_of, copy_as_text, build_files_zip,
+    build_history_zip, cleanup_orphan_files,
+)
 
 router = APIRouter(prefix="/api")
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -125,6 +131,224 @@ async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depend
     result = await generate_media_images(db, req.analysis.model_dump(), req.platform, req.lang,
                                          req.copy_fields, req.style_opts, slots, req.logo or "")
     return result
+
+
+# ===========================================================================
+# V4.36 推广图片查阅 / 下载 + 「素材历史」（分析 → 文案 → 图片 会话级落库）
+# ===========================================================================
+
+def _download_access(request: Request) -> dict:
+    """浏览器 <a> 直链下载无法带 Authorization 头，token 走 query（auth_guard 已验签）。
+
+    这里额外校验角色，避免只读账号通过直链拿到投放素材。
+    """
+    raw = request.headers.get("authorization")
+    tok = raw[7:] if raw and raw.lower().startswith("bearer ") else (raw or "")
+    tok = tok or request.query_params.get("token") or ""
+    data = decode_token(tok)
+    if not data:
+        raise HTTPException(401, "未登录或登录已过期")
+    if data.get("role") not in CAN_EDIT:
+        raise HTTPException(403, "需要投放执行及以上角色")
+    return data
+
+
+@router.get("/media-files/download")
+def download_media_file(request: Request, file: str = Query(..., description="uploads 下的纯文件名")):
+    """单张推广图片下载。只接受纯文件名，杜绝 ../ 路径穿越。"""
+    _download_access(request)
+    path = safe_image_path(file)
+    if not path:
+        raise HTTPException(404, "图片不存在或文件名非法")
+    return FileResponse(path, filename=os.path.basename(path),
+                        media_type=media_type_of(path))
+
+
+@router.get("/media-files/zip")
+def zip_media_files(request: Request,
+                    files: str = Query(..., description="逗号分隔的图片文件名"),
+                    label: str = Query("推广图片", description="ZIP 内顶层目录名")):
+    """一键打包全部 / 打包勾选的几张图片。"""
+    _download_access(request)
+    names = [x.strip() for x in (files or "").split(",") if x.strip()]
+    if not names:
+        raise HTTPException(400, "请提供要下载的图片")
+    if len(names) > 200:
+        raise HTTPException(400, "单次最多打包 200 张图片")
+    folder = re.sub(r"[^\w\u4e00-\u9fa5-]+", "_", label)[:40].strip("_") or "推广图片"
+    buf = build_files_zip(names, label=folder)
+    return StreamingResponse(buf, media_type="application/zip",
+                             headers={"Content-Disposition":
+                                      f'attachment; filename="ad_images_{int(time.time())}.zip"'})
+
+
+def _history_row(db, hid: int) -> CreationHistory:
+    row = db.query(CreationHistory).filter_by(id=hid).first()
+    if not row:
+        raise HTTPException(404, "历史记录不存在")
+    return row
+
+
+@router.post("/creation-history")
+def create_creation_history(body: dict, db: Session = Depends(get_db),
+                            user: User = Depends(require_roles(*CAN_EDIT))):
+    """创建一次「素材创作」会话：落地页分析完成时调用，后续文案 / 图片增量写回。"""
+    analysis = body.get("analysis") if isinstance(body.get("analysis"), dict) else {}
+    url = str(body.get("url") or analysis.get("url") or "").strip()
+    platform = str(body.get("platform") or "").strip()
+    row = CreationHistory(
+        title=str(body.get("title") or "").strip() or derive_title(analysis, url, platform),
+        url=url, site_name=site_name_of(url),
+        platform=platform, lang=str(body.get("lang") or "").strip(),
+        analysis_json=analysis or None,
+        owner_id=user.id, owner_name=user.display_name or user.username,
+        source_id=body.get("source_id") if isinstance(body.get("source_id"), int) else None,
+        created_at=utcnow(), updated_at=utcnow(),
+    )
+    db.add(row); db.commit(); db.refresh(row)
+    return history_to_dict(row)
+
+
+@router.get("/creation-history")
+def list_creation_history(q: str = "", platform: str = "", limit: int = 50, offset: int = 0,
+                          db: Session = Depends(get_db),
+                          _: User = Depends(require_roles(*CAN_EDIT))):
+    """历史列表（时间倒序）。q 匹配标题 / 网址 / 站点 / 平台 / 行业 / 类型 / 受众。"""
+    query = db.query(CreationHistory)
+    if platform:
+        query = query.filter(CreationHistory.platform == platform)
+    rows = query.order_by(CreationHistory.id.desc()).all()
+    needle = (q or "").strip().lower()
+    if needle:
+        def hit(r) -> bool:
+            a = r.analysis_json or {}
+            hay = " ".join(str(x or "") for x in [
+                r.title, r.url, r.site_name, r.platform, r.owner_name,
+                a.get("industry"), a.get("type"), a.get("audience"), a.get("language"),
+            ]).lower()
+            return needle in hay
+        rows = [r for r in rows if hit(r)]
+    total = len(rows)
+    lim = max(1, min(int(limit or 50), 200))
+    off = max(0, int(offset or 0))
+    return {"items": [history_to_dict(r) for r in rows[off:off + lim]],
+            "total": total, "limit": lim, "offset": off}
+
+
+@router.get("/creation-history/export")
+def export_creation_history(request: Request, ids: str = Query(..., description="逗号分隔的历史 id"),
+                            db: Session = Depends(get_db)):
+    """批量打包所选历史（每条一个目录，含图片 / 文案 / 分析 / 生成信息）。"""
+    _download_access(request)
+    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+    if not id_list:
+        raise HTTPException(400, "请提供有效的历史 id")
+    rows = db.query(CreationHistory).filter(CreationHistory.id.in_(id_list))\
+             .order_by(CreationHistory.id).all()
+    if not rows:
+        raise HTTPException(404, "未找到对应历史记录")
+    buf = build_history_zip(rows, multi=True)
+    return StreamingResponse(buf, media_type="application/zip",
+                             headers={"Content-Disposition":
+                                      f'attachment; filename="creation_history_batch_{len(rows)}.zip"'})
+
+
+@router.delete("/creation-history")
+def delete_creation_history(body: dict, db: Session = Depends(get_db),
+                            user: User = Depends(require_roles(*CAN_EDIT))):
+    """批量删除历史信息（物理删除、不可恢复），并清理不再被引用的图片文件。"""
+    ids = body.get("ids") if isinstance(body, dict) else None
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(400, "请提供要删除的历史 id 列表")
+    ids = [int(x) for x in ids if str(x).strip().isdigit()]
+    rows = db.query(CreationHistory).filter(CreationHistory.id.in_(ids)).all() if ids else []
+    if not rows:
+        raise HTTPException(404, "未找到对应历史记录")
+    targets: set[str] = set()
+    for r in rows:
+        targets.update(image_files_of(r))
+    found = [r.id for r in rows]
+    for r in rows:
+        db.delete(r)
+    db.commit()
+    deleted_files = cleanup_orphan_files(db, targets)   # commit 之后再清磁盘，避免误删共享图片
+    _audit(db, user, "history.delete", target="creation_history",
+           detail={"ids": found, "deleted_files": deleted_files})
+    return {"ok": True, "deleted": len(found), "deleted_files": deleted_files}
+
+
+@router.put("/creation-history/{hid}")
+def update_creation_history(hid: int, body: dict, db: Session = Depends(get_db),
+                            _: User = Depends(require_roles(*CAN_EDIT))):
+    """增量写回：文案 / 图片 / 风格 / 平台 / 语言。images 默认追加（保留每次重新生成的产物）。"""
+    row = _history_row(db, hid)
+    if "analysis" in body and isinstance(body["analysis"], dict):
+        row.analysis_json = body["analysis"]
+    if "platform" in body:
+        row.platform = str(body["platform"] or "").strip()
+        row.title = derive_title(row.analysis_json, row.url, row.platform)
+    if "lang" in body:
+        row.lang = str(body["lang"] or "").strip()
+    if "copy" in body:
+        row.copy_json = body["copy"] or None
+        row.has_copy = bool(body["copy"])
+    if "style_opts" in body:
+        row.style_opts_json = body["style_opts"] or {}
+    if "image_model" in body:
+        row.image_model_json = body["image_model"] or None
+    if "note" in body:
+        row.note = str(body["note"] or "")
+    if "images" in body:
+        fresh = body["images"] if isinstance(body["images"], list) else []
+        old = row.images_json if isinstance(row.images_json, list) else []
+        mode = body.get("images_mode") or "append"
+        merged = ([] if mode == "replace" else list(old)) + fresh
+        seen, uniq = set(), []
+        for im in merged:
+            if not isinstance(im, dict):
+                continue
+            key = str(im.get("file") or im.get("url") or "")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            # 只存纯文件名，避免绝对路径随部署机变化失效；前端用 api.fileUrl() 还原
+            item = dict(im)
+            item["file"] = os.path.basename(str(item.get("file") or item.get("url") or ""))
+            uniq.append(item)
+        row.images_json = uniq[-80:]        # 单会话最多保留 80 张，防止无限膨胀
+        row.image_count = len(row.images_json)
+    row.updated_at = utcnow()
+    db.commit(); db.refresh(row)
+    return history_to_dict(row)
+
+
+@router.get("/creation-history/{hid}")
+def get_creation_history(hid: int, db: Session = Depends(get_db),
+                         _: User = Depends(require_roles(*CAN_EDIT))):
+    return history_to_dict(_history_row(db, hid))
+
+
+@router.get("/creation-history/{hid}/export.zip")
+def export_one_creation_history(request: Request, hid: int, db: Session = Depends(get_db)):
+    """再下载整条历史：图片 + 广告文案 TXT/JSON + 落地页分析 + 生成信息。"""
+    _download_access(request)
+    row = _history_row(db, hid)
+    buf = build_history_zip([row], multi=False)
+    return StreamingResponse(buf, media_type="application/zip",
+                             headers={"Content-Disposition":
+                                      f'attachment; filename="creation_history_{hid}.zip"'})
+
+
+@router.get("/creation-history/{hid}/copy.txt")
+def export_creation_copy(request: Request, hid: int, db: Session = Depends(get_db)):
+    """单独再下载广告文案（纯文本）。"""
+    _download_access(request)
+    row = _history_row(db, hid)
+    if not row.copy_json:
+        raise HTTPException(404, "该历史记录未生成广告文案")
+    return PlainTextResponse(copy_as_text(row), headers={
+        "Content-Disposition": f'attachment; filename="ad_copy_{hid}.txt"'})
+
 
 # ----------------------------- 产品分析报告 -----------------------------
 @router.post("/report")

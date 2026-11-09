@@ -7,6 +7,8 @@ interface Props {
   initialAnalysis: LandingAnalysis | null
   onGotoCreation: () => void
   selectedLogo?: string
+  /** V4.36：本次创作会话的历史 id。文案 / 图片生成后增量写回，供「素材历史」查阅再下载。 */
+  historyId?: number | null
 }
 
 function ModelBadge({ info, fallbackText }: { info: ModelInfo; fallbackText?: string }) {
@@ -21,7 +23,7 @@ function ModelBadge({ info, fallbackText }: { info: ModelInfo; fallbackText?: st
   )
 }
 
-export default function MediaAdStudio({ initialAnalysis, onGotoCreation, selectedLogo }: Props) {
+export default function MediaAdStudio({ initialAnalysis, onGotoCreation, selectedLogo, historyId = null }: Props) {
   const [analysis, setAnalysis] = useState<LandingAnalysis | null>(initialAnalysis)
   const [platforms, setPlatforms] = useState<MediaPlatform[]>([])
   const [presets, setPresets] = useState<CreativePresets | null>(null)
@@ -43,9 +45,26 @@ export default function MediaAdStudio({ initialAnalysis, onGotoCreation, selecte
   const [images, setImages] = useState<MediaImageItem[]>([])
   const [imageModel, setImageModel] = useState<ModelInfo | null>(null)
   const [imgNote, setImgNote] = useState('')
+  // V4.36 图片查阅 / 下载：放大预览索引、勾选待打包的文件名
+  const [viewer, setViewer] = useState<number | null>(null)
+  const [checked, setChecked] = useState<string[]>([])
+  const [savedNote, setSavedNote] = useState('')
 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  // 放大预览的键盘操作：ESC 关闭 / ← → 切换
+  useEffect(() => {
+    if (viewer === null) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setViewer(null); return }
+      if (!images.length) return
+      if (e.key === 'ArrowRight') setViewer(v => (v === null ? null : (v + 1) % images.length))
+      else if (e.key === 'ArrowLeft') setViewer(v => (v === null ? null : (v - 1 + images.length) % images.length))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [viewer, images.length])
 
   useEffect(() => {
     Promise.all([api.mediaPlatforms().catch(() => []), api.creativePresets().catch(() => null)])
@@ -66,6 +85,7 @@ export default function MediaAdStudio({ initialAnalysis, onGotoCreation, selecte
       setCopy(null)
       setImages([])
       setImageModel(null)
+      setViewer(null); setChecked([]); setSavedNote('')
       setDirection(''); setStyleName(''); setColorName('')
     }
   }, [initialAnalysis])
@@ -78,6 +98,7 @@ export default function MediaAdStudio({ initialAnalysis, onGotoCreation, selecte
     setSelectedPlacements(sp ? sp.placements.filter(pl => pl.default).map(pl => pl.id) : [])
     setCount(sp ? sp.recommended_count : 3)
     setCopy(null); setImages([]); setImageModel(null); setError('')
+    setViewer(null); setChecked([])
   }
 
   function togglePlacement(id: string) {
@@ -105,6 +126,11 @@ export default function MediaAdStudio({ initialAnalysis, onGotoCreation, selecte
       setCopyEdit({ ...res.fields })
       setBrandEdit(res.brand || '')
       setStep(2)
+      // V4.36：文案一生成即写入历史，即使后续没有出图也能在「素材历史」查阅 / 再下载
+      if (historyId) {
+        api.updateCreationHistory(historyId, { platform, lang, copy: res })
+          .then(() => setSavedNote('文案已存入「素材历史」')).catch(() => {})
+      }
     } catch (e: any) {
       setError(e?.message || '文案生成失败')
     } finally {
@@ -134,6 +160,21 @@ export default function MediaAdStudio({ initialAnalysis, onGotoCreation, selecte
       setImageModel(res.image_model)
       setImgNote(res.note || '')
       setStep(3)
+      setViewer(null); setChecked([])
+      // V4.36：把「编辑后的最终文案 + 本批图片 + 风格 / 模型」写回历史会话，
+      // 追加而非覆盖 —— 用户反复「重新生成」的每一批产物都能在历史里查阅和再下载。
+      if (historyId) {
+        const finalCopy = { ...copy, fields: { ...copyEdit }, brand: brandEdit }
+        api.updateCreationHistory(historyId, {
+          platform, lang, copy: finalCopy,
+          images: res.images.map(im => ({ ...im, url: im.file })),
+          images_mode: 'append',
+          style_opts: { creative_direction: direction, content_style: styleName, color_scheme: colorName },
+          image_model: res.image_model,
+          note: res.note || '',
+        }).then(() => setSavedNote('本批图片与文案已存入「素材历史」，可随时再下载'))
+          .catch(() => setSavedNote('图片已生成，但写入「素材历史」失败'))
+      }
     } catch (e: any) {
       setError(e?.message || '图片生成失败')
     } finally {
@@ -155,6 +196,12 @@ export default function MediaAdStudio({ initialAnalysis, onGotoCreation, selecte
     { id: 2, label: '展示文案' },
     { id: 3, label: '生成推广图片' },
   ]
+
+  // 多选用纯文件名作 key（后端已保证每次生成的文件名唯一）
+  const allChecked = images.length > 0 && images.every(im => checked.includes(im.file))
+  const toggleAll = () => setChecked(allChecked ? [] : images.map(im => im.file))
+  const toggleOne = (f: string) =>
+    setChecked(v => v.includes(f) ? v.filter(x => x !== f) : [...v, f])
 
   if (!analysis) {
     return (
@@ -337,19 +384,55 @@ export default function MediaAdStudio({ initialAnalysis, onGotoCreation, selecte
         </div>
       )}
 
-      {/* Step 3：生成推广图片 */}
+      {/* Step 3：生成推广图片（放大查阅 / 单张下载 / 勾选打包 / 一键打包） */}
       {step === 3 && (
         <div className="card">
           <h3>③ 推广图片素材</h3>
           {imageModel && <ModelBadge info={imageModel} fallbackText="使用 Pillow 模板兜底" />}
           {imgNote && <p className="muted">{imgNote}</p>}
+          {savedNote && <div className="alert ok">{savedNote}</div>}
+
+          {images.length > 0 && (
+            <div className="img-toolbar">
+              <div className="it-left">
+                <label className="it-check">
+                  <input type="checkbox" checked={allChecked} onChange={toggleAll} />
+                  全选
+                </label>
+                <span className="muted">共 {images.length} 张 · 已勾选 {checked.length} 张</span>
+              </div>
+              <div className="it-right">
+                <a className="btn small" href={api.mediaZipUrl(images.map(im => im.file), '推广图片_全部')}>
+                  ⬇ 一键打包全部
+                </a>
+                {checked.length > 0 ? (
+                  <a className="btn small primary" href={api.mediaZipUrl(checked, '推广图片_所选')}>
+                    ⬇ 打包所选（{checked.length}）
+                  </a>
+                ) : (
+                  <button className="btn small primary" disabled>⬇ 打包所选（0）</button>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="img-grid">
             {images.map((img, i) => (
-              <div className="img-card" key={i}>
-                <img src={api.fileUrl(img.url)} alt={`${img.placement} ${img.size}`} loading="lazy" />
+              <div className={`img-card ${checked.includes(img.file) ? 'checked' : ''}`} key={img.file || i}>
+                <label className="ic-check" title="勾选以打包下载">
+                  <input type="checkbox" checked={checked.includes(img.file)} onChange={() => toggleOne(img.file)} />
+                </label>
+                <div className="ic-preview" onClick={() => setViewer(i)} title="点击放大查看">
+                  <img src={api.fileUrl(img.url)} alt={`${img.placement} ${img.size}`} loading="lazy" />
+                  <span className="ic-zoom">放大查看</span>
+                </div>
                 <div className="ic-meta">
                   <span className="pill img">{img.size}</span>
-                  <span className="muted">{img.placement}</span>
+                  <span className="muted">{img.placement || '—'}</span>
+                </div>
+                <div className="ic-actions">
+                  <button className="btn small ghost" onClick={() => setViewer(i)}>放大</button>
+                  <a className="btn small" href={api.mediaFileDownloadUrl(img.file)}>下载</a>
                 </div>
               </div>
             ))}
@@ -361,6 +444,32 @@ export default function MediaAdStudio({ initialAnalysis, onGotoCreation, selecte
               {busy ? '重新生成中…' : '重新生成'}
             </button>
           </div>
+
+          {/* 放大预览：点遮罩 / ESC 关闭，← → 切换，可直接下载当前图 */}
+          {viewer !== null && images[viewer] && (
+            <div className="lightbox" onClick={() => setViewer(null)}>
+              <div className="lb-inner" onClick={e => e.stopPropagation()}>
+                <button className="lb-close" onClick={() => setViewer(null)} title="关闭（ESC）">×</button>
+                {images.length > 1 && (
+                  <>
+                    <button className="lb-nav prev" title="上一张"
+                      onClick={() => setViewer((viewer - 1 + images.length) % images.length)}>‹</button>
+                    <button className="lb-nav next" title="下一张"
+                      onClick={() => setViewer((viewer + 1) % images.length)}>›</button>
+                  </>
+                )}
+                <img className="lb-img" src={api.fileUrl(images[viewer].url)}
+                     alt={`${images[viewer].placement} ${images[viewer].size}`} />
+                <div className="lb-foot">
+                  <span>{viewer + 1} / {images.length} · {images[viewer].size} · {images[viewer].placement || '—'}</span>
+                  <div className="lb-btns">
+                    <a className="btn small" href={api.mediaFileDownloadUrl(images[viewer].file)}>下载此图</a>
+                    <button className="btn small ghost" onClick={() => setViewer(null)}>关闭</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

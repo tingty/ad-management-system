@@ -505,7 +505,11 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         placement = slot.get("placement") or ""
         w, h = _size_wh(size)
         bg_prompt = _media_image_prompt(analysis, platform, directives, design, db)
-        fn = f"media_{platform}_{size}_{abs(hash((placement, size, headline, sub))) % 100000:05d}.png"
+        # V4.36：文件名带随机后缀。此前同名文案会生成完全相同的文件名，用户点「重新生成」
+        # 会直接覆盖上一次的 PNG，导致「素材历史」里旧会话的图片被无声替换、无法再下载。
+        ptag = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in platform)[:20]
+        fn = (f"media_{ptag}_{size}_{uuid.uuid4().hex[:10]}_"
+              f"{abs(hash((placement, size, headline, sub))) % 100000:05d}.png")
         out = os.path.join(UPLOAD_DIR, fn)
         tasks.append((out, w, h, bg_prompt, fn, size, placement, logo_path))
 

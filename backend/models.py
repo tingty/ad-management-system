@@ -199,6 +199,35 @@ class ReviewRecord(Base):
     created_at = Column(DateTime, default=utcnow)
 
 
+class CreationHistory(Base):
+    """V4.36「素材历史」：一次「素材创作」会话的落库快照。
+
+    一次会话 = 落地页分析 → 广告文案 → 推广图片，按步骤增量写回。
+    目的是让已分析过的网站、已生成的文案与图片可反复查阅 / 再下载，
+    不必重新调用大模型生成，节约时间并降低重复素材的产生。
+    """
+    __tablename__ = "creation_history"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(255), nullable=True)          # 展示标题（域名 / 品牌 · 平台）
+    url = Column(String(1024), nullable=True)           # 落地页地址
+    site_name = Column(String(255), nullable=True)      # 从 URL 推断的站点名，便于检索
+    platform = Column(String(64), nullable=True)        # 媒体推广平台
+    lang = Column(String(16), nullable=True)            # 文案语言
+    analysis_json = Column(JSON, nullable=True)         # 完整 LandingAnalysis（8 字段 + model_info）
+    copy_json = Column(JSON, nullable=True)             # 文案字段 / schema / brand / model_info / 校验
+    images_json = Column(JSON, nullable=True)           # [{file,url,size,w,h,placement}]
+    style_opts_json = Column(JSON, nullable=True)       # 创意方向 / 内容风格 / 配色
+    image_model_json = Column(JSON, nullable=True)      # 本次文生图调用的模型
+    note = Column(Text, nullable=True)                  # 生成说明（含兜底标注）
+    image_count = Column(Integer, default=0)
+    has_copy = Column(Boolean, default=False)
+    owner_id = Column(Integer, nullable=True)
+    owner_name = Column(String(64), nullable=True)
+    source_id = Column(Integer, nullable=True)          # 「复用分析」来源记录 id
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)

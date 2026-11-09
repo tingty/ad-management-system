@@ -4,6 +4,7 @@ import { api, clearToken, getToken, Meta, User } from './api'
 import Workspace from './pages/Workspace'
 import MaterialCreation from './pages/MaterialCreation'
 import MaterialPromptLibrary from './pages/MaterialPromptLibrary'
+import MaterialHistory from './pages/MaterialHistory'
 import Batch from './pages/Batch'
 import Library from './pages/Library'
 import Login from './pages/Login'
@@ -14,14 +15,14 @@ import Prompts from './pages/Prompts'
 import Specs from './pages/Specs'
 import ReleaseNotes from './pages/ReleaseNotes'
 
-type Tab = 'workspace' | 'batch' | 'creation' | 'matprompts' | 'library' | 'specs'
+type Tab = 'workspace' | 'batch' | 'creation' | 'matprompts' | 'history' | 'library' | 'specs'
   | 'llm' | 'accounts' | 'logs' | 'prompts' | 'releasenotes'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['workspace', 'batch', 'creation', 'matprompts', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts', 'releasenotes']
+const TABS: Tab[] = ['workspace', 'batch', 'creation', 'matprompts', 'history', 'library', 'specs', 'llm', 'accounts', 'logs', 'prompts', 'releasenotes']
 const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
@@ -52,6 +53,8 @@ const GROUP_CREATION: NavGroup = {
       desc: '输入落地页链接或正文，调用已配置的大模型推理，输出 8 项关键分析并标注实际调用模型；分析完成后，直接在本模块内基于分析结论进行营销推广设置（选平台 → 文案 → 生成推广图片）' },
     { key: 'matprompts', label: '素材提示词', icon: 'tags',
       desc: '集中管理「素材创作」全部提示词：按功能类型 / 使用类型分类检索与编辑；内置广告推广文案与推广图片的优秀提示词总结库，可按类型 / 风格 / 场景 / 覆盖对象四维筛选并选择系统默认，保存即生效' },
+    { key: 'history', label: '素材历史', icon: 'history',
+      desc: '归档已分析整理的网站、广告文案与推广图片；可放大查阅、单张或打包再下载，复用分析结论继续创作以避免重复生成，并支持批量删除历史信息' },
   ],
 }
 
@@ -111,6 +114,7 @@ const PATHS: Record<string, ReactNode> = {
   broadcast: <><circle cx="12" cy="12" r="2.2" /><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2" /></>,
   tags: <><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0l-7.2-7.2A2 2 0 0 1 3 11.8V5a2 2 0 0 1 2-2h6.8a2 2 0 0 1 1.4.6l7.4 7.4a2 2 0 0 1 0 2.8z" /><circle cx="7.5" cy="7.5" r="1.5" /></>,
   bell: <><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>,
+  history: <><path d="M3.2 8A9 9 0 1 1 3 12" /><path d="M3 3v5h5" /><path d="M12 7v5l3.2 2" /></>,
 }
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -132,7 +136,7 @@ function tabFromHash(): Tab | null {
 function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   return [
-    ...(canEdit ? (['workspace', 'batch', 'creation', 'matprompts'] as Tab[]) : []),
+    ...(canEdit ? (['workspace', 'batch', 'creation', 'matprompts', 'history'] as Tab[]) : []),
     'library', 'specs',
     ...(user.role === 'admin' ? (GROUP_SYSTEM.items.map(i => i.key)) : []),
   ]
@@ -355,6 +359,7 @@ export default function App() {
           )}
           {tab === 'creation' && isEditor && <MaterialCreation meta={meta} />}
           {tab === 'matprompts' && isEditor && <MaterialPromptLibrary isAdmin={isAdmin} />}
+          {tab === 'history' && isEditor && <MaterialHistory />}
           {tab === 'batch' && isEditor && <Batch meta={meta} />}
           {tab === 'library' && <Library user={user} canReview={canReview} isEditor={isEditor} />}
           {tab === 'specs' && <Specs canEdit={canReview} />}

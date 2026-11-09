@@ -528,6 +528,36 @@ export interface MediaImageResult {
   count: number
 }
 
+/* ----------------------------- V4.36 素材历史 ----------------------------- */
+/** 一次「素材创作」会话：落地页分析 → 广告文案 → 推广图片，可反复查阅与再下载。 */
+export interface CreationHistory {
+  id: number
+  title: string
+  url: string
+  site_name: string
+  platform: string
+  lang: string
+  analysis: LandingAnalysis | null
+  copy: Partial<MediaCopyResult> | null
+  images: MediaImageItem[]
+  style_opts: Record<string, string>
+  image_model: ModelInfo | null
+  note: string
+  image_count: number
+  has_copy: boolean
+  owner_name: string
+  source_id: number | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface CreationHistoryList {
+  items: CreationHistory[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface OptimizeChange {
   field: string
   before: string
@@ -679,6 +709,22 @@ export const api = {
     logo?: string
   }) =>
     req<MediaImageResult>('/api/media-campaign/images', { method: 'POST', body: JSON.stringify(payload) }),
+  // 素材历史：一次创作会话按「分析 → 文案 → 图片」增量落库
+  creationHistory: (params: { q?: string; platform?: string; limit?: number; offset?: number } = {}) =>
+    req<CreationHistoryList>(`/api/creation-history${qs(params)}`),
+  createCreationHistory: (payload: {
+    analysis: LandingAnalysis; platform?: string; lang?: string; source_id?: number
+  }) =>
+    req<CreationHistory>('/api/creation-history', { method: 'POST', body: JSON.stringify(payload) }),
+  updateCreationHistory: (id: number, payload: {
+    platform?: string; lang?: string; copy?: Partial<MediaCopyResult> | null
+    images?: MediaImageItem[]; images_mode?: 'append' | 'replace'
+    style_opts?: Record<string, string>; image_model?: ModelInfo | null; note?: string
+  }) =>
+    req<CreationHistory>(`/api/creation-history/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteCreationHistory: (ids: number[]) =>
+    req<{ ok: boolean; deleted: number; deleted_files: number }>('/api/creation-history',
+      { method: 'DELETE', body: JSON.stringify({ ids }) }),
   // 版本发布公告（新版通知）
   releaseNotes: () => req<{ latest: string | null; notes: ReleaseNote[] }>('/api/system/release-notes'),
   planAngles: (framework_id: number, platforms: string[], extra_prompt?: string, lang?: string) =>
@@ -822,4 +868,16 @@ export const api = {
     const rel = filePath.includes('/uploads/') ? filePath.split('/uploads/')[1] : filePath.split('/').pop()
     return `${API_BASE}/files/${rel}`
   },
+  /* V4.36 推广图片查阅 / 下载：浏览器直链无法带 Header，token 走 query（后端验签 + 角色校验） */
+  mediaFileDownloadUrl: (file: string) =>
+    `${API_BASE}/api/media-files/download?file=${encodeURIComponent(file)}&token=${encodeURIComponent(getToken())}`,
+  mediaZipUrl: (files: string[], label = '推广图片') =>
+    `${API_BASE}/api/media-files/zip?files=${encodeURIComponent(files.join(','))}` +
+    `&label=${encodeURIComponent(label)}&token=${encodeURIComponent(getToken())}`,
+  historyItemZipUrl: (id: number) =>
+    `${API_BASE}/api/creation-history/${id}/export.zip?token=${encodeURIComponent(getToken())}`,
+  historyBatchZipUrl: (ids: number[]) =>
+    `${API_BASE}/api/creation-history/export?ids=${ids.join(',')}&token=${encodeURIComponent(getToken())}`,
+  historyCopyUrl: (id: number) =>
+    `${API_BASE}/api/creation-history/${id}/copy.txt?token=${encodeURIComponent(getToken())}`,
 }
