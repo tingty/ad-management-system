@@ -7,7 +7,7 @@
 内容来源：《素材创作模块功能优化说明书》V2.1 第 6.2 / 6.3 / 6.4 节（P0 内置常量）。
 
 映射关系：
-- STYLE_TO_BG：内容风格（S01-S26）→ 渲染层背景风格键（render.py 的 STYLE_KEYS）；
+- STYLE_TO_BG：内容风格（S01-S26）→ 背景风格键（供 media_ad.py 生成文生图提示词 / 本地渲染取色）；
 - COLOR_TO_PALETTE：配色方案（C01-C16）→ 调色板覆盖（accent / bg1 / bg2 / fg / sub / card / on_accent + light 标记）；
 - build_directives()：把用户所选的 方向 / 风格 / 配色 / 视频市场洞察 解析成可直接注入
   生成链路的指令（extra_prompt / design_overrides / design_prompt / video_prompt）。
@@ -162,8 +162,8 @@ COLOR_SCHEMES: list[dict] = [
 
 
 # ----------------------------- 风格 → 渲染背景键 -----------------------------
-# 内容风格库（S01-S26）映射到 render.py 的 STYLE_KEYS（含本模块新增的 solid/ink/oil/
-# cyber/retro/vapor/pixel/paper/neon/glitch/geo）。
+# 内容风格库（S01-S26）映射到背景风格键（含 solid/ink/oil/cyber/retro/vapor/
+# pixel/paper/neon/glitch/geo 等），由 style_visual() 翻译成具体视觉描述。
 STYLE_TO_BG: dict[str, str] = {
     "S01": "solid", "S02": "spotlight", "S03": "vapor", "S04": "wave",
     "S05": "ink", "S06": "oil", "S07": "geo", "S08": "radial",
@@ -177,8 +177,8 @@ STYLE_TO_BG: dict[str, str] = {
 
 # ----------------------------- 风格键 → 文生图视觉描述 -----------------------------
 # 文生图大模型（qwen-image 等）无法理解 Pillow 风格键（如 "cyber"/"split"），
-# 需要把它翻译成模型能落地的具体视觉描述。这里把 STYLE_KEYS 逐一映射成
-# 英文画面说明，拼接进 _build_image_prompt，让所选「内容风格 / 创意方向」真正改变背景。
+# 需要把它翻译成模型能落地的具体视觉描述。这里把背景风格键逐一映射成
+# 英文画面说明，由 style_visual() 拼接进广告推广图片的文生图提示词。
 STYLE_VISUAL: dict[str, str] = {
     "gradient": "smooth diagonal color gradient backdrop with soft light transition",
     "radial": "radial glow emanating from center, luminous halo fading to dark edges",
@@ -277,8 +277,8 @@ COLOR_TO_PALETTE: dict[str, dict] = {
 # ----------------------------- 创意方向 → 渲染版式（画面主体 / 构图） -----------------------------
 # 这是「创意方向」真正驱动视觉的关键：之前方向只进了文案提示词，画面主体完全由内部
 # 8 个 angle_key 决定，所以切换创意方向图片/视频完全不变。这里把每个 D 映射到一个
-# 渲染版式（render.py 的 template），让选不同方向产出不同「画面里画什么」。
-# 取值必须是 render.py 已实现的版式：bigtype / stat / rating / promo / ugc / compare / scenario。
+# 渲染版式键（由 media_ad.py 注入文生图提示词），让选不同方向产出不同「画面里画什么」。
+# 取值：bigtype / stat / rating / promo / ugc / compare / scenario。
 DIRECTION_TO_TEMPLATE: dict[str, str] = {
     "D01": "bigtype",   # 卖点直击：主视觉大字突出产品
     "D02": "bigtype",   # 痛点唤醒：聚光暗场 + 大字
@@ -304,7 +304,7 @@ DIRECTION_TO_TEMPLATE: dict[str, str] = {
 
 # ----------------------------- 创意方向 → 兜底背景风格键 -----------------------------
 # 当用户「没有」单独选内容风格(S)时，按创意方向自带背景，保证只切方向画面背景也会变
-# （而非恒为品牌色渐变）。取值必须是 render.py 的 STYLE_KEYS。
+# （而非恒为品牌色渐变）。取值与上方背景风格键一致。
 DIRECTION_TO_BG: dict[str, str] = {
     "D01": "solid",       # 纯色聚焦
     "D02": "spotlight",   # 暗场聚光

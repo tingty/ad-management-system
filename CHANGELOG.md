@@ -1235,3 +1235,45 @@
 - 历史写入失败不会阻断分析与生成主流程（前端捕获后仅提示），避免本地 DB 异常影响出图。
 - 一次会话内反复「重新生成」的图片会**累积**归档（上限 80 张），方便回看每一版；删除历史时才统一清理磁盘文件。
 - 部署机 `git pull` 后重启后端即自动建表；此前的分析与图片因原本未落库，不会自动补录为历史，新产生的会话才开始归档。
+
+## V4.37 精简「素材管理」模块 + 新版通知结构化发版流程
+
+**发布日期**：2026-11-09
+**变更类型**：删除 / 优化 / 新增 / 发布
+**涉及模块**：素材管理、素材创作平台、系统设置、新版通知、发版流程
+**变更摘要**：整体下线「素材管理」的四个子模块与系统设置中的「提示词管理」，清理对应的前后端代码、接口、数据模型与失效提示词；同时把「新版通知」升级为按模块 / 变更类型结构化发布的版本内容，并新增发版前校验脚本与 pre-push 钩子，保证每次 git 更新前都整理并发布对应的版本通知。
+
+**本次优化与更改的功能 / 模块**
+- 【删除】素材管理 / 创作工作台：移除 `Workspace.tsx`、旧分析报告 / 优化 / 素材墙相关页面与组件，菜单中不再出现「素材管理」一级分组，默认落地页改为「素材创作」。
+- 【删除】素材管理 / 批量生成：移除 `Batch.tsx` 与 `batch.py`，删除 CSV 解析、异步任务、任务轮询、批量导出相关接口（`/api/batch/*`、`/api/jobs*`）。
+- 【删除】素材管理 / 素材库：移除 `Library.tsx`、版本链 / A-B 对比 / 审阅流组件，删除 `/api/campaigns*`、`/api/materials*`、`/api/export/*` 等 Campaign 生产链路接口。
+- 【删除】素材管理 / 规格库：移除 `Specs.tsx` 与 `specs_data.py`，删除 `/api/platform-specs` 维护接口与启动时规格播种；「素材创作」使用的媒体平台规格仍由 `media_platforms.py` 独立提供。
+- 【删除】系统设置 / 提示词管理：移除 `Prompts.tsx` 菜单项与页面；提示词统一由「素材创作平台 → 素材提示词」管理，`/api/settings/prompts` 等接口保留并去掉 `scope=core` 旧参数。
+- 【优化】素材创作平台 / 菜单与权限：仅保留「素材创作 / 素材提示词 / 素材历史」三个子模块；「新版通知」对所有登录角色开放（含只读账号），未读新版本继续以菜单红点提示；只读账号提示文案同步更新。
+- 【优化】素材创作平台 / 提示词目录：移除只服务旧模块的 5 条失效系统提示词（`site_analysis` / `angle` / `copy` / `video` / `image`）及其分类维度，启动时清理库内残留行；目录由 75 条精简为 70 条，仍按功能类型 / 使用类型分类、支持优秀提示词总结库与系统默认。
+- 【优化】后端 / 代码精简：`services.py` 仅保留提示词注册表、落地页抓取与 8 字段分析；`routers.py` 保留 40 条有效接口（从原 60+ 条降至 40 条）；`models.py` 移除 8 个旧业务表；`schemas.py` 移除 20 个旧请求模型；删除 `render.py` / `validation.py` / `report.py` / `optimize.py` / `creative.py` / `insight.py`，把仍使用的 `fit_text` 抽为 `text_utils.py`；清理 267 条无用 CSS 规则与 `imageio-ffmpeg` 依赖。
+- 【优化】新版通知 / 版本内容：`release_notes.py` 支持解析「发布日期 / 变更类型 / 涉及模块 / 变更摘要 / 本次优化与更改的功能 / 影响范围 / 验证」结构化字段；历史版本自动降级为「摘要要点 + 完整发版记录」，不丢内容。
+- 【优化】新版通知 / 查阅体验：`ReleaseNotes.tsx` 新增版本总数与结构化版本统计、关键词搜索、按涉及模块 / 变更类型筛选、变更卡片按类型着色、影响范围与验证结果分区展示、完整发版记录可折叠查看。
+- 【新增】发版流程 / 发版前校验：`scripts/prepare_release.py` 提供 `--draft`（按 git 变更文件自动归纳涉及模块并生成版本通知骨架）、`--write`（写入 CHANGELOG）、`--check`（校验结构化字段完整性、模块覆盖、CHANGELOG 是否随代码改动同步更新）；`scripts/hooks/pre-push` + `scripts/install_hooks.sh` 在 push 前自动执行校验，可用 `SKIP_RELEASE_CHECK=1` 应急跳过。
+- 【发布】新版通知 / V4.37：本条即为按新规范整理并发布的版本内容，发版前由校验脚本核对模块覆盖后再同步 git。
+
+**影响范围**
+- 前端：一级菜单由 3 组缩为 2 组（素材创作平台 / 系统设置），Tab 由 12 个缩为 7 个；删除 7 个页面、3 个组件与 `materialPresets.ts`；`api.ts` 删除 40 个旧接口与 27 个旧类型；`styles.css` 从 1420 行精简至 915 行。
+- 后端：删除 8 个 Python 模块与 8 个 ORM 表定义；`/api/analyze`、`/api/generate`、`/api/produce`、`/api/campaigns`、`/api/platform-specs`、`/api/batch/*`、`/api/jobs`、`/api/export/*`、`/api/meta` 等旧接口统一返回 404。
+- 数据：旧业务表（campaigns / materials / frameworks / angles / platform_specs / jobs / review_records 等）在历史库中保留但不迁移、不被使用；`prompt_configs` 中 5 条失效提示词在启动时清理；`creation_history` / `model_configs` / `prompt_configs` / `users` / `audit_logs` / `system_state` 完全不受影响。
+- 权限：「新版通知」对所有登录角色可读；素材创作、素材提示词、素材历史仍仅 admin / manager / editor 可用；系统设置其余页仍仅 admin 可用。
+- 兼容性：旧浏览器收藏的 `#/workspace`、`#/batch`、`#/library`、`#/specs`、`#/prompts` hash 会自动跳转到当前角色可用的首个页面，不会白屏。
+
+**验证**
+- 后端全量 `compileall` 通过；`import main` 无循环导入，注册路由 40 条（含 `/api/health`）；版本号升至 4.37.0。
+- DB 副本 TestClient 实测：登录 / 鉴权、提示词目录（70 条、旧 5 条无残留）、分类总览、总结库、创意预设、大模型配置、新版通知、素材历史、媒体平台、落地页分析（真实模型与本地兜底）全部 200；9 个已删接口全部 404。
+- 启动清理验证：日志输出「已清理下线模块提示词：angle, copy, image, site_analysis, video」，库中残留为 0。
+- 权限验证：viewer 可读 `/api/system/release-notes`（200），访问 `/api/creation-history` 被拦截（403）。
+- 前端 `tsc --noEmit` 与 `vite build` 均通过（41 模块，229 kB JS / 38 kB CSS），无旧页面、旧接口、旧样式引用残留。
+- 发版校验：`prepare_release.py --check` 对本版结构化字段、模块覆盖与 CHANGELOG 同步状态校验通过后才允许 push。
+
+**说明 / 默认约定**
+- 自 V4.37 起，每次优化或修改都按「一个版本 = 一条结构化 CHANGELOG 段落」发布；`scripts/prepare_release.py --draft` 会从改动文件自动归纳涉及模块，避免漏写模块总结。
+- 历史版本段落保持原样不重写，前端自动降级展示，保证版本记录可追溯。
+- 部署机 `git pull` 后重启后端即完成旧提示词清理；旧业务表不删除、不迁移，若确认无需保留可在单独维护窗口手工归档。
+- `git` hook 需执行一次 `bash scripts/install_hooks.sh` 安装到本机 `.git/hooks/`（hook 不随仓库同步）；紧急发布可用 `SKIP_RELEASE_CHECK=1 git push` 跳过，但事后须补齐版本通知。

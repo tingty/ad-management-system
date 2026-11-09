@@ -1,7 +1,11 @@
 """
 轻量级 schema 自愈（SQLite / Postgres 通用）。
 create_all 只建新表，不会给已存在的表加列；本模块扫描元数据与库内实际列差异，
-自动 ALTER TABLE ADD COLUMN，避免"模型改了、演示库还是旧结构"导致的运行时错误。
+自动 ALTER TABLE ADD COLUMN，避免「模型改了、演示库还是旧结构」导致的运行时错误。
+
+V4.37：旧「素材管理」业务表（campaigns / materials / frameworks / angles /
+platform_specs / jobs / review_records 等）已从模型层移除，历史库中的这些表
+保持原样不再迁移（数据保留但不被系统使用）。
 """
 from sqlalchemy import inspect, text
 from database import engine, Base
@@ -26,17 +30,3 @@ def ensure_schema() -> list[str]:
     if applied:
         print("[migrate] added columns:", ", ".join(applied))
     return applied
-
-
-def normalize_data() -> None:
-    """新列回填：新增布尔/标签列后，历史行需要给出确定的默认值，否则响应校验会失败。"""
-    statements = [
-        "UPDATE materials SET selected = 0 WHERE selected IS NULL",
-        "UPDATE materials SET variant = 'A' WHERE variant IS NULL AND version = 1",
-    ]
-    with engine.begin() as conn:
-        for sql in statements:
-            try:
-                conn.execute(text(sql))
-            except Exception as e:   # 列可能尚不存在（非 SQLite）
-                print("[migrate] skip:", sql, "->", str(e)[:80])

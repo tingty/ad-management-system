@@ -2,8 +2,8 @@
 V4.35「素材提示词」单一数据源：统一目录 + 分类维度 + 优秀提示词总结库。
 
 改造前的问题：素材创作涉及的提示词散落在 4 处，且「素材提示词」页只展示 5 条：
-  1. services.py PROMPT_REGISTRY —— 10 条系统提示词（仅 5 条落地页分析被展示）；
-  2. presets.py / materialPresets.ts —— 三大预设库 62 条提示词片段，页面完全看不到；
+  1. services.py PROMPT_REGISTRY —— 系统提示词（仅 5 条落地页分析被展示）；
+  2. presets.py —— 三大预设库 62 条提示词片段，页面完全看不到；
   3. media_ad.py —— 「广告推广文案 / 推广图片 / 分析结论注入」提示词硬编码，不可管理；
   4. media_ad.py _media_image_prompt —— 文生图提示词硬编码，不可管理。
 
@@ -33,11 +33,9 @@ FUNC_TYPES: list[dict] = [
     {"key": "landing", "label": "落地页分析", "desc": "解析落地页 URL / 正文，产出 8 字段与九要素结构化结论，是后续所有生成的依据"},
     {"key": "ad_copy", "label": "广告推广文案", "desc": "直接决定最终投放文案：主提示词、分析结论注入、总结库默认模板"},
     {"key": "ad_image", "label": "广告推广图片", "desc": "直接决定最终推广图片：视觉设计指导、文生图背景提示词、总结库默认模板"},
-    {"key": "video", "label": "视频分镜", "desc": "15 秒 4 镜分镜脚本与画面字幕，驱动关键帧与 MP4 合成"},
     {"key": "creative_direction", "label": "创意方向库", "desc": "D01–D20 创意母题，影响文案调性与画面叙事/构图"},
     {"key": "content_style", "label": "内容风格库", "desc": "S01–S26 美术风格，决定背景质感与视觉语言"},
     {"key": "color_scheme", "label": "配色方案库", "desc": "C01–C16 配色，映射到渲染调色板与文生图色彩描述"},
-    {"key": "production", "label": "通用素材生产", "desc": "创作工作台 / 批量生成共用的方向规划、文案与校验提示词"},
 ]
 
 USAGE_TYPES: list[dict] = [
@@ -58,11 +56,8 @@ PRESET_FUNCS = {"creative_direction", "content_style", "color_scheme"}
 # ===========================================================================
 
 PROMPT_META: dict[str, dict] = {
-    "site_analysis":      {"func_type": "landing",   "usage_type": "system",     "category": "分析框架"},
-    "angle":              {"func_type": "production", "usage_type": "system",    "category": "创意方向规划"},
-    "copy":               {"func_type": "production", "usage_type": "system",    "category": "文案生成"},
-    "video":              {"func_type": "video",      "usage_type": "system",     "category": "分镜脚本"},
-    "image":              {"func_type": "ad_image",   "usage_type": "system",     "category": "视觉设计指导"},
+    # V4.37：site_analysis / angle / copy / video / image 只服务于已下线的「素材管理」，
+    # 随模块一起移除，避免目录里出现不可生效的失效提示词。
     "landing_framework":  {"func_type": "landing",   "usage_type": "system",     "category": "分析框架"},
     "landing_basic":      {"func_type": "landing",   "usage_type": "constraint", "category": "基础识别"},
     "landing_competitors": {"func_type": "landing",  "usage_type": "constraint", "category": "竞争分析"},

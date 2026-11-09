@@ -30,7 +30,7 @@ from services import get_prompt
 from prompt_catalog import (render_prompt, compose_copy_prompt, compose_image_prompt,
                             load_preset_overrides, MEDIA_IMAGE_SYS)
 from imaging import render_ad_png
-from creative import fit_text
+from text_utils import fit_text
 from media_platforms import get_media_platform
 
 

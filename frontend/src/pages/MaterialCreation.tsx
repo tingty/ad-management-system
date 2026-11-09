@@ -21,7 +21,7 @@ function modelLabel(m: ModelInfo): string {
   return `${m.provider} / ${m.model}${role}${fb}`
 }
 
-export default function MaterialCreation({ meta }: { meta: any }) {
+export default function MaterialCreation() {
   const [url, setUrl] = useState('')
   const [text, setText] = useState('')
   const [showText, setShowText] = useState(false)

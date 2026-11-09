@@ -2,79 +2,6 @@ from pydantic import BaseModel, model_validator, field_serializer
 from typing import Optional, List, Any
 from datetime import datetime, timezone
 
-class AnalyzeRequest(BaseModel):
-    url: Optional[str] = None
-    text: Optional[str] = None
-
-class ReportRequest(BaseModel):
-    """分析报告请求：URL 抓取，或直接给正文；platforms 会影响方向推荐。"""
-    url: Optional[str] = None
-    text: Optional[str] = None
-    platforms: List[str] = []
-    lang: Optional[str] = None
-
-class FrameworkOut(BaseModel):
-    id: int
-    product: str
-    category: Optional[str] = None
-    audience: Optional[str] = None
-    geo: Optional[str] = None
-    languages: Optional[Any] = None
-    selling_points: Optional[Any] = None
-    platform_analysis: Optional[Any] = None
-    raw_json: Optional[Any] = None
-    domain: Optional[str] = None
-    metrics: Optional[Any] = None
-    brand_color: Optional[str] = None
-    assets: Optional[Any] = None
-    analyzer: Optional[str] = None
-    site_analysis: Optional[Any] = None
-    evidence: Optional[Any] = None
-    class Config:
-        from_attributes = True
-
-class GenerateRequest(BaseModel):
-    framework_id: int
-    campaign_name: str
-    platforms: List[str]
-    material_types: List[str]   # image / video / copy / keyword
-    languages: List[str]
-    extra_prompt: Optional[str] = None
-
-class MaterialOut(BaseModel):
-    id: int
-    campaign_id: int
-    type: str
-    platform: str
-    angle_key: Optional[str] = None
-    language: Optional[str] = None
-    spec_json: Optional[Any] = None
-    content: Optional[Any] = None
-    text_content: Optional[str] = None
-    file_path: Optional[str] = None
-    version: int = 1
-    variant: Optional[str] = None
-    selected: Optional[bool] = False
-    prompt_log: Optional[str] = None
-    validation: Optional[Any] = None
-    class Config:
-        from_attributes = True
-
-class CampaignOut(BaseModel):
-    id: int
-    name: str
-    framework_id: int
-    platforms: Optional[Any] = None
-    angle_keys: Optional[Any] = None
-    options: Optional[Any] = None
-    status: str = "draft"
-    owner_id: Optional[int] = None
-    reviewer_id: Optional[int] = None
-    review_note: Optional[str] = None
-    materials: List[MaterialOut] = []
-    class Config:
-        from_attributes = True
-
 class ModelConfigIn(BaseModel):
     name: Optional[str] = None
     usage: Any = "analysis"          # 单用途字符串，或多用途数组
@@ -132,7 +59,6 @@ class ModelConfigOut(BaseModel):
             v = v.replace(tzinfo=timezone.utc)
         return v.isoformat()
 
-
 class PromptOut(BaseModel):
     id: int
     key: str
@@ -148,7 +74,6 @@ class PromptOut(BaseModel):
     class Config:
         from_attributes = True
 
-
 class PromptUpdate(BaseModel):
     content: str
     name: Optional[str] = None
@@ -158,12 +83,10 @@ class PromptUpdate(BaseModel):
     usage_type: Optional[str] = None
     is_active: Optional[bool] = None
 
-
 class PromptDefaultIn(BaseModel):
     """V4.35：把总结库里的一条优秀提示词设为系统默认（id 为空 = 恢复系统内置默认）。"""
     kind: str                       # ad_copy / ad_image
     id: Optional[str] = None
-
 
 # ----------------------------- 素材创作：落地页分析（8 字段 LLM 推理） -----------------------------
 class LandingAnalysisRequest(BaseModel):
@@ -171,12 +94,10 @@ class LandingAnalysisRequest(BaseModel):
     url: Optional[str] = None
     text: Optional[str] = None
 
-
 class LandingChannel(BaseModel):
     """推广途径：媒体平台 + 推荐理由 / 数据依据。"""
     platform: str
     reason: str
-
 
 class ModelInfo(BaseModel):
     """本次分析实际调用的大模型信息（用于前端展示"用了哪个模型"）。"""
@@ -185,7 +106,6 @@ class ModelInfo(BaseModel):
     model: str = ""             # 具体模型标识
     role: str = "analysis"      # 实际用途：analysis / copy（分析模型未配时复用文案模型）
     fallback: bool = True       # True = 实际走了 Mock 兜底（未配置有效模型）
-
 
 class LandingAnalysis(BaseModel):
     """落地页分析结果：8 个必要字段 + 模型信息 + 来源标记。"""
@@ -204,7 +124,6 @@ class LandingAnalysis(BaseModel):
         from_attributes = True
         protected_namespaces = ()   # 允许字段名 model_info 不被 "model_" 保护前缀拦截
 
-
 # ----------------------------- 素材创作：营销推广的媒体平台设置 -----------------------------
 class MediaCopyRequest(BaseModel):
     """生成媒体平台广告文案：以落地页 8 字段分析结论为依据，调用大模型产出可编辑文案。"""
@@ -212,12 +131,10 @@ class MediaCopyRequest(BaseModel):
     platform: str                  # 选中的媒体推广平台
     lang: str = "en"              # 文案语言
 
-
 class MediaImageSlot(BaseModel):
     """单个图片版位（尺寸 + 位置）。"""
     size: str                     # 尺寸，如 1080x1080
     placement: str = ""          # 广告版位 id / 名称
-
 
 class MediaImageRequest(BaseModel):
     """生成推广图片：依据编辑后的文案 + 落地页分析结论 + 风格/样式/颜色选项。"""
@@ -229,109 +146,6 @@ class MediaImageRequest(BaseModel):
     slots: List[MediaImageSlot] = []
     logo: str = ""               # 品牌 logo（/files/... 已上传路径 或 远程 http(s) URL），用于合成到图片
 
-class RegenerateRequest(BaseModel):
-    extra_prompt: str
-
-class JobCreate(BaseModel):
-    """批量任务：可传 CSV 原文（rows）或结构化 items；defaults 为各条缺省配置。"""
-    rows: Optional[str] = None
-    items: Optional[List[Any]] = None
-    platforms: List[str] = []
-    languages: List[str] = []
-    material_types: List[str] = []
-    extra_prompt: Optional[str] = None
-
-class JobOut(BaseModel):
-    id: int
-    type: str
-    status: str
-    total: int = 0
-    done: int = 0
-    failed: int = 0
-    payload: Optional[Any] = None
-    result: Optional[Any] = None
-    error: Optional[str] = None
-    cancel_requested: bool = False
-    created_at: Optional[Any] = None
-    started_at: Optional[Any] = None
-    finished_at: Optional[Any] = None
-    class Config:
-        from_attributes = True
-
-class BatchParseRequest(BaseModel):
-    rows: str
-
-# ----------------------------- V3.0 创意工厂 -----------------------------
-class AngleOut(BaseModel):
-    id: int
-    framework_id: int
-    key: str
-    name: str
-    insight: Optional[str] = None
-    visual: Optional[str] = None
-    template: Optional[str] = None
-    hook: Optional[str] = None
-    hook_type: Optional[str] = None
-    storyboard: Optional[Any] = None
-    kpi: Optional[str] = None
-    platform_fit: Optional[Any] = None
-    sort: int = 0
-    class Config:
-        from_attributes = True
-
-class AnglePlanRequest(BaseModel):
-    framework_id: int
-    platforms: List[str] = []
-    extra_prompt: Optional[str] = None
-    lang: Optional[str] = None
-
-class ProduceRequest(BaseModel):
-    framework_id: int
-    campaign_name: str
-    angle_keys: List[str] = []
-    platforms: List[str]
-    material_types: List[str] = ["image", "copy"]
-    languages: List[str] = []
-    extra_prompt: Optional[str] = None
-    sizes_per_platform: Optional[int] = None    # 旧字段，等价 sizes_per_angle
-    sizes_per_angle: Optional[int] = None       # 每个方向、每个平台出几个版位
-    video_mode: Optional[str] = "all"           # off / first / all
-    full_video: Optional[bool] = False          # 勾选后把关键帧合成为完整视频 MP4
-    # 「素材创作」三大提示词库：创意方向 / 内容风格 / 配色（编号，如 D01 / S09 / C13）
-    creative_direction: Optional[str] = None
-    content_style: Optional[str] = None
-    color_scheme: Optional[str] = None
-    # 视频子模块「借鉴市场总结再创作」开关注入的延伸输出文本
-    market_insight: Optional[str] = None
-
-class EstimateRequest(BaseModel):
-    framework_id: Optional[int] = None
-    angle_keys: List[str] = []
-    platforms: List[str] = []
-    material_types: List[str] = ["image", "copy"]
-    languages: List[str] = []
-    sizes_per_angle: Optional[int] = None
-    video_mode: Optional[str] = "all"
-
-
-class BrandUpdate(BaseModel):
-    brand_color: Optional[str] = None
-    assets: Optional[Any] = None
-
-class OptimizeRequest(BaseModel):
-    """素材优化：自然语言要求 + 作用范围。scope=all/copy/image，angle_keys 为空表示全部方向。"""
-    instruction: str
-    scope: str = "all"
-    angle_keys: List[str] = []
-
-
-class SlotVersionsOut(BaseModel):
-    slot: Any
-    count: int
-    versions: List[MaterialOut]
-
-
-# ----------------------------- V2.0 -----------------------------
 class LoginRequest(BaseModel):
     email: str
     password: str
@@ -359,14 +173,3 @@ class UserUpdate(BaseModel):
     active: Optional[bool] = None
     password: Optional[str] = None
 
-class ReviewRequest(BaseModel):
-    action: Optional[str] = None   # submit/approve/reject/comment 由接口决定，这里仅承载备注
-    comment: Optional[str] = None
-
-class SpecUpdate(BaseModel):
-    ad_placement: Optional[str] = None
-    image_sizes: Optional[List[str]] = None
-    video_spec: Optional[str] = None
-    copy_rules: Optional[str] = None
-    keyword_logic: Optional[str] = None
-    copy_limits: Optional[Any] = None

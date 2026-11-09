@@ -4,14 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from database import engine, Base, SessionLocal
-from models import PlatformSpec, User, ModelConfig, PromptConfig
-from specs_data import PLATFORM_SPECS
-from migrations import ensure_schema, normalize_data
+from models import User, ModelConfig, PromptConfig
+from migrations import ensure_schema
 from routers import router
 from auth import decode_token, hash_password, verify_password
-from services import PROMPT_REGISTRY, sync_prompt_defaults
+from services import PROMPT_REGISTRY, sync_prompt_defaults, REMOVED_PROMPT_KEYS
 
-app = FastAPI(title="广告管理系统", version="4.0.0")
+app = FastAPI(title="广告管理系统", version="4.37.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,7 +22,7 @@ UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # 无需登录即可访问的接口（登录、元数据、健康检查、文档）
-PUBLIC_PREFIXES = ("/api/auth/login", "/api/meta", "/api/health", "/api/auth/roles")
+PUBLIC_PREFIXES = ("/api/auth/login", "/api/health", "/api/auth/roles")
 
 @app.middleware("http")
 async def auth_guard(request: Request, call_next):
@@ -191,25 +190,21 @@ def ensure_default_admin():
     finally:
         db.close()
 
-def seed_specs():
-    db = SessionLocal()
-    try:
-        if db.query(PlatformSpec).count() == 0:
-            for s in PLATFORM_SPECS:
-                db.add(PlatformSpec(**s))
-            db.commit()
-            print("[seed] platform_specs 已初始化")
-    finally:
-        db.close()
-
 def seed_prompts():
-    """播种系统提示词（key 唯一，已存在不覆盖）；用户可在「提示词管理」页编辑，保存即生效。
+    """播种系统提示词（key 唯一，已存在不覆盖）；用户可在「素材提示词」页编辑，保存即生效。
 
     代码里升级了默认提示词时由 sync_prompt_defaults 同步：正文只在库里仍是旧默认时刷新，
-    用户编辑过的内容保留。
+    用户编辑过的内容保留。V4.37 会清理已下线「素材管理」模块遗留的提示词行。
     """
     db = SessionLocal()
     try:
+        # V4.37：旧模块的提示词不再出现在目录里，库内残留行一并归档清理
+        stale = db.query(PromptConfig).filter(PromptConfig.key.in_(REMOVED_PROMPT_KEYS)).all()
+        for row in stale:
+            db.delete(row)
+        if stale:
+            db.commit()
+            print(f"[seed] 已清理下线模块提示词：{', '.join(r.key for r in stale)}")
         created = []
         for item in PROMPT_REGISTRY:
             if db.query(PromptConfig).filter_by(key=item["key"]).count() == 0:
@@ -233,8 +228,6 @@ def seed_prompts():
 @app.on_event("startup")
 def on_startup():
     ensure_schema()   # 建表 + 自动补齐缺失列（避免旧演示库与模型漂移）
-    normalize_data()  # 新列数据回填
-    seed_specs()
     seed_users()
     backfill_user_emails()
     ensure_default_admin()

@@ -1,0 +1,22 @@
+#!/bin/sh
+# V4.37 发版前校验：代码改动同步 git 之前，必须已整理并发布对应的结构化版本通知。
+# 由 scripts/install_hooks.sh 安装到 .git/hooks/pre-push（hook 不随仓库同步）。
+# 紧急发布：SKIP_RELEASE_CHECK=1 git push ...（事后请补齐版本通知）
+if [ -n "${SKIP_RELEASE_CHECK}" ]; then
+  echo "[release] 已跳过发版通知校验（SKIP_RELEASE_CHECK）"
+  exit 0
+fi
+
+ROOT=$(git rev-parse --show-toplevel) || exit 0
+ZEROS=0000000000000000000000000000000000000000
+RANGE=""
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  if [ -n "$remote_sha" ] && [ "$remote_sha" != "$ZEROS" ] && [ -n "$local_sha" ]; then
+    RANGE="$remote_sha..$local_sha"
+  fi
+done
+
+if [ -n "$RANGE" ]; then
+  exec python3 "$ROOT/scripts/prepare_release.py" --check --range "$RANGE"
+fi
+exec python3 "$ROOT/scripts/prepare_release.py" --check
