@@ -1,10 +1,14 @@
-import { useState, useEffect, ChangeEvent } from 'react'
+import { useEffect, ChangeEvent } from 'react'
 import { api, LandingAnalysis, LandingChannel, ModelInfo } from '../api'
+import {
+  useCreationSession, updateSession, studioDefaults, clearSession, getSession,
+  beginTask, endTask, failTask, logTask,
+} from '../creationSession'
+import MediaAdStudio from './MediaAdStudio'
 
 /** 「素材历史 → 复用分析继续创作」的跨页面握手（sessionStorage + 自定义事件） */
 export const REUSE_HISTORY_KEY = 'admb:reuseHistory'
 export const REUSE_HISTORY_EVENT = 'admb:reuseHistory'
-import MediaAdStudio from './MediaAdStudio'
 
 // 8 个必要字段的展示元信息（顺序即展示顺序）
 const FIELD_META = [
@@ -22,35 +26,39 @@ function modelLabel(m: ModelInfo): string {
 }
 
 export default function MaterialCreation() {
-  const [url, setUrl] = useState('')
-  const [text, setText] = useState('')
-  const [showText, setShowText] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-  // 单条分析记录（逐步重建：一次只分析一个落地页）
-  const [data, setData] = useState<LandingAnalysis | null>(null)
-  // V4.36：本次创作会话对应的「素材历史」id，文案 / 图片会增量写回
-  const [historyId, setHistoryId] = useState<number | null>(null)
-  // 品牌 logo 选择状态：auto=用抓取的；upload=用本地上传的；none=不使用 logo
-  const [logoMode, setLogoMode] = useState<'auto' | 'upload' | 'none'>('auto')
-  const [uploadedLogo, setUploadedLogo] = useState('')
+  /* V4.38：状态全部放在跨页面会话中枢里。组件由 App 常驻挂载，
+     切换到其它菜单时不会被卸载，正在进行的请求与结果都不会丢失。 */
+  const s = useCreationSession()
 
   // 从「素材历史」复用已保存的分析结论：不重新抓站、不重新调用大模型，直接进入推广设置。
-  // 若当前不在本页，组件挂载时读取 sessionStorage；若已在本页，由自定义事件触发。
+  // V4.38：由于本组件常驻挂载，即使当前停留在「素材历史」页也能立即接收握手并还原现场。
   useEffect(() => {
     const apply = () => {
       const raw = sessionStorage.getItem(REUSE_HISTORY_KEY)
       if (!raw) return
+      // 有任务在跑时不覆盖会话，避免进行中的请求把结果写进刚复用的新现场
+      if (getSession().running) {
+        sessionStorage.removeItem(REUSE_HISTORY_KEY)
+        updateSession({ error: '当前有创作任务正在执行，请等待完成后再复用「素材历史」分析。' })
+        return
+      }
       sessionStorage.removeItem(REUSE_HISTORY_KEY)
       try {
         const p = JSON.parse(raw)
         if (!p?.analysis) return
-        setData(p.analysis)
-        setHistoryId(p.historyId ?? null)
-        setUrl(p.analysis.url || '')
-        setText('')
-        setLogoMode('auto'); setUploadedLogo('')
-        setErr('')
+        updateSession({
+          ...studioDefaults(),
+          analysis: p.analysis,
+          historyId: p.historyId ?? null,
+          urlInput: p.analysis.url || '',
+          textInput: '',
+          logoMode: 'auto', uploadedLogo: '', error: '',
+          stage: 'analyzed', running: false,
+          taskLabel: '已复用「素材历史」分析结论',
+          taskDetail: '跳过重复抓站与大模型推理，可直接进行营销推广设置。',
+          taskLogs: [{ at: Date.now(), text: '复用历史分析结论，新建创作会话', kind: 'ok' }],
+          taskStartedAt: null, taskUpdatedAt: Date.now(),
+        })
         setTimeout(() => document.getElementById('media-studio')?.scrollIntoView({ behavior: 'smooth' }), 120)
       } catch { /* 忽略损坏的暂存数据 */ }
     }
@@ -60,26 +68,27 @@ export default function MaterialCreation() {
   }, [])
 
   const run = async () => {
-    if (!url.trim() && !text.trim()) { setErr('请填写落地页链接或正文'); return }
-    setErr(''); setBusy(true); setData(null); setHistoryId(null)
-    setLogoMode('auto'); setUploadedLogo('')
+    const url = s.urlInput.trim(), text = s.textInput.trim()
+    if (!url && !text) { updateSession({ error: '请填写落地页链接或正文' }); return }
+    if (s.running) return
+    updateSession({ error: '', analysis: null, historyId: null, ...studioDefaults(), logoMode: 'auto', uploadedLogo: '' })
+    beginTask('analyzing', '正在分析落地页', '抓取页面并调用已配置的大模型推理 8 项关键结论…')
     try {
-      const res = await api.landingAnalysis({
-        url: url.trim() || undefined,
-        text: text.trim() || undefined,
-      })
+      const res = await api.landingAnalysis({ url: url || undefined, text: text || undefined })
+      const l = (res.language || '').toLowerCase()
+      updateSession({ lang: ['en', 'es', 'pt', 'id'].includes(l) ? l : 'en' })
       // 分析完成即建立历史会话（本地 DB 写入，失败不阻断创作主流程）
       let hid: number | null = null
       try {
         const h = await api.createCreationHistory({ analysis: res })
         hid = h.id
+        logTask(`已建立「素材历史」会话 #${h.id}`, 'info')
       } catch { /* 历史写入失败不影响本次生成 */ }
-      setHistoryId(hid)
-      setData(res)
+      updateSession({ historyId: hid, analysis: res })
+      endTask('analyzed', '落地页分析完成',
+        `实际模型：${modelLabel(res.model_info)}；已得到 8 项结论，可继续进行营销推广设置。`)
     } catch (e: any) {
-      setErr(e.message)
-    } finally {
-      setBusy(false)
+      failTask(e?.message || '落地页分析失败')
     }
   }
 
@@ -99,59 +108,68 @@ export default function MaterialCreation() {
         <div className="analyze-box">
           <input
             type="text"
-            value={url}
-            onChange={e => setUrl(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && (url || text)) run() }}
+            value={s.urlInput}
+            onChange={e => updateSession({ urlInput: e.target.value })}
+            onKeyDown={e => { if (e.key === 'Enter' && (s.urlInput || s.textInput)) run() }}
             placeholder="https://你的产品落地页"
           />
           <button
             className="btn"
             onClick={run}
-            disabled={busy || (!url.trim() && !text.trim())}
+            disabled={s.running || (!s.urlInput.trim() && !s.textInput.trim())}
           >
-            {busy ? '分析中…' : data ? '重新分析' : '抓取并分析'}
+            {s.running ? '任务进行中…' : s.analysis ? '重新分析' : '抓取并分析'}
           </button>
         </div>
 
         <div className="analyze-sub">
-          <button className="linkbtn" onClick={() => setShowText(v => !v)}>
-            {showText ? '收起正文输入' : '链接打不开？粘贴落地页正文 / 产品说明'}
+          <button className="linkbtn" onClick={() => updateSession({ showText: !s.showText })}>
+            {s.showText ? '收起正文输入' : '链接打不开？粘贴落地页正文 / 产品说明'}
           </button>
           <span className="muted">支持 JS 渲染失败的站点、内部测试页，或只有一份产品文档的情况</span>
+          <button
+            className="linkbtn"
+            disabled={s.running}
+            onClick={() => {
+              if (s.running) return
+              if (window.confirm('清空当前创作工作台（含分析结论、文案与图片）并重新开始？\n已存入「素材历史」的记录不会被删除。')) clearSession()
+            }}
+          >
+            新建创作会话
+          </button>
         </div>
 
-        {showText && (
+        {s.showText && (
           <textarea
             rows={5}
-            value={text}
-            onChange={e => setText(e.target.value)}
+            value={s.textInput}
+            onChange={e => updateSession({ textInput: e.target.value })}
             placeholder="把落地页正文、产品介绍或投放 brief 粘进来。"
           />
         )}
 
-        {busy && <div className="alert ok">正在抓取落地页并调用大模型推理分析…</div>}
-        {err && <div className="alert err">{err}</div>}
+        <div className="ct-inline-hint muted">
+          任务进行中可切换到其它菜单，分析与生成不会中断；右下角「创作任务」可查看实时进度并一键返回继续调整。
+        </div>
+
+        {s.running && s.stage === 'analyzing' && (
+          <div className="alert ok">正在抓取落地页并调用大模型推理分析…</div>
+        )}
+        {s.error && <div className="alert err">{s.error}</div>}
       </div>
 
-      {data && (
+      {s.analysis && (
         <>
           <ResultView
-            data={data}
-            historyId={historyId}
-            logoMode={logoMode}
-            uploadedLogo={uploadedLogo}
-            onLogoMode={setLogoMode}
-            onUploaded={setUploadedLogo}
-            onUpload={(e) => onUploadLogo(e, setUploadedLogo, setErr, setLogoMode)}
-            onErr={setErr}
+            data={s.analysis}
+            historyId={s.historyId}
+            logoMode={s.logoMode}
+            uploadedLogo={s.uploadedLogo}
+            onLogoMode={m => updateSession({ logoMode: m })}
+            onUpload={(e) => onUploadLogo(e)}
           />
           <div id="media-studio" className="media-studio-section">
-            <MediaAdStudio
-              initialAnalysis={data}
-              onGotoCreation={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-              selectedLogo={logoMode === 'upload' ? uploadedLogo : logoMode === 'none' ? '' : (data.logo || '')}
-              historyId={historyId}
-            />
+            <MediaAdStudio />
           </div>
         </>
       )}
@@ -159,29 +177,26 @@ export default function MaterialCreation() {
   )
 }
 
-async function onUploadLogo(e: ChangeEvent<HTMLInputElement>, onUploaded: (url: string) => void, onErr: (msg: string) => void, onMode: (m: 'auto' | 'upload' | 'none') => void) {
+async function onUploadLogo(e: ChangeEvent<HTMLInputElement>) {
   const file = e.target.files?.[0]
   if (!file) return
   try {
     const r = await api.uploadAsset(file)
-    onUploaded(r.url)
-    onMode('upload')
+    updateSession({ uploadedLogo: r.url, logoMode: 'upload' })
   } catch (err: any) {
-    onErr(err?.message || '上传失败')
+    updateSession({ error: err?.message || '上传失败' })
   } finally {
     e.target.value = ''
   }
 }
 
-function ResultView({ data, historyId, logoMode, uploadedLogo, onLogoMode, onUploaded, onUpload, onErr }: {
+function ResultView({ data, historyId, logoMode, uploadedLogo, onLogoMode, onUpload }: {
   data: LandingAnalysis
   historyId: number | null
   logoMode: 'auto' | 'upload' | 'none'
   uploadedLogo: string
   onLogoMode: (m: 'auto' | 'upload' | 'none') => void
-  onUploaded: (url: string) => void
   onUpload: (e: ChangeEvent<HTMLInputElement>) => void
-  onErr: (msg: string) => void
 }) {
   const m = data.model_info
   const llmUsed = data.source === 'llm'

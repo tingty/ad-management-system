@@ -60,13 +60,16 @@ async def api_media_campaign_copy(req: MediaCopyRequest, db: Session = Depends(g
 @router.post("/media-campaign/images")
 async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depends(get_db),
                                     user: User = Depends(require_roles(*CAN_EDIT))):
-    """基于编辑后的文案 + 落地页分析结论 + 风格/样式/颜色，生成推广图片素材，并标注图片实际调用的模型。
+    """基于「勾选的创意文案组合」+ 落地页分析结论 + 风格/样式/颜色，生成推广图片素材。
 
-    生成前可在前端选风格/样式/颜色；未配置文生图模型时自动用 Pillow 品牌渐变模板兜底，并如实标注回退。
+    V4.38：copy_variants 由前端按用户勾选的文案拼出，后端按版位顺序轮换叠加；
+    未传时兼容旧行为。每张图片会标注所用文案组合，未配置文生图模型时自动用模板兜底。
     """
     slots = [s.model_dump() for s in req.slots]
+    variants = [v.model_dump() for v in req.copy_variants]
     result = await generate_media_images(db, req.analysis.model_dump(), req.platform, req.lang,
-                                         req.copy_fields, req.style_opts, slots, req.logo or "")
+                                         req.copy_fields, req.style_opts, slots, req.logo or "",
+                                         copy_variants=variants)
     return result
 
 

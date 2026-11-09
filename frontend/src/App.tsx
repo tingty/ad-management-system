@@ -1,6 +1,8 @@
 import { useEffect, useState, Fragment } from 'react'
 import type { ReactNode } from 'react'
 import { api, clearToken, getToken, User } from './api'
+import { bindSessionUser } from './creationSession'
+import CreationTaskDock from './CreationTaskDock'
 import MaterialCreation from './pages/MaterialCreation'
 import MaterialPromptLibrary from './pages/MaterialPromptLibrary'
 import MaterialHistory from './pages/MaterialHistory'
@@ -127,6 +129,9 @@ export default function App() {
     window.addEventListener('admb:unauthorized', onUnauthorized)
     return () => window.removeEventListener('admb:unauthorized', onUnauthorized)
   }, [])
+
+  // V4.38：创作会话按登录用户隔离持久化；切换账号不会串会话，重新登录可恢复上次进度。
+  useEffect(() => { bindSessionUser(user?.id ?? null) }, [user?.id])
 
   useEffect(() => {
     if (!getToken()) { setBooting(false); return }
@@ -312,7 +317,13 @@ export default function App() {
             </div>
           )}
 
-          {tab === 'creation' && isEditor && <MaterialCreation />}
+          {/* V4.38：「素材创作」常驻挂载。切到其它菜单只是隐藏，不会卸载组件，
+              因此正在进行的分析 / 文案 / 图片请求继续运行，回来后状态与结果完整保留。 */}
+          {isEditor && (
+            <div style={{ display: tab === 'creation' ? undefined : 'none' }}>
+              <MaterialCreation />
+            </div>
+          )}
           {tab === 'matprompts' && isEditor && <MaterialPromptLibrary isAdmin={isAdmin} />}
           {tab === 'history' && isEditor && <MaterialHistory />}
           {tab === 'llm' && isAdmin && <LLMSettings />}
@@ -321,6 +332,9 @@ export default function App() {
           {tab === 'releasenotes' && <ReleaseNotes />}
         </div>
       </main>
+
+      {/* V4.38：全局创作任务浮窗，任意页面都能查阅进度并一键返回工作台 */}
+      {isEditor && <CreationTaskDock onBack={() => go('creation')} />}
     </div>
   )
 }

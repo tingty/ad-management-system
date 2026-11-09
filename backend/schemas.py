@@ -136,12 +136,22 @@ class MediaImageSlot(BaseModel):
     size: str                     # 尺寸，如 1080x1080
     placement: str = ""          # 广告版位 id / 名称
 
+class MediaCopyVariant(BaseModel):
+    """V4.38：一条被用户勾选的「创意文案组合」，作为一张推广图的叠加文案。"""
+    headline: str = ""
+    sub: str = ""
+    cta: str = ""
+    brand: str = ""
+    label: str = ""
+
 class MediaImageRequest(BaseModel):
-    """生成推广图片：依据编辑后的文案 + 落地页分析结论 + 风格/样式/颜色选项。"""
+    """生成推广图片：依据「勾选的创意文案组合」+ 落地页分析结论 + 风格/样式/颜色选项。"""
     analysis: LandingAnalysis
     platform: str
     lang: str = "en"
-    copy_fields: dict = {}       # 编辑后的文案字段（覆盖平台 schema）
+    copy_fields: dict = {}       # 编辑后的文案字段（覆盖平台 schema，保留完整文案库）
+    # V4.38：不传时兼容旧行为（取每个字段第 1 条）；传入后按版位顺序轮换叠加。
+    copy_variants: List[MediaCopyVariant] = []
     style_opts: dict = {}         # {creative_direction, content_style, color_scheme}
     slots: List[MediaImageSlot] = []
     logo: str = ""               # 品牌 logo（/files/... 已上传路径 或 远程 http(s) URL），用于合成到图片

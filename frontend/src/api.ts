@@ -273,6 +273,15 @@ export interface MediaCopyResult {
   brand: string
 }
 
+/** V4.38：一条被勾选的「创意文案组合」，会叠加到一张推广图片上 */
+export interface CopyVariant {
+  headline: string
+  sub: string
+  cta: string
+  brand: string
+  label: string
+}
+
 export interface MediaImageItem {
   url: string
   file: string
@@ -280,6 +289,9 @@ export interface MediaImageItem {
   w: number
   h: number
   placement: string
+  /** V4.38：本张图片实际选用的文案组合（后端按版位轮换写入） */
+  variant?: string
+  copy?: { headline: string; sub: string; cta: string }
 }
 
 export interface MediaImageResult {
@@ -376,10 +388,11 @@ export const api = {
   // 基于落地页分析结论 + 选中平台，调用大模型生成可编辑广告文案
   mediaCopy: (payload: { analysis: LandingAnalysis; platform: string; lang?: string }) =>
     req<MediaCopyResult>('/api/media-campaign/copy', { method: 'POST', body: JSON.stringify(payload) }),
-  // 基于编辑后的文案 + 落地页分析结论 + 风格/样式/颜色，生成推广图片
+  // 基于「勾选的创意文案组合」+ 落地页分析结论 + 风格/样式/颜色，生成推广图片
   mediaImages: (payload: {
     analysis: LandingAnalysis; platform: string; lang?: string
-    copy_fields: Record<string, any>; style_opts: Record<string, string>; slots: { size: string; placement: string }[]
+    copy_fields: Record<string, any>; copy_variants?: CopyVariant[]
+    style_opts: Record<string, string>; slots: { size: string; placement: string }[]
     logo?: string
   }) =>
     req<MediaImageResult>('/api/media-campaign/images', { method: 'POST', body: JSON.stringify(payload) }),
@@ -391,7 +404,8 @@ export const api = {
   }) =>
     req<CreationHistory>('/api/creation-history', { method: 'POST', body: JSON.stringify(payload) }),
   updateCreationHistory: (id: number, payload: {
-    platform?: string; lang?: string; copy?: Partial<MediaCopyResult> | null
+    // V4.38：copy 允许附带 selected_copy / copy_variants，记录本次选用的创意文案
+    platform?: string; lang?: string; copy?: any
     images?: MediaImageItem[]; images_mode?: 'append' | 'replace'
     style_opts?: Record<string, string>; image_model?: ModelInfo | null; note?: string
   }) =>

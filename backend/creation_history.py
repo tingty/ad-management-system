@@ -158,6 +158,28 @@ def copy_as_text(row) -> str:
         for p in (c["validation"].get("issues") or []):
             if isinstance(p, dict):
                 lines.append(f"- {p.get('message', '')}")
+    # V4.38：记录用户勾选了哪些创意文案、每张图片按什么组合出图，便于回溯与复用。
+    sel = c.get("selected_copy") or {}
+    if isinstance(sel, dict) and sel:
+        lines += ["", "【本次选用的创意文案】"]
+        for k, flags in sel.items():
+            if not isinstance(flags, list):
+                continue
+            vals = fields.get(k)
+            vals = vals if isinstance(vals, list) else [vals]
+            picked = [str(vals[i]) for i, on in enumerate(flags)
+                      if on and i < len(vals) and vals[i]]
+            if picked:
+                lines.append(f"- {labels.get(k, k)}：{' / '.join(picked)}")
+    vs = c.get("copy_variants") or []
+    if isinstance(vs, list) and vs:
+        lines += ["", "【图片使用的文案组合（按版位轮换）】"]
+        for i, v in enumerate(vs[:40], 1):
+            if isinstance(v, dict):
+                lines.append(f"- {v.get('label') or f'组合 {i}'}："
+                             f"{v.get('headline') or '（无标题）'} | "
+                             f"{v.get('sub') or '（无副标）'} | "
+                             f"{v.get('cta') or '（无 CTA）'}")
     return "\n".join(lines) + "\n"
 
 

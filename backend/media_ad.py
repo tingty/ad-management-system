@@ -4,15 +4,16 @@
 职责（严格遵循用户需求）：
 1. 文案生成（generate_media_copy）：必须结合「落地页分析结论」(8 字段) 作为依据，调用已配置
    大模型产出平台结构化文案；生成后立即返回，前端展示并允许编辑；同时如实标注本次调用的模型。
-2. 图片生成（generate_media_images）：以「编辑后的文案 + 落地页分析结论 + 风格/样式/颜色选项」
-   为依据，调用文生图大模型产出背景，再叠加文案合成为可投放 PNG；无模型时用 Pillow 模板兜底，
-   并如实标注图片实际调用的模型（或回退）。
+2. 图片生成（generate_media_images）：以「用户勾选的创意文案组合 + 落地页分析结论 +
+   风格/样式/颜色选项」为依据，调用文生图大模型产出背景，再叠加文案合成为可投放 PNG；
+   无模型时用 Pillow 模板兜底，并如实标注图片实际调用的模型（或回退）。
+   V4.38：文案组合按版位顺序轮换，每张图片回传所用组合，未勾选的文案不会出现在图片上。
 
 复用既有能力：
 - providers.get_llm / get_image / parse_json / UPLOAD_DIR / _active_config
 - presets.build_directives / style_visual / palette_prompt / DIRECTION_MOOD / STYLE_TO_BG / DIRECTION_TO_BG / COLOR_TO_PALETTE
 - imaging.render_ad_png
-- creative.fit_text
+- text_utils.fit_text
 - media_platforms.get_media_platform
 """
 import os
@@ -455,12 +456,16 @@ def _resolve_logo_local(logo_url: str):
 
 async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                                 copy_fields: dict, style_opts: dict, slots: list,
-                                logo: str = "") -> dict:
-    """基于「编辑后的文案 + 落地页分析结论 + 风格/样式/颜色」生成推广图片素材。
+                                logo: str = "", copy_variants: list | None = None) -> dict:
+    """基于「勾选的创意文案组合 + 落地页分析结论 + 风格/样式/颜色」生成推广图片素材。
+
+    V4.38：copy_variants 为前端按勾选文案拼出的组合列表，按版位顺序轮换叠加；
+    每张图片回传 variant / copy 说明「这张图用了哪组文案」。不传时兼容旧行为
+    （每个字段取第 1 条，所有图片用同一组文案）。
 
     - 文生图大模型已配置 → 按创意方向/风格/配色生成 AI 背景，再叠加文案合成 PNG；
     - 未配置 → Pillow 品牌渐变模板兜底，并如实标注回退。
-    返回：images(含 url/file/size/placement) / image_model(本次调用模型) / note / count。
+    返回：images(含 url/file/size/placement/variant/copy) / image_model / note / count。
     """
     platform = platform or "Facebook"
     analysis = _as_dict(analysis)
@@ -484,8 +489,25 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
     if color_scheme and color_scheme in COLOR_TO_PALETTE:
         design["palette"] = dict(COLOR_TO_PALETTE[color_scheme])
 
-    brand = (copy_fields or {}).get("brand") or _brand_of(analysis)
-    headline, sub, cta = _overlay_text(copy_fields or {}, platform, brand)
+    brand = ((copy_fields or {}).get("brand")
+             or (copy_variants[0].get("brand") if copy_variants and isinstance(copy_variants[0], dict) else "")
+             or _brand_of(analysis))
+    base_headline, base_sub, base_cta = _overlay_text(copy_fields or {}, platform, brand)
+
+    # V4.38：把前端勾选的文案组合规范化；限制条数与长度，避免异常入参把渲染拖死。
+    variants: list[dict] = []
+    for raw in (copy_variants or [])[:40]:
+        v = raw if isinstance(raw, dict) else {}
+        cta = str(v.get("cta") or "").strip()[:60]
+        if cta.upper() in FB_CTA_HUMAN:
+            cta = FB_CTA_HUMAN[cta.upper()]
+        variants.append({
+            "headline": str(v.get("headline") or "").strip()[:200],
+            "sub": str(v.get("sub") or "").strip()[:200],
+            "cta": cta,
+            "label": str(v.get("label") or "").strip()[:40],
+        })
+
     # 把 logo（上传的 /files/... 或远程抓取 URL）解析为本地可合成路径
     logo_path = await asyncio.to_thread(_resolve_logo_local, logo or "")
 
@@ -498,22 +520,29 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         "fallback": (True if not img_cfg else False),
     }
 
-    # 版位任务
+    # 版位任务：每个版位取一组「被勾选的创意文案」，未勾选的文案不会落到图片上
     tasks = []
-    for slot in (slots or []):
+    for idx, slot in enumerate(slots or []):
         size = slot.get("size") or spec_sizes[0]
         placement = slot.get("placement") or ""
         w, h = _size_wh(size)
         bg_prompt = _media_image_prompt(analysis, platform, directives, design, db)
+        if variants:
+            v = variants[idx % len(variants)]
+            headline, sub, cta, vlabel = v["headline"], v["sub"], v["cta"], v["label"]
+        else:
+            headline, sub, cta, vlabel = base_headline, base_sub, base_cta, ""
         # V4.36：文件名带随机后缀。此前同名文案会生成完全相同的文件名，用户点「重新生成」
         # 会直接覆盖上一次的 PNG，导致「素材历史」里旧会话的图片被无声替换、无法再下载。
         ptag = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in platform)[:20]
         fn = (f"media_{ptag}_{size}_{uuid.uuid4().hex[:10]}_"
               f"{abs(hash((placement, size, headline, sub))) % 100000:05d}.png")
         out = os.path.join(UPLOAD_DIR, fn)
-        tasks.append((out, w, h, bg_prompt, fn, size, placement, logo_path))
+        tasks.append((out, w, h, bg_prompt, fn, size, placement, logo_path,
+                      headline, sub, cta, vlabel))
 
-    async def _render_one(out, w, h, bg_prompt, fn, size, placement, logo_path):
+    async def _render_one(out, w, h, bg_prompt, fn, size, placement, logo_path,
+                          headline, sub, cta, vlabel):
         nonlocal ai_used
         bg_path = None
         if img is not None:
@@ -529,7 +558,9 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             (headline or "")[:200], (sub or "")[:200], (cta or "")[:60], (brand or "")[:40],
             bg_path or None, logo_path or None,
         )
-        return {"url": out, "file": fn, "size": size, "w": w, "h": h, "placement": placement}
+        return {"url": out, "file": fn, "size": size, "w": w, "h": h,
+                "placement": placement, "variant": vlabel,
+                "copy": {"headline": headline, "sub": sub, "cta": cta}}
 
     images = []
     if tasks:
@@ -550,6 +581,8 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 "在「设置」中配置 image 用途的大模型后即可生成 AI 背景图。")
     else:
         note = f"图片背景由文生图大模型生成：{image_model['provider']} / {image_model['model']}。"
+    if variants:
+        note += f" 本批共选用 {len(variants)} 组创意文案，按版位顺序轮换叠加到图片上。"
 
     _cleanup_ai_bgs()
 
@@ -559,4 +592,5 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         "image_model": image_model,
         "note": note,
         "count": len(images),
+        "copy_variant_count": len(variants),
     }

@@ -30,7 +30,7 @@ export default function Login({ onLogin }: { onLogin: (u: User) => void }) {
       <div className="login-card">
         <h1>广告管理系统</h1>
         <div className="muted" style={{ marginBottom: 18 }}>
-          落地页分析 → 多平台素材生成 → 素材库 → 批量 → 审阅协作
+          落地页分析 → 创意文案选用 → 推广图片生成 → 素材历史归档
         </div>
         <form onSubmit={submit}>
           <div className="field">
