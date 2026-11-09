@@ -1070,3 +1070,29 @@
 
 **线上运维配合**
 - 无。代码修复后任意 `usages` 缺失的配置都能正常显示；新 MaaS 地址与密钥已写入 DB，部署机 `git pull` 后重启后端即可在「大模型配置」看到千问文本大模型。
+
+## V4.33 大模型配置：千问 MaaS 预设快捷项 + 测试已保存配置 + 防重复添加
+
+**发布日期**：2026-11-09
+
+**需求**
+- 把「千问文本大模型」在 UI 里做成像 GPT / Claude 那样的预设快捷选项：选中即带出专属 MaaS 地址与 `qwen-plus`，只需补填 Key 即可。
+- 增加一个「测试某个已保存配置」的按钮：无需重新填写/保存，直接对列表中的落库配置发起一次真实连通测试。
+- 同一大模型配置只能添加一次；若检测到重复添加，提醒「已添加」。
+
+**交付**
+- 后端 `llm_catalog.py`：新增 `qwen-maas` 预设（协议 `openai`，默认 Base URL 为 `https://llm-nqw1vl6mhnuxv7d5.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`，`model_placeholder=qwen-plus`），并加入 `MAINSTREAM_KEYS`，使其在「预设快捷选项」中默认置顶展示。
+- 前端 `LLMSettings.tsx`：
+  - 弹窗新增「预设快捷选项」chips（`quickPresets`），按当前模态过滤主流/部署；点击 `onPickPreset` 即带出该预设的 Base URL、建议 Model（`qwen-plus`）、默认用途，体验等同直接选 GPT / Claude。
+  - `ProtocolSelect` 在 `form.provider` 为预设 key（如 `qwen-maas`）时回退到 `allPresets` 显示预设名，避免显示空白。
+  - 列表每行新增「测试」按钮，打开只读摘要弹窗，基于落库值（含保存的 API Key）直接调用 `/api/settings/models/test` 发起最小真实调用，不改任何配置。
+- 后端 `routers.py`：新增 `_norm_model_key`（provider 经 `_resolve_protocol` 统一为协议串 + 链接去尾斜杠小写 + 模型小写）与 `_dup_model_config`；在 `create_model` / `update_model` 中检测 `(协议, 链接, 模型)` 完全相同的配置，命中即返回 `409 已添加`。
+- 前端 `save()`：捕获到含「已添加」的异常时，给出明确提醒「已添加：该大模型配置已存在，请勿重复添加。」，而非笼统的「保存失败」。
+
+**验证**
+- `_resolve_protocol('qwen-maas') == 'openai'`，因此经预设添加的千问 MaaS 配置与既有的 `provider=openai` 同地址同模型配置会被正确判为重复，杜绝二次添加。
+- `_norm_model_key` 单测：`qwen-maas` + MaaS URL（带/不带尾斜杠） + `qwen-plus` 归一后与 `openai` + 同 URL + `qwen-plus` 完全一致（判重），与 `gpt-4o` 不一致（不误判）。
+- 前端 `tsc --noEmit` 通过；后端 `routers.py` / `llm_catalog.py` `py_compile` 通过。
+
+**线上运维配合**
+- 无。部署机 `git pull` 后重启后端即可生效；既有千问配置不受影响，若再次以预设方式添加同地址同模型会被「已添加」拦截。

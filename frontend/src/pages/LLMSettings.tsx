@@ -104,6 +104,11 @@ export default function LLMSettings() {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<ModelTestResult | null>(null)
 
+  // 「测试某个已保存配置」：直接从列表对一条已落库配置发起连通测试，无需重新填写/保存。
+  const [testTarget, setTestTarget] = useState<ModelConfig | null>(null)
+  const [testTargetLoading, setTestTargetLoading] = useState(false)
+  const [testTargetResult, setTestTargetResult] = useState<ModelTestResult | null>(null)
+
   const load = async () => {
     try {
       const models = await api.models(); setList(models)
@@ -118,6 +123,13 @@ export default function LLMSettings() {
   const preset = PROTOCOL_OPTIONS.find(p => p.key === form.provider) || allPresets.find(p => p.key === form.provider)
   const modality = preset?.modality || 'text'
   const usageOptions = USAGE_BY_MODALITY[modality] || USAGE_BY_MODALITY.text
+
+  // 「预设快捷选项」：按当前模态（默认文本）展示主流厂商 / 部署，点击即带出该厂商的默认
+  // Base URL 与建议 Model（如「千问文本大模型（MaaS 专属部署）」选中即带出 MaaS 地址 + qwen-plus），
+  // 用户只需再填 Key 即可，体验与直接选 GPT / Claude 一致。
+  const quickPresets = (allPresets || []).filter(
+    p => (p.modality || 'text') === modality && (p.mainstream || p.key === 'qwen-maas')
+  )
 
   const openAdd = () => {
     setEditingId(null); setForm(emptyForm()); setTestResult(null); setErr(''); setOk('')
@@ -139,6 +151,21 @@ export default function LLMSettings() {
         params: Object.fromEntries((p?.extra_fields || []).map(ef => [ef.key, f.params[ef.key] || ''])),
       }
     })
+  }
+
+  // 选中某个「预设快捷选项」（如 千问文本大模型 MaaS 部署）：直接把该厂商/部署的默认 Base URL
+  // 与建议 Model（qwen-plus）带出，并填入默认用途与主用途，用户只需补填 Key 即可保存并测试。
+  const onPickPreset = (p: ModelPreset) => {
+    setForm(f => ({
+      ...f,
+      provider: p.key,                                           // 存厂商/部署 key，后端按目录解析协议
+      name: f.name.trim() ? f.name : p.name,                     // 未填名称时默认带出预设名
+      base_url: p.default_base_url,                              // 带出该部署专属地址（千问 MaaS）
+      model: p.model_placeholder || (p.models && p.models[0]) || '',
+      usages: defaultUsagesFor(p.modality || 'text'),
+      params: {},
+    }))
+    setTestResult(null); setErr(''); setOk('')
   }
 
   const toggleUsage = (v: string) => {
@@ -193,7 +220,16 @@ export default function LLMSettings() {
       const saved = editingId ? await api.updateModel(editingId, payload) : await api.createModel(payload)
       setEditingId(saved.id); await load()
       return saved
-    } catch (e: any) { setErr('保存失败：' + e.message); return null }
+    } catch (e: any) {
+      const msg = e?.message || String(e)
+      if (msg.includes('已添加')) {
+        // 同一大模型配置（协议 + 链接 + 模型）已存在，给出明确提醒
+        setErr('已添加：该大模型配置已存在，请勿重复添加。')
+      } else {
+        setErr('保存失败：' + msg)
+      }
+      return null
+    }
   }
 
   const runTest = async (payload: any) => {
@@ -226,6 +262,34 @@ export default function LLMSettings() {
     try { await api.deleteModel(id); await load() } catch (e: any) { setErr(e.message) }
   }
 
+  // 打开「测试已保存配置」弹窗（只读展示配置摘要，直接基于落库值发起连通测试）。
+  const openTestSaved = (m: ModelConfig) => {
+    setTestTarget(m); setTestTargetResult(null); setTestTargetLoading(false)
+  }
+  const closeTestSaved = () => { setTestTarget(null); setTestTargetResult(null) }
+  const runTestSaved = async () => {
+    if (!testTarget) return
+    setTestTargetLoading(true); setTestTargetResult(null)
+    try {
+      const params = (testTarget.params && typeof testTarget.params === 'object') ? testTarget.params as Record<string, any> : {}
+      const r = await api.testModel({
+        provider: testTarget.provider,
+        api_key: testTarget.api_key,
+        base_url: testTarget.base_url,
+        model: testTarget.model,
+        endpoint: params.endpoint,
+      })
+      setTestTargetResult(r)
+    } catch (e: any) {
+      setTestTargetResult({ ok: false, error_type: 'unknown', message: e.message })
+    } finally { setTestTargetLoading(false) }
+  }
+  // 已保存配置的类型展示名（与列表一致：协议选项优先，回退到厂商目录）。
+  const testTargetLabel = testTarget
+    ? (PROTOCOL_OPTIONS.find(x => x.key === testTarget.provider) || allPresets.find(x => x.key === testTarget.provider))?.name
+      || testTarget.provider
+    : ''
+
   // 自定义下拉（替代原生 <select>）：在弹窗/webview 中原生 select 下拉可能被裁剪/不弹出，
   // 这里用绝对定位的浮层渲染，保证选项一定可见、可点选。本组件改为选择「接口协议」而非厂商。
   const ProtocolSelect = ({ value, options, onPick }: {
@@ -238,7 +302,7 @@ export default function LLMSettings() {
       document.addEventListener('mousedown', h)
       return () => document.removeEventListener('mousedown', h)
     }, [])
-    const sel = options.find(p => p.key === value)
+    const sel = options.find(p => p.key === value) || allPresets.find(p => p.key === value)
     const ordered = [...options].sort((a, b) => (a.modality === b.modality ? 0 : a.modality === 'text' ? -1 : a.modality === 'image' ? 1 : 2))
     return (
       <div className="provider-select" ref={ref}>
@@ -297,6 +361,7 @@ export default function LLMSettings() {
                     <td>
                       <div style={{ display: 'flex', gap: 6 }}>
                         <button className="btn small ghost" onClick={() => edit(m)}>编辑</button>
+                        <button className="btn small" onClick={() => openTestSaved(m)}>测试</button>
                         <button className="btn small danger" onClick={() => del(m.id)}>删除</button>
                       </div>
                     </td>
@@ -316,6 +381,25 @@ export default function LLMSettings() {
             <label>名称（自定义，便于区分）</label>
             <input type="text" value={form.name} placeholder="如：阿里通义-主分析 / 自建GPU-文生图"
                    onChange={e => setForm({ ...form, name: e.target.value })} autoFocus />
+
+            <label>预设快捷选项（点击一键带入地址与模型，再填 Key 即可）</label>
+            <div className="chip-row" style={{ marginTop: -4, marginBottom: 6 }}>
+              {quickPresets.length === 0 ? (
+                <span className="muted">（当前协议类型下暂无快捷预设，可手动在下方填写）</span>
+              ) : (
+                quickPresets.map(p => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    className={'chip preset-chip' + (form.provider === p.key ? ' on' : '')}
+                    onClick={() => onPickPreset(p)}
+                    title={p.notes || p.setup_guide || ''}
+                  >
+                    {p.name}
+                  </button>
+                ))
+              )}
+            </div>
 
             <label>接口协议（API 类型，非大模型名称）</label>
             <ProtocolSelect
@@ -415,6 +499,52 @@ export default function LLMSettings() {
             )}
             {ok && <div className="alert ok">{ok}</div>}
             {err && <div className="alert err">{err}</div>}
+          </div>
+        </div>
+      )}
+
+      {testTarget && (
+        <div className="modal-overlay" onMouseDown={closeTestSaved}>
+          <div className="modal" onMouseDown={e => e.stopPropagation()}>
+            <h3>测试已保存配置：{testTarget.name || '未命名'}</h3>
+
+            <div className="test-saved-summary">
+              <div><span className="ts-k">类型</span><span className="ts-v">{testTargetLabel}</span></div>
+              <div><span className="ts-k">模型</span><span className="ts-v">{testTarget.model || '—'}</span></div>
+              <div><span className="ts-k">请求链接</span><span className="ts-v ts-url">{testTarget.base_url || '—'}</span></div>
+            </div>
+
+            <div className="muted" style={{ marginTop: 8 }}>
+              将使用配置中保存的 API Key 直接发起一次最小真实调用（与保存时的连通测试一致），不会修改任何配置。
+            </div>
+
+            <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center' }}>
+              <button className="btn" onClick={runTestSaved} disabled={testTargetLoading}>
+                {testTargetLoading ? '测试中…' : '开始测试'}
+              </button>
+              <button className="btn ghost" onClick={closeTestSaved}>关闭</button>
+            </div>
+
+            {testTargetResult?.ok && (
+              <div className="alert ok">✓ 连通成功 ｜ 延迟 {testTargetResult.latency_ms}ms ｜ 模型回复：{testTargetResult.reply}</div>
+            )}
+            {testTargetResult && !testTargetResult.ok && (
+              <div className="alert err">
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>✗ 连通失败（{testTargetResult.error_type || 'unknown'}）</div>
+                <div>{testTargetResult.message || testTargetResult.error}</div>
+                {testTargetResult.hint_url && (
+                  <a className="doc-link" href={testTargetResult.hint_url} target="_blank" rel="noreferrer">
+                    查看{testTargetResult.hint_url_label || '官方文档'} ↗
+                  </a>
+                )}
+                {testTargetResult.raw && (
+                  <details style={{ marginTop: 6 }}>
+                    <summary>原始错误</summary>
+                    <pre className="raw">{testTargetResult.raw}</pre>
+                  </details>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

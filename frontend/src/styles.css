@@ -848,6 +848,23 @@ select {
 }
 .modal .provider-line { padding-top: 0; }
 
+/* 预设快捷选项（千问 MaaS 等，点击一键带入地址与模型） */
+.preset-chip {
+  font-weight: 600; border-color: #c9d6e3; background: #f3f8fd; color: #2a4d6e;
+}
+.preset-chip:hover { border-color: var(--primary); color: var(--primary); }
+.preset-chip.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+/* 测试已保存配置弹窗 */
+.test-saved-summary {
+  margin: 10px 0 4px; border: 1px solid var(--border); border-radius: 10px;
+  background: #fafbfc; padding: 12px 14px; display: flex; flex-direction: column; gap: 7px;
+}
+.test-saved-summary > div { display: flex; gap: 10px; font-size: 13px; align-items: baseline; }
+.ts-k { flex: 0 0 72px; color: var(--muted); font-size: 12px; }
+.ts-v { color: var(--text); font-weight: 600; word-break: break-all; }
+.ts-url { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; font-weight: 500; }
+
 /* ==================== 素材提示词管理 ==================== */
 .pill.img { background: #e8f1fb; color: var(--primary2); border: 1px solid #cfe3f5; }
 .pill.vid { background: #f1e9fb; color: #7b4fc4; border: 1px solid #e2d4f3; }

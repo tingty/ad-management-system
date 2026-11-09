@@ -23,7 +23,7 @@ from creative import COPY_SCHEMA, ANGLE_LIBRARY, ANGLE_MAP
 from report import build_report, report_markdown
 from batch import parse_csv, run_job, template_csv, CSV_HEADERS
 from specs_data import PLATFORMS, MATERIAL_TYPES, LANGUAGES
-from llm_catalog import LLM_PRESETS, test_llm_connection
+from llm_catalog import LLM_PRESETS, test_llm_connection, _resolve_protocol
 from presets import build_directives, creative_presets_payload
 from media_platforms import list_media_platforms
 from media_ad import generate_media_copy, generate_media_images
@@ -658,6 +658,37 @@ def _deactivate_conflicting(db, usages: list, exclude_id: int | None = None):
         if ou and ou <= uset:   # 旧配置的用途是新配置用途的子集 → 安全停用
             o.is_active = False
 
+
+def _norm_model_key(provider: str, base_url: str, model: str):
+    """同一「大模型配置」的身份键：接口协议（统一解析为协议串）+ 请求链接 + 模型版本。
+
+    - provider 统一经 _resolve_protocol 解析（如 qwen-maas → openai），避免同一端点被
+      不同 provider 串重复登记；
+    - base_url 去掉首尾空白与结尾斜杠并按小写比较（兼容 http://x/v1 与 http://x/v1/）；
+    - model 去空白、小写比较。
+    """
+    proto = (_resolve_protocol(provider or 'custom') or '').strip().lower()
+    url = (base_url or '').strip().rstrip('/').lower()
+    mdl = (model or '').strip().lower()
+    return (proto, url, mdl)
+
+
+def _dup_model_config(db, provider: str, base_url: str, model: str, exclude_id: int | None = None):
+    """若已存在 (协议, 链接, 模型) 完全相同的配置则返回该记录，否则返回 None。
+
+    exclude_id 用于编辑场景：排除正在编辑的自身，避免把自己判成重复。
+    """
+    target = _norm_model_key(provider, base_url, model)
+    if not target[1] and not target[2]:
+        return None  # 链接与模型均为空，无法构成有效配置，不判重
+    q = db.query(ModelConfig)
+    if exclude_id is not None:
+        q = q.filter(ModelConfig.id != exclude_id)
+    for m in q.all():
+        if _norm_model_key(m.provider, m.base_url, m.model) == target:
+            return m
+    return None
+
 @router.get("/settings/models", response_model=list[ModelConfigOut])
 def list_models(db: Session = Depends(get_db)):
     return db.query(ModelConfig).order_by(ModelConfig.id).all()
@@ -668,6 +699,9 @@ def create_model(req: ModelConfigIn, db: Session = Depends(get_db),
     usages = _normalize_usage(req.usage)
     if not usages:
         raise HTTPException(400, "请至少选择一个用途")
+    # 同一大模型配置只能添加一次：协议 + 请求链接 + 模型版本 完全相同即视为重复
+    if _dup_model_config(db, req.provider, req.base_url, req.model):
+        raise HTTPException(409, "已添加：检测到相同的大模型配置（接口协议 + 请求链接 + 模型版本 均一致），请勿重复添加。")
     if req.is_active:
         _deactivate_conflicting(db, usages)
     m = ModelConfig(
@@ -693,6 +727,9 @@ def update_model(mid: int, req: ModelConfigIn, db: Session = Depends(get_db),
     usages = _normalize_usage(req.usage)
     if not usages:
         raise HTTPException(400, "请至少选择一个用途")
+    # 编辑时同样防重复，但排除正在编辑的自身
+    if _dup_model_config(db, req.provider, req.base_url, req.model, exclude_id=mid):
+        raise HTTPException(409, "已添加：检测到相同的大模型配置（接口协议 + 请求链接 + 模型版本 均一致），请勿重复添加。")
     if req.is_active:
         _deactivate_conflicting(db, usages, exclude_id=mid)
     m.name = req.name

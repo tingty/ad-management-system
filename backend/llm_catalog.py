@@ -69,6 +69,17 @@ LLM_PRESETS = [
         "notes": "务必使用 compatible-mode/v1 端点，否则模型找不到（404）。",
     },
     {
+        "key": "qwen-maas", "name": "千问文本大模型（MaaS 专属部署）", "protocol": "openai",
+        "default_base_url": "https://llm-nqw1vl6mhnuxv7d5.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+        "base_url_editable": True,
+        "models": ["qwen-plus", "qwen-max", "qwen2.5-72b-instruct", "qwen-long"],
+        "api_key_label": "DashScope MaaS API Key", "api_key_placeholder": "sk-...",
+        "model_placeholder": "qwen-plus",
+        "docs_url": "https://help.aliyun.com/zh/model-studio/",
+        "setup_guide": "1) 在对应 MaaS 工作空间/部署控制台复制「绑定该工作空间的专用 API Key」（账户级 Key 会被 403 拒绝）；2) Base URL 用该工作空间的完整兼容模式地址（形如 .../compatible-mode/v1，整条即地址）；3) Model 填 qwen-plus；4) 保存并测试。",
+        "notes": "专属 MaaS 工作空间部署，OpenAI 兼容协议（/compatible-mode/v1）。注意工作空间级 Key 与账户级 Key 不互通，且需与该工作空间区域一致。",
+    },
+    {
         "key": "qwen-intl", "name": "通义千问（DashScope 国际站 / International）", "protocol": "openai",
         "default_base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         "base_url_editable": True,
@@ -462,7 +473,7 @@ def modality_of(protocol: str) -> str:
 #       通义千问、Kimi、DeepSeek、GLM、文心一言、MiniMax、豆包、腾讯混元、百川大模型。
 MAINSTREAM_KEYS = {
     "openai", "anthropic", "google", "xai", "cohere", "mistral", "meta-llama",
-    "qwen", "moonshot", "deepseek", "zhipu", "ernie", "minimax", "doubao",
+    "qwen", "qwen-maas", "moonshot", "deepseek", "zhipu", "ernie", "minimax", "doubao",
     "hunyuan", "baichuan", "gemma",
 }
 
