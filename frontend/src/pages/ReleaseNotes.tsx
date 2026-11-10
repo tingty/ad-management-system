@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { api, type ReleaseNote, type ReleaseNoteChange, type ReleaseNotesResponse } from '../api'
+import {
+  api, type ReleaseNote, type ReleaseNoteChange, type ReleaseNotesResponse,
+  type ReleaseCurrent, type ReleaseRoadmap,
+} from '../api'
 
 const SEEN_KEY = 'admb_lastRelease'
 
@@ -96,6 +99,9 @@ function NoteCard({ note, isNew }: { note: ReleaseNote; isNew: boolean }) {
           {note.modules.map(m => (
             <span key={m} className="rn-module">{m}</span>
           ))}
+          {note.phase_text && (
+            <span className="rn-module rn-phase">改造 {note.phase_text}</span>
+          )}
         </div>
       )}
 
@@ -140,6 +146,97 @@ function NoteCard({ note, isNew }: { note: ReleaseNote; isNew: boolean }) {
       </button>
       {open && <ReleaseBody body={note.body} />}
     </article>
+  )
+}
+
+/** V4.39：当前版本号 + 主要更新内容（顶部高亮卡片） */
+function CurrentRelease({ current }: { current: ReleaseCurrent }) {
+  const rest = Math.max(0, (current.changes?.length || 0) - (current.highlights?.length || 0))
+  return (
+    <div className="card rn-current">
+      <div className="rn-cur-top">
+        <div>
+          <div className="rn-cur-kicker">当前更新版本</div>
+          <div className="rn-cur-ver">
+            {current.version}
+            <span className="rn-cur-badge">最新发布</span>
+          </div>
+          <div className="rn-cur-title">{current.title} · {current.date || '发布日期待补充'}</div>
+        </div>
+        {current.phase_text && (
+          <div className="rn-cur-phase">
+            <span>本期改造</span>
+            <b>{current.phase_text}</b>
+          </div>
+        )}
+      </div>
+
+      {current.summary && <div className="rn-cur-summary">{current.summary}</div>}
+
+      <div className="rn-cur-block">
+        <div className="rn-cur-label">主要更新内容</div>
+        {(current.highlights || []).length > 0 ? (
+          <ul className="rn-cur-list">
+            {current.highlights.map((h, i) => (
+              <li key={i}>
+                <span className={`rn-ct rn-ct-${typeTone(h.type)}`}>{h.type}</span>
+                <b>{[h.module, h.title].filter(Boolean).join(' / ')}</b>
+                {h.detail && <span className="muted"> — {h.detail}</span>}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="muted">本版本暂无结构化改动条目，可展开下方完整发版记录查看。</div>
+        )}
+        {rest > 0 && <div className="rn-cur-more muted">另有 {rest} 项改动，见下方版本详情。</div>}
+      </div>
+
+      <div className="rn-cur-foot">
+        {current.issue_ids?.length > 0 && <span>本期修复问题：{current.issue_ids.join(' / ')}</span>}
+        {current.change_types?.length > 0 && <span>变更类型：{current.change_types.join(' / ')}</span>}
+      </div>
+    </div>
+  )
+}
+
+const PHASE_LABEL: Record<string, string> = {
+  done: '已完成', in_progress: '进行中', planned: '规划中',
+}
+
+/** V4.39：每期 3 个问题的改造进度，状态由 CHANGELOG 发版记录自动驱动 */
+function RoadmapPanel({ roadmap }: { roadmap: ReleaseRoadmap }) {
+  return (
+    <div className="card rn-roadmap">
+      <div className="rn-rm-head">
+        <b>系统改造进度</b>
+        <span className="muted">依据《广告素材平台问题诊断与AI改造实施说明书》，每期改造 3 个问题、独立发版并同步版本通知</span>
+        <span className="rn-rm-count">{roadmap.done_count} / {roadmap.total} 已完成</span>
+      </div>
+      <div className="rn-rm-phases">
+        {roadmap.phases.map(p => (
+          <div className={`rn-rm-phase rn-rm-${p.status}`} key={p.index}>
+            <div className="rn-rm-phead">
+              <b>第 {p.index} 期 · {p.title}</b>
+              <span>{p.version} · {p.done_count}/{p.issues.length} · {PHASE_LABEL[p.status] || p.status}</span>
+            </div>
+            <div className="rn-rm-goal muted">{p.goal}</div>
+            <div className="rn-rm-issues">
+              {p.issues.map(i => (
+                <div className={`rn-rm-issue ${i.status}`} key={i.id}>
+                  <span className="rn-rm-id">{i.id}</span>
+                  <span className="rn-rm-name">{i.title}</span>
+                  <span className="rn-rm-state">
+                    {i.status === 'done' ? `已发布 ${i.released_version}` : '规划中'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="rn-rm-scope muted">行业适配：{p.industry_scope}</div>
+          </div>
+        ))}
+      </div>
+      <div className="rn-rm-note muted">{roadmap.industry_note}</div>
+    </div>
   )
 }
 
@@ -191,13 +288,17 @@ export default function ReleaseNotes() {
       <div className="page-head">
         <h2>新版通知</h2>
         <p className="page-sub">
-          每次优化与更改都会按「涉及模块 / 变更类型 / 功能说明 / 影响范围 / 验证结果」整理成一个版本条目，
-          发版前校验通过后随代码同步发布；历史版本自动降级为要点摘要，完整记录可展开查阅。
+          顶部显示当前更新的版本号与主要更新内容；每次优化与更改都按「涉及模块 / 变更类型 / 功能说明 /
+          影响范围 / 验证结果」整理成版本条目，发版前校验通过后随代码同步发布。
+          系统改造按「每期 3 个问题」分步推进，进度与每一期的版本通知统一在此查阅。
         </p>
       </div>
 
       {loading && <div className="card">加载中…</div>}
       {error && <div className="card err">{error}</div>}
+
+      {data?.current && <CurrentRelease current={data.current} />}
+      {data?.roadmap && <RoadmapPanel roadmap={data.roadmap} />}
 
       {data && (
         <div className="card rn-toolbar">

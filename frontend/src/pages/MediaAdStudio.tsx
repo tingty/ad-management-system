@@ -102,7 +102,10 @@ export default function MediaAdStudio() {
         selectedCopy: sel, step: 2, savedNote: '',
       })
       endTask('copy_ready', '广告文案已生成',
-        `共 ${res.schema.reduce((n, f) => n + f.count, 0)} 条可编辑文案；生成图片前可逐条勾选作为创意素材。`)
+        `共 ${res.schema.reduce((n, f) => n + f.count, 0)} 条可编辑文案；生成图片前可逐条勾选作为创意素材。` +
+        (res.needs_revision?.length
+          ? ` 其中 ${res.needs_revision.length} 条超长文案语义压缩未通过（needs_revision），需人工修改后才能作为合格素材。`
+          : ''))
       // V4.36：文案一生成即写入历史，即使后续没有出图也能在「素材历史」查阅 / 再下载
       if (s.historyId) {
         api.updateCreationHistory(s.historyId, {
@@ -180,10 +183,12 @@ export default function MediaAdStudio() {
       })
       updateSession({
         images: res.images, imageModel: res.image_model, imgNote: res.note || '',
+        imageIssues: res.issues || [],
         step: 3, viewer: null, checked: [], savedNote: '',
       })
       endTask('images_ready', '本批推广图片已生成',
-        `成功 ${res.images.length} 张；每张图片已标注所用创意文案，可放大查阅、单张或打包下载。`)
+        `成功 ${res.images.length} 张；每张图片已标注所用创意文案，可放大查阅、单张或打包下载。` +
+        (res.issues?.length ? ` 另有 ${res.issues.length} 个版位因图内文案超预算被阻止生成（needs_revision）。` : ''))
       // V4.36：把「编辑后的最终文案 + 本批图片 + 风格 / 模型」写回历史会话（追加）
       if (s.historyId) {
         const finalCopy = {
@@ -341,6 +346,26 @@ export default function MediaAdStudio() {
           <h3>② 广告文案（已结合落地页分析结论生成，可编辑并勾选用于出图）</h3>
           <ModelBadge info={s.copy.model_info} fallbackText="文案未走大模型" />
 
+          {/* V4.39 / F01：残句不再被判合格，压缩失败必须显式阻断 */}
+          {(s.copy.needs_revision?.length || 0) > 0 && (
+            <div className="alert warn rev-alert">
+              <b>{s.copy.needs_revision!.length} 条超长文案未通过语义压缩（needs_revision）</b>
+              <div className="muted">
+                已保留完整原文，不会输出残句或省略号；这些字段不得作为合格素材导出。
+                请手动缩短后重新生成，或改用其它文案。系统优先保留否定、价格条件、订阅 / 退款限制。
+              </div>
+              <ul className="rev-list">
+                {s.copy.needs_revision!.map((x, i) => (
+                  <li key={i}>
+                    <b>{x.label}{x.index > 1 ? ` #${x.index}` : ''}</b>：
+                    {x.original.length} 字 / 预算 {x.limit} 字
+                    {x.protected?.length ? ` · 必须保留：${x.protected.slice(0, 4).join('、')}` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="cp-toolbar">
             <div className="cp-tb-left">
               <b>创意文案选用</b>
@@ -468,6 +493,16 @@ export default function MediaAdStudio() {
           <h3>③ 推广图片素材</h3>
           {s.imageModel && <ModelBadge info={s.imageModel} fallbackText="使用 Pillow 模板兜底" />}
           {s.imgNote && <p className="muted">{s.imgNote}</p>}
+          {(s.imageIssues || []).length > 0 && (
+            <div className="alert warn rev-alert">
+              <b>{s.imageIssues.length} 个版位未生成（needs_revision）</b>
+              <ul className="rev-list">
+                {s.imageIssues.map((x, i) => (
+                  <li key={i}><b>{x.size}{x.placement ? ` · ${x.placement}` : ''}</b>：{x.message}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {s.savedNote && <div className="alert ok">{s.savedNote}</div>}
 
           {s.images.length > 0 && (

@@ -26,6 +26,13 @@ export interface ReleaseNoteChange {
   title: string       // 功能 / 子模块
   detail: string      // 具体改动说明
 }
+/** V4.39：当前版本「主要更新内容」要点 */
+export interface ReleaseHighlight {
+  type: string
+  module: string
+  title: string
+  detail: string
+}
 export interface ReleaseNote {
   version: string
   title: string
@@ -38,6 +45,52 @@ export interface ReleaseNote {
   impact: string[]                // 影响范围
   verification: string[]          // 验证结果
   has_structured: boolean         // 是否为 V4.37 起的结构化版本
+  phase_text?: string             // 改造期次，如「第 1 期（F01 / F02 / F10）」
+  phase_index?: number | null
+  issue_ids?: string[]
+  highlights?: ReleaseHighlight[]
+}
+/** V4.39：AI 改造分期进度（每期 3 个问题，状态由 CHANGELOG 发版记录驱动） */
+export interface RoadmapIssue {
+  id: string
+  title: string
+  cases: string[]
+  status: 'done' | 'planned'
+  released_version: string | null
+  released_date: string | null
+}
+export interface RoadmapPhase {
+  index: number
+  version: string
+  title: string
+  goal: string
+  industry_scope: string
+  issues: RoadmapIssue[]
+  done_count: number
+  status: 'done' | 'in_progress' | 'planned'
+  released_version: string | null
+}
+export interface ReleaseRoadmap {
+  baseline_commit: string
+  source_doc: string
+  tracker_doc: string
+  phases: RoadmapPhase[]
+  total: number
+  done_count: number
+  industry_note: string
+}
+export interface ReleaseCurrent {
+  version: string
+  title: string
+  date: string | null
+  summary: string
+  modules: string[]
+  change_types: string[]
+  phase_text: string
+  phase_index: number | null
+  issue_ids: string[]
+  highlights: ReleaseHighlight[]
+  changes: ReleaseNoteChange[]
 }
 export interface ReleaseNotesResponse {
   latest: string | null
@@ -46,6 +99,8 @@ export interface ReleaseNotesResponse {
   change_types: string[]
   total: number
   structured_count: number
+  current: ReleaseCurrent | null
+  roadmap: ReleaseRoadmap
 }
 
 export interface ModelConfig {
@@ -225,7 +280,13 @@ export interface ModelInfo {
   provider: string
   model: string
   role: string        // 实际用途：analysis / copy（分析模型未配则复用文案模型）
-  fallback: boolean   // true = 实际走了 Mock 兜底（未配置有效模型）
+  fallback: boolean   // true = 调用后确实走了 Mock 兜底
+  /** V4.39 / F10：调用快照，展示与真实调用一致 */
+  config_id?: number | null
+  source?: string     // llm / mock / invalid_response / local
+  request_id?: string
+  error_type?: string
+  retries?: number
 }
 
 export interface LandingAnalysis {
@@ -239,7 +300,39 @@ export interface LandingAnalysis {
   advantages: string[]     // (7) 优势（≤5）
   channels: LandingChannel[]  // (8) 推广途径（≤5，含平台+理由）
   model_info: ModelInfo
-  source: string           // llm / local —— 结果是否真的来自大模型推理
+  source: string           // llm / mock / local —— 结果是否真的来自大模型推理
+  /** V4.39 / F02：抓取环境与品牌 / Logo 证据；输入链接只用于追踪 */
+  brand?: string
+  brand_status?: 'confirmed' | 'unverified' | 'needs_input'
+  brand_candidates?: string[]
+  brand_reason?: string
+  logo_source?: string
+  logo_verified?: boolean
+  logo_reason?: string
+  input_url?: string
+  final_url?: string
+  redirect_chain?: string[]
+  fetch_quality?: string
+  /** 行业 / 品类画像：可局部调整，不改通用主干 */
+  industry_profile?: string
+  industry_profile_label?: string
+}
+
+/** V4.39：行业 / 品类画像（用于「素材创作」局部调整） */
+export interface IndustryProfile {
+  key: string
+  label: string
+  value_axes: string[]
+  evidence_types: string[]
+  visual_subject: string
+  must_preserve: string[]
+  copy_focus: string
+}
+export interface IndustryProfilesResponse {
+  profiles: IndustryProfile[]
+  total: number
+  generic_rules: string[]
+  note: string
 }
 
 /* ----------------------------- 媒体推广的媒体平台设置 ----------------------------- */
@@ -262,15 +355,39 @@ export interface MediaPlatform {
   cta_options: string[]
 }
 
+/** V4.39 / F01：一条需要人工修改的超长文案（不得作为合格素材导出） */
+export interface CopyRevisionNeeded {
+  field: string
+  label: string
+  index: number
+  original: string
+  limit: number
+  protected: string[]
+  reason: string
+}
 export interface MediaCopyResult {
   platform: string
   lang: string
   fields: Record<string, any>
   schema: { key: string; label: string; max: number; count: number }[]
   char_table: { field: string; text: string; len: number; max: number; over: boolean }[]
-  validation: { valid: boolean; issues: { level: string; code: string; message: string }[]; problems?: any[] }
+  validation: {
+    valid: boolean
+    status?: string       // ok / needs_revision / invalid
+    issues: { level: string; code: string; message: string }[]
+    problems?: any[]
+    needs_revision?: CopyRevisionNeeded[]
+  }
   model_info: ModelInfo
   brand: string
+  /** V4.39：原始模型输出、裁剪记录、语义压缩记录 */
+  raw_fields?: Record<string, any>
+  clips?: any[]
+  copy_revisions?: any[]
+  needs_revision?: CopyRevisionNeeded[]
+  industry_profile?: string
+  industry_profile_label?: string
+  compress_calls?: number
 }
 
 /** V4.38：一条被勾选的「创意文案组合」，会叠加到一张推广图片上 */
@@ -294,12 +411,24 @@ export interface MediaImageItem {
   copy?: { headline: string; sub: string; cta: string }
 }
 
+/** V4.39 / F01：因图内文案超出版位预算而被阻止生成的版位 */
+export interface MediaImageIssue {
+  level: string
+  size: string
+  placement: string
+  message: string
+}
 export interface MediaImageResult {
   platform: string
   images: MediaImageItem[]
   image_model: ModelInfo
   note: string
   count: number
+  copy_variant_count?: number
+  status?: 'ok' | 'partial_success'
+  issues?: MediaImageIssue[]
+  skipped?: any[]
+  strict_text?: boolean
 }
 
 /* ----------------------------- V4.36 素材历史 ----------------------------- */
@@ -385,6 +514,9 @@ export const api = {
   // 素材创作：营销推广的媒体平台设置 —— 平台规格目录
   mediaPlatforms: () =>
     req<MediaPlatform[]>('/api/media-platforms'),
+  // V4.39：行业 / 品类画像（通用主干 + 局部调整）
+  industryProfiles: () =>
+    req<IndustryProfilesResponse>('/api/industry-profiles'),
   // 基于落地页分析结论 + 选中平台，调用大模型生成可编辑广告文案
   mediaCopy: (payload: { analysis: LandingAnalysis; platform: string; lang?: string }) =>
     req<MediaCopyResult>('/api/media-campaign/copy', { method: 'POST', body: JSON.stringify(payload) }),

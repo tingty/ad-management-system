@@ -1317,3 +1317,37 @@
 - 「任务不中断」的作用域是应用内切换菜单：组件常驻挂载，请求继续运行。关闭浏览器或整页刷新会中断网络请求，此时恢复现场并明确标注「上次任务未完成」；如需跨设备 / 跨会话的后台任务，后续可升级为服务端任务队列 + 进度轮询。
 - 文案组合按「标题池 / 副标池 / CTA 池」各自按序配对，组合数取最长池长度，上限 40；图片数超过组合数时循环复用，未勾选的文案只留档、不出图。
 - 会话快照按登录用户 id 隔离存于浏览器本地，不上传服务端；「新建创作会话」只清本地工作台，已写入「素材历史」的记录与图片文件保持不变。
+
+## V4.39 AI 改造第 1 期：输入与输出可信度（F01 / F02 / F10）
+
+**发布日期**：2026-11-10
+**变更类型**：修复 / 新增 / 优化 / 发布
+**涉及模块**：素材创作平台、落地页分析、广告文案、推广图片、行业适配、大模型配置、数据模型、后端接口、前端与菜单、新版通知、发版流程、改造追踪、系统设置
+**变更摘要**：按《广告素材平台问题诊断与AI改造实施说明书》启动分期改造，第 1 期修复 3 个确定性缺陷——超长文案不再被裁成残句还判合格、品牌与 Logo 不再从追踪域名 / 原始 URL 错误推导、模型展示与真实调用归因一致；同时建立行业 / 品类通用主干与局部配置，让电商、订阅之外的行业走同一链路，并在「新版通知」顶部显示当前版本号与主要更新内容、统一展示各期改造进度。
+**改造期次**：第 1 期（F01 / F02 / F10）
+
+**本次优化与更改的功能 / 模块**
+- 【新增】改造追踪 / 问题追踪表与分期路线图：新增 `docs/REMEDIATION_TRACKER.md`，逐项记录 F01–F12 的说明书状态、当前代码核对结果、触发输入、修改文件、验收用例与实施状态；12 个问题按「每期 3 个、独立提交、独立版本通知」拆成 4 期，并标明每期的行业适配落点。说明书中的 Product / Offer / Evidence / Concept / VisualBrief / SpecProfile / GenerationJob / CreativeAsset 归为新增设计需求，不占用问题配额。
+- 【新增】行业适配 / 通用主干 + 局部配置：新增 `backend/industry_profiles.py`，提供电商零售、订阅 / SaaS、App / 游戏、B2B、旅游 / 本地生活、教育、金融合规与通用共 8 个画像；每个画像只定义价值维度、必须保留的语义、需核验的事实类型、视觉主体与文案重点。主干链路对所有行业一致，未命中关键词时回落 `general`，不猜产品事实、不编造价格或功效。新增 `GET /api/industry-profiles` 供前端局部调整。
+- 【修复】广告文案 / F01 残句判定：`_build_fields_checked` 保留原始模型输出与逐条裁剪状态；超长文案改为有限次「语义压缩」（单字段最多 2 次、单次生成最多 6 次调用），必须保留否定词、价格 / 折扣、期限、试用 / 续费 / 退款 / 取消限制，且输出完整短句。压缩仍失败则返回 `needs_revision`（`valid=false`），字段保留完整原文并明确阻断，不再出现 "Book in minutes." 被裁成 "Book in" 却判合格的情况。
+- 【修复】推广图片 / F01 图内文字预算：平台正文与图内文字分离，新增 `build_overlay_text` + `imaging.text_budget`，按版位尺寸估算标题 / 副标 / CTA 可容纳字符；`render_ad_png` 增加 `strict_text`，放不下时抛 `TextOverflowError` 而不是追加省略号。超预算版位标记 `needs_revision` 并阻止生成，返回 `status=partial_success` / `issues` / `skipped`；前端 Step 2、Step 3 分别展示待修改文案与未生成版位。保留 `style_opts.strict_text=false` 作为上线应急开关。
+- 【修复】落地页分析 / F02 品牌与最终地址：`_brand_of` 不再用 host 倒数第二段推导品牌（`convert.ctypy.com` → Ctypy、`shop.example.co.uk` → Co）；品牌只来自结构化数据、官方页面资料（JSON-LD Organization / og:site_name）或用户明确确认，无法确认时标为 `needs_input` / `unverified` 并给出候选与原因。`fetch_page` 分别保存 `input_url` / `final_url` / `redirect_chain` / `status` / `content_type` / `fetch_quality`，所有相对链接与 Logo 以最终地址解析；`og:image` 不再被无条件当作 Logo，自动来源一律标注「待核验」。
+- 【修复】大模型配置 / F10 路由与归因：`_pick_config` 候选先过滤 `is_active`，停用但历史测试成功的配置不再被自动调用；新增 `get_llm_with_info` / `resolve_analysis_llm` / `finalize_invocation`，展示与真实调用共用同一 `config_id` / `request_id`，`fallback` 与 `source` 在 `chat()` 结束后刷新，Mock 返回可解析 JSON 不再被误标为 `source=llm`；`FallbackLLM` 记录 timeout / auth / rate_limit / network / upstream 错误分类，调用快照不含任何凭据。
+- 【新增】素材创作 / 可核验信息面板：分析结果新增「输入可信度与行业适配」区块，展示输入链接、最终落地页、跳转次数、抓取质量、模型调用来源与快照、品牌状态、Logo 来源与核验原因；品牌可手动确认（写入后视为 `confirmed`），行业 / 品类可下拉切换，并展示该画像的价值维度、需核验事实与视觉主体。
+- 【新增】新版通知 / 当前版本与主要更新内容：`release_notes.py` 解析 `**改造期次**`、输出 `current`（版本号、日期、标题、摘要、主要更新内容要点、本期问题）与 `roadmap`（4 期 × 3 问题，完成状态由已发布版本自动驱动）；`ReleaseNotes.tsx` 顶部新增当前版本高亮卡片与「系统改造进度」面板，历史版本列表保留原有筛选与完整发版记录，并在版本卡片上标注改造期次。
+- 【优化】发版流程 / 每期闭环：`prepare_release.py` 增加改造期次校验（必须恰好 3 个问题、编号属于路线图同一期、版本号与期次一致），并把 `docs/REMEDIATION_TRACKER.md` 纳入模块覆盖；`backend/main.py` 版本号升至 4.39.0，README 同步当前版本与改造说明。
+
+**影响范围**
+- 前端：`api.ts` 增加行业画像、调用快照、文案 `needs_revision` 与图片 `issues` 类型；`MaterialCreation.tsx` 增加可信度面板与品牌 / 行业局部调整；`MediaAdStudio.tsx` 展示待修改文案与未生成版位；`creationSession.ts` 增加 `imageIssues`；`ReleaseNotes.tsx` 增加当前版本卡片与改造进度；`styles.css` 增加对应样式。
+- 后端：新增 `industry_profiles.py`、`roadmap.py`；`text_utils.py`、`imaging.py`、`media_ad.py`、`services.py`、`providers.py`、`schemas.py`、`routers.py`、`release_notes.py`、`main.py` 按上述修复调整；`LandingAnalysis` / `ModelInfo` 增加可选字段，`/api/landing-analysis` 响应体新增证据字段。
+- 数据：无数据库迁移。分析结果不落库（仅写入素材历史的 `analysis_json`，旧记录缺新字段时按空值展示）；模型配置不新增列。
+- 兼容性：`/api/media-campaign/copy` 与 `/images` 的入参、返回结构保持向后兼容，新增字段均为可选；不传 `copy_variants` 时仍按旧行为出图，但同样受图内文字预算约束；`style_opts.strict_text=false` 可临时恢复宽松排版。
+- 行为变化：品牌不再由域名自动填充，未确认时图片品牌条为空并标注「未确认品牌」；超长且压缩失败的文案 / 版位不会作为合格素材导出，页面会明确列出待修改项。
+- 权限：新增 `/api/industry-profiles` 对所有登录角色可读；新版通知仍对所有登录角色（含 viewer）开放。
+
+**验证**
+- 后端全量 `compileall` 通过，`import main` 正常，版本号 4.39.0。
+- DB 副本确定性回归 33 项断言全通过，覆盖 T01 / T02 / T03 / T04 / T13 / T14：残句阻断与语义压缩成功 / 失败两条路径、否定与价格及订阅限制保留、追踪域名与多级后缀品牌、跳转后相对 Logo 与 og:image 待核验、停用配置不可选、超时回退归因与 Mock 不误标 llm。
+- DB 副本 TestClient 端到端 22 项断言全通过：新版通知 `current`（V4.39 + 主要更新内容）与 `roadmap`（3/12 已完成）、行业画像接口、落地页分析证据字段、文案调用快照、短文案 4 版位 PNG 真实落盘、超预算版位 `partial_success` 且不出残图、旧调用兼容、`strict_text=false` 应急开关、素材历史与 viewer 权限。
+- 前端 `tsc --noEmit` 与 `vite build` 通过（43 模块，253.88 kB JS / 52.51 kB CSS）；`prepare_release.py --check` 通过且无警告（含改造期次 3 问题 / 版本一致性校验）。详细命令与结果见 `docs/REMEDIATION_TRACKER.md` 第 1 期验证记录。
+- 未验证 / 未实施：F03–F09、F11、F12 属第 2–4 期，本次未改动；未运行真实付费模型调用、未测量投放效果，不承诺任何 ROAS / CPA 提升；新增媒体规格、真实商品图与效果反馈链路均留待对应期次并附官方来源与核验日期。

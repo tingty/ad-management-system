@@ -47,6 +47,26 @@ REQUIRED_FIELDS = ("发布日期", "变更类型", "涉及模块", "变更摘要
 REQUIRED_SECTIONS = ("本次优化与更改的功能 / 模块", "影响范围", "验证")
 TODO_MARKERS = ("TODO", "待补充", "待填写", "占位", "<请", "XXX")
 
+# V4.39：AI 改造按「每期 3 个问题、独立发版」推进。版本通知里的 `**改造期次**`
+# 是进度闭环的唯一证据来源，roadmap.resolve_roadmap 据此标记哪些问题已发布。
+def _phase_of(fields: dict) -> dict:
+    from roadmap import parse_phase
+    return parse_phase(fields.get("改造期次", ""))
+
+
+def _highlights(changes: list, limit: int = 4) -> list[dict]:
+    """当前版本的「主要更新内容」：取前几条结构化改动，供新版通知顶部卡片直接展示。"""
+    out = []
+    for c in changes[:limit]:
+        detail = (c.get("detail") or "").strip()
+        out.append({
+            "type": c.get("type") or "变更",
+            "module": c.get("module") or "",
+            "title": c.get("title") or "",
+            "detail": detail[:150] + ("…" if len(detail) > 150 else ""),
+        })
+    return out
+
 _mtime = -1.0
 _cache = None  # type: ignore
 
@@ -129,6 +149,7 @@ def _parse_body(body: str) -> dict:
     modules = _split_list(fields.get("涉及模块", ""))
     change_types = [x for x in _split_list(fields.get("变更类型", "")) if x]
     summary = _clean_line(fields.get("变更摘要", ""))
+    phase = _phase_of(fields)
     return {
         "date": date,
         "summary": summary,
@@ -138,6 +159,10 @@ def _parse_body(body: str) -> dict:
         "impact": impact,
         "verification": verification,
         "has_structured": bool(summary and modules and change_types and structured),
+        "phase_text": _clean_line(fields.get("改造期次", "")),
+        "phase_index": phase["index"],
+        "issue_ids": phase["issues"],
+        "highlights": _highlights(changes),
     }
 
 
@@ -200,16 +225,32 @@ def _aggregate(notes: list) -> dict:
 
 
 def get_release_notes() -> dict:
-    """返回 {latest, notes, modules, change_types, total, structured_count}，带 mtime 缓存。"""
+    """返回版本通知全量数据（带 mtime 缓存）。
+
+    V4.39 新增 `current`（当前版本 + 主要更新内容）与 `roadmap`（分期改造进度），
+    供「新版通知」顶部直接显示当前版本号、主要内容和每期改造状态。
+    """
     global _mtime, _cache
     try:
         st = os.stat(_CHANGELOG)
     except Exception:
+        from roadmap import resolve_roadmap
         return {"latest": None, "notes": [], "modules": [], "change_types": [],
-                "total": 0, "structured_count": 0}
+                "total": 0, "structured_count": 0, "current": None,
+                "roadmap": resolve_roadmap([])}
     if _cache is None or st.st_mtime != _mtime:
+        from roadmap import resolve_roadmap
         notes, latest = _parse(_CHANGELOG)
-        _cache = {"latest": latest, "notes": notes, **_aggregate(notes)}
+        top = notes[0] if notes else None
+        current = None
+        if top:
+            current = {k: top[k] for k in (
+                "version", "title", "date", "summary", "modules", "change_types",
+                "phase_text", "phase_index", "issue_ids", "highlights", "changes")}
+        _cache = {
+            "latest": latest, "notes": notes, **_aggregate(notes),
+            "current": current, "roadmap": resolve_roadmap(notes),
+        }
         _mtime = st.st_mtime
     return _cache
 

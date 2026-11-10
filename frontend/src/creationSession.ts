@@ -10,7 +10,8 @@
  */
 import { useSyncExternalStore } from 'react'
 import type {
-  LandingAnalysis, MediaCopyResult, MediaImageItem, ModelInfo, CopyVariant,
+  LandingAnalysis, MediaCopyResult, MediaImageItem, MediaImageIssue,
+  ModelInfo, CopyVariant,
 } from './api'
 export type { CopyVariant } from './api'
 
@@ -71,6 +72,8 @@ export interface CreationSession {
   images: MediaImageItem[]
   imageModel: ModelInfo | null
   imgNote: string
+  /** V4.39 / F01：因图内文案超预算被阻止生成的版位（不合格不导出） */
+  imageIssues: MediaImageIssue[]
   viewer: number | null
   checked: string[]
   savedNote: string
@@ -96,6 +99,7 @@ export function studioDefaults(): Partial<CreationSession> {
     images: [],
     imageModel: null,
     imgNote: '',
+    imageIssues: [],
     viewer: null,
     checked: [],
     savedNote: '',
@@ -123,6 +127,7 @@ function sanitize(raw: any): CreationSession {
   merged.analysis = raw.analysis && typeof raw.analysis === 'object' ? raw.analysis : null
   merged.copy = raw.copy && typeof raw.copy === 'object' ? raw.copy : null
   merged.images = Array.isArray(raw.images) ? raw.images : []
+  merged.imageIssues = Array.isArray(raw.imageIssues) ? raw.imageIssues : []
   merged.checked = Array.isArray(raw.checked) ? raw.checked : []
   merged.selectedPlacements = Array.isArray(raw.selectedPlacements) ? raw.selectedPlacements : []
   merged.taskLogs = Array.isArray(raw.taskLogs) ? raw.taskLogs.slice(-MAX_LOGS) : []

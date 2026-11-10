@@ -1,5 +1,5 @@
-import { useEffect, ChangeEvent } from 'react'
-import { api, LandingAnalysis, LandingChannel, ModelInfo } from '../api'
+import { useEffect, useState, ChangeEvent } from 'react'
+import { api, LandingAnalysis, LandingChannel, ModelInfo, IndustryProfile } from '../api'
 import {
   useCreationSession, updateSession, studioDefaults, clearSession, getSession,
   beginTask, endTask, failTask, logTask,
@@ -200,19 +200,39 @@ function ResultView({ data, historyId, logoMode, uploadedLogo, onLogoMode, onUpl
 }) {
   const m = data.model_info
   const llmUsed = data.source === 'llm'
+  const mockUsed = data.source === 'mock'
+  const [profiles, setProfiles] = useState<IndustryProfile[]>([])
+  useEffect(() => {
+    let alive = true
+    api.industryProfiles().then(d => alive && setProfiles(d.profiles)).catch(() => {})
+    return () => { alive = false }
+  }, [])
+  const currentProfile = profiles.find(p => p.key === data.industry_profile)
+
+  /** V4.39：用户明确确认品牌 / 调整行业画像，直接写回会话里的分析结论。 */
+  function patchAnalysis(patch: Partial<LandingAnalysis>) {
+    const cur = getSession().analysis
+    if (cur) updateSession({ analysis: { ...cur, ...patch } })
+  }
 
   return (
     <div className="card step">
-      {/* 模型信息 banner：明确"这次分析用了哪个模型" */}
+      {/* 模型信息 banner：如实区分 llm / mock / local，不把回退误标成真实模型 */}
       <div className={'la-model ' + (llmUsed ? 'ok' : 'warn')}>
         {llmUsed ? (
           <>本次分析由大模型 <b>{modelLabel(m)}</b> 推理产出。</>
+        ) : mockUsed ? (
+          <><b>实际使用了 Mock 兜底</b>：配置的模型「{modelLabel(m)}」调用失败
+          {m.error_type ? `（${m.error_type}）` : ''}，结果不可作为可投放事实；
+          请检查「大模型配置」的连通性后重试。</>
         ) : (
           <><b>未使用大模型推理</b>：{m.provider
             ? `模型「${modelLabel(m)}」调用失败`
             : '系统尚未在「大模型配置」中配置可用的「分析 / 文案」模型'}，
             以下结果为本地兜底，请在「大模型配置」中配置后重试。</>
         )}
+        {m.request_id && <span className="la-req muted">调用快照 #{m.request_id}
+          {m.config_id ? ` · 配置 ${m.config_id}` : ''} · 来源 {m.source || data.source}</span>}
       </div>
 
       <div className="la-next">
@@ -234,6 +254,75 @@ function ResultView({ data, historyId, logoMode, uploadedLogo, onLogoMode, onUpl
             <a href={data.url} target="_blank" rel="noreferrer">{data.url}</a>
           ) : '—'}
         </div>
+      </div>
+
+      {/* V4.39：F02 / F10 的可核验信息 + 行业画像局部调整 */}
+      <div className="la-trust">
+        <div className="la-trust-head">
+          <b>输入可信度与行业适配</b>
+          <span className="muted">V4.39 · 通用主干 + 局部调整</span>
+        </div>
+        <div className="la-trust-grid">
+          <div className="la-trust-item"><span>输入链接（仅追踪）</span><b>{data.input_url || data.url || '—'}</b></div>
+          <div className="la-trust-item"><span>最终落地页（相对链接基准）</span><b>{data.final_url || '—'}</b></div>
+          <div className="la-trust-item">
+            <span>跳转 / 抓取质量</span>
+            <b>{(data.redirect_chain || []).length} 次跳转 · {{
+              ok: '正常', thin_content: '正文过少', fetch_failed: '抓取失败',
+              manual_text: '手工正文', not_fetched: '未抓取',
+            }[data.fetch_quality || 'not_fetched'] || data.fetch_quality}</b>
+          </div>
+          <div className="la-trust-item">
+            <span>模型调用来源</span>
+            <b>{data.source === 'llm' ? '真实大模型' : data.source === 'mock' ? 'Mock 兜底（不可作投放事实）' : '本地兜底'}
+              {m.error_type ? ` · ${m.error_type}` : ''}</b>
+          </div>
+        </div>
+        <div className="la-trust-row">
+          <span className="la-trust-key">品牌</span>
+          <input
+            className="la-trust-input"
+            value={data.brand || ''}
+            placeholder="未确认时留空，不从追踪域名猜测"
+            onChange={e => patchAnalysis({
+              brand: e.target.value,
+              brand_status: e.target.value.trim() ? 'confirmed' : 'needs_input',
+            })}
+          />
+          <span className={`la-badge la-badge-${data.brand_status || 'needs_input'}`}>
+            {{ confirmed: '已确认', unverified: '待核实', needs_input: '待补充' }[data.brand_status || 'needs_input']}
+          </span>
+          <span className="muted">{data.brand_reason || '—'}</span>
+        </div>
+        <div className="la-trust-row">
+          <span className="la-trust-key">Logo</span>
+          <span>{data.logo_source || '未抓取'} · {data.logo_verified ? '已核验' : '待核验'}</span>
+          <span className="muted">{data.logo_reason || '—'}</span>
+        </div>
+        <div className="la-trust-row">
+          <span className="la-trust-key">行业 / 品类</span>
+          <select
+            className="la-trust-select"
+            value={data.industry_profile || '__auto__'}
+            onChange={e => {
+              const v = e.target.value
+              const p = profiles.find(x => x.key === v)
+              patchAnalysis({ industry_profile: v === '__auto__' ? '' : v,
+                industry_profile_label: p ? p.label : '自动识别' })
+            }}
+          >
+            <option value="__auto__">自动识别（当前：{data.industry_profile_label || '通用 / 未分类'}）</option>
+            {profiles.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+          <span className="muted">切换画像只调整价值维度、语义保护、证据类型与视觉主体，通用链路不变。</span>
+        </div>
+        {currentProfile && (
+          <div className="la-profile-detail">
+            <span>价值维度：{currentProfile.value_axes.join(' / ')}</span>
+            <span>需核验事实：{currentProfile.evidence_types.join(' / ')}</span>
+            <span>视觉主体：{currentProfile.visual_subject}</span>
+          </div>
+        )}
       </div>
 
       {/* (2)-(5) 基础四字段 */}

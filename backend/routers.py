@@ -47,6 +47,21 @@ async def api_media_platforms(_: User = Depends(require_roles(*CAN_EDIT))):
     """营销推广媒体平台规格：数量 / 规格 / 尺寸 / 常规方案 / 字数红线。供前端展示与预选。"""
     return list_media_platforms()
 
+
+@router.get("/industry-profiles")
+def api_industry_profiles(_: User = Depends(require_roles(*ROLES))):
+    """V4.39：行业 / 品类画像列表，供「素材创作」局部调整。
+
+    主干链路对所有行业一致；画像只调整价值维度、必须保留的语义、证据类型与视觉主体。
+    """
+    from industry_profiles import list_profiles, INDUSTRY_PROFILES, GENERIC_PATTERNS
+    return {
+        "profiles": list_profiles(),
+        "total": len(INDUSTRY_PROFILES),
+        "generic_rules": [label for _pat, label in GENERIC_PATTERNS],
+        "note": "电商购买 / 订阅转化只是两个画像；未命中时使用 general，不猜产品事实。",
+    }
+
 @router.post("/media-campaign/copy")
 async def api_media_campaign_copy(req: MediaCopyRequest, db: Session = Depends(get_db),
                                   user: User = Depends(require_roles(*CAN_EDIT))):

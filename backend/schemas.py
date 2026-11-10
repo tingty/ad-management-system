@@ -100,12 +100,17 @@ class LandingChannel(BaseModel):
     reason: str
 
 class ModelInfo(BaseModel):
-    """本次分析实际调用的大模型信息（用于前端展示"用了哪个模型"）。"""
+    """本次分析实际调用的大模型信息（V4.39 / F10：调用快照，不含任何凭据）。"""
     model_config = {"protected_namespaces": ()}   # 允许字段名 model_info 不被 "model_" 保护前缀拦截
     provider: str = ""          # 厂商，如 openai / dashscope / anthropic
     model: str = ""             # 具体模型标识
     role: str = "analysis"      # 实际用途：analysis / copy（分析模型未配时复用文案模型）
-    fallback: bool = True       # True = 实际走了 Mock 兜底（未配置有效模型）
+    fallback: bool = True       # True = 调用后确实走了 Mock 兜底
+    config_id: Optional[int] = None    # 实际调用的配置 id（与设置页「系统采用」一致）
+    source: str = "local"       # llm / mock / invalid_response / local
+    request_id: str = ""        # 单次调用标识，便于日志追溯
+    error_type: str = ""        # timeout / auth / rate_limit / network / upstream
+    retries: int = 0
 
 class LandingAnalysis(BaseModel):
     """落地页分析结果：8 个必要字段 + 模型信息 + 来源标记。"""
@@ -119,7 +124,21 @@ class LandingAnalysis(BaseModel):
     advantages: List[str] = []   # (7) 优势（提炼核心卖点，非功能罗列，默认 ≤5）
     channels: List[LandingChannel] = []  # (8) 推广途径（媒体平台 + 推荐理由，默认 ≤5）
     model_info: ModelInfo = ModelInfo()
-    source: str = "local"       # llm / local —— 结果真的来自大模型推理，还是本地兜底
+    source: str = "local"       # llm / mock / local —— 结果真的来自大模型、Mock 还是本地兜底
+    # V4.39 / F02：抓取环境与品牌 / Logo 证据，输入链接保留用于追踪，不作为产品身份
+    brand: str = ""
+    brand_status: str = "needs_input"       # confirmed / unverified / needs_input
+    brand_candidates: List[str] = []
+    brand_reason: str = ""
+    logo_source: str = ""
+    logo_verified: bool = False
+    logo_reason: str = ""
+    input_url: str = ""
+    final_url: str = ""
+    redirect_chain: List[str] = []
+    fetch_quality: str = "not_fetched"      # ok / thin_content / fetch_failed / manual_text
+    industry_profile: str = "general"       # 行业画像 key（前端可覆盖，实现局部调整）
+    industry_profile_label: str = "通用 / 未分类"
     class Config:
         from_attributes = True
         protected_namespaces = ()   # 允许字段名 model_info 不被 "model_" 保护前缀拦截

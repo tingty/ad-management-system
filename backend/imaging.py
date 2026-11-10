@@ -212,8 +212,17 @@ if not _has_cjk():
     )
 
 
-def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines: int) -> list[str]:
-    """折行：含空格按词折（避免英文断词），中文按字符折；超出行数加省略号。"""
+class TextOverflowError(Exception):
+    """V4.39 / F01：文字在给定版位内无法完整排版，不允许用省略号蒙混过关。"""
+
+
+def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines: int,
+          allow_ellipsis: bool = True) -> list[str]:
+    """折行：含空格按词折（避免英文断词），中文按字符折。
+
+    默认超出行数加省略号（兼容历史调用）；`allow_ellipsis=False` 时改为抛
+    TextOverflowError，由上层把该版位标记为 needs_revision 而不是输出残图。
+    """
     text = (text or "").strip()
     if not text:
         return []
@@ -254,12 +263,42 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines:
 
     if cur:
         lines.append(cur)
-    if len(lines) >= max_lines and i < len(units):
-        last = lines[max_lines - 1]
-        while last and draw.textlength(last + "…", font=font) > max_width:
-            last = last[:-1]
-        lines[max_lines - 1] = last + "…"
+    complete = (i >= len(units)) and len([ln for ln in lines if ln]) <= max_lines
+    if not complete:
+        if not allow_ellipsis:
+            raise TextOverflowError(f"文字超出可排版预算（最多 {max_lines} 行）")
+        if len(lines) >= max_lines:
+            last = lines[max_lines - 1]
+            while last and draw.textlength(last + "…", font=font) > max_width:
+                last = last[:-1]
+            lines[max_lines - 1] = last + "…"
     return [ln for ln in lines[:max_lines] if ln]
+
+
+def text_budget(width: int, height: int) -> dict:
+    """V4.39 / F01：按版位像素预算估算图内文字可容纳的字符数。
+
+    平台正文（primary_text / body / description）与图内文字（headline + 短副标 + CTA）
+    是两套东西：这里只算**图内文字**预算，供 media_ad 在调用模型 / 渲染之前拦截。
+    系数 0.55 为字体平均字宽的经验值，最终以 `_wrap` 的真实字体度量为准。
+    """
+    w, h = int(width or 1080), int(height or 1080)
+    margin = max(10, int(min(w, h) * 0.06))
+    if h <= 120 or w / h > 4:
+        fs = max(11, int(h * 0.34))
+        avail = w - margin * 2 - int(w * 0.24) - 8
+        cfs = max(9, int(h * 0.26))
+        return {"layout": "banner", "headline_chars": max(6, int(avail / (fs * 0.55))),
+                "sub_chars": 0, "cta_chars": max(4, int((w * 0.24) / (cfs * 0.55)))}
+    fs = int(min(w, h) * 0.105)
+    max_width = w - margin * 2
+    cpl = max(6, int(max_width / (fs * 0.55)))
+    sfs = max(12, int(fs * 0.40))
+    sub_cpl = max(8, int(max_width / (sfs * 0.55)))
+    cfs = max(12, int(fs * 0.42))
+    return {"layout": "block", "headline_chars": cpl * 3,
+            "sub_chars": sub_cpl * 3,
+            "cta_chars": max(6, int((w * 0.6) / (cfs * 0.55)))}
 
 
 def _gradient(w: int, h: int) -> Image.Image:
@@ -332,7 +371,11 @@ def _composite_logo(img: Image.Image, logo_path: str | None, w: int, h: int) -> 
 
 def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: str,
                   cta: str, brand: str = "", bg_path: str | None = None,
-                  logo_path: str | None = None, accent: tuple = None) -> str:
+                  logo_path: str | None = None, accent: tuple = None,
+                  strict_text: bool = False) -> str:
+    """V4.39 / F01：strict_text=True 时文字放不下就抛 TextOverflowError，
+    不再用省略号代替必要说明；由上层把该版位标为 needs_revision 并阻止导出。
+    """
     accent = accent or PALETTE["accent"]
     img = _prepare_bg(width, height, bg_path)
     d = ImageDraw.Draw(img)
@@ -349,6 +392,8 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
         while d.textlength(line, font=pf) > avail and fs > 8:
             fs -= 1
             pf = _primary_font(fs)
+        if strict_text and d.textlength(line, font=pf) > avail:
+            raise TextOverflowError("小横幅标题超出可排版宽度")
         _draw_text(d, (margin, (h - fs * 1.2) / 2), line, fs, PALETTE["fg"])
         if cta:
             cfs = max(9, int(h * 0.26))
@@ -356,6 +401,8 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
             while d.textlength(cta, font=cf) + cfs * 1.4 > cta_w and cfs > 8:
                 cfs -= 1
                 cf = _primary_font(cfs)
+            if strict_text and d.textlength(cta, font=cf) + cfs * 1.4 > cta_w:
+                raise TextOverflowError("小横幅 CTA 超出可排版宽度")
             tw = d.textlength(cta, font=cf)
             bw = tw + cfs * 1.4
             bh = min(h - 8, cfs * 2.0)
@@ -373,9 +420,13 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
             hf = _primary_font(fs)
             lines = _wrap(d, headline, hf, w - pad * 2, 4)
 
+        if strict_text:
+            # 自适应阶段用探测模式，定稿后再以严格模式校验，放不下就阻断出图
+            lines = _wrap(d, headline, hf, w - pad * 2, 4, allow_ellipsis=False)
         sfs = max(12, int(fs * 0.40))
         sf = _primary_font(sfs)
-        sub_lines = _wrap(d, sub, sf, w - pad * 2, 3) if sub else []
+        sub_lines = (_wrap(d, sub, sf, w - pad * 2, 3,
+                           allow_ellipsis=not strict_text) if sub else [])
 
         cfs = max(12, int(fs * 0.42))
         cf = _primary_font(cfs)

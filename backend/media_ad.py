@@ -10,7 +10,7 @@
    V4.38：文案组合按版位顺序轮换，每张图片回传所用组合，未勾选的文案不会出现在图片上。
 
 复用既有能力：
-- providers.get_llm / get_image / parse_json / UPLOAD_DIR / _active_config
+- providers.get_llm_with_info / finalize_invocation / get_image / parse_json / UPLOAD_DIR / _active_config
 - presets.build_directives / style_visual / palette_prompt / DIRECTION_MOOD / STYLE_TO_BG / DIRECTION_TO_BG / COLOR_TO_PALETTE
 - imaging.render_ad_png
 - text_utils.fit_text
@@ -18,20 +18,23 @@
 """
 import os
 import asyncio
+import json
 import uuid
 import urllib.request
 import urllib.parse
-from typing import Optional
 
-from providers import get_llm, get_image, parse_json, UPLOAD_DIR, _active_config
+from providers import (get_llm_with_info, finalize_invocation,
+                       get_image, parse_json, UPLOAD_DIR, _active_config)
 from presets import (build_directives, style_visual, palette_prompt,
                      DIRECTION_MOOD, STYLE_TO_BG, DIRECTION_TO_BG, COLOR_TO_PALETTE)
 # V4.35：广告推广文案 / 推广图片的提示词改由「素材提示词」统一管理，保存即生效
 from services import get_prompt
 from prompt_catalog import (render_prompt, compose_copy_prompt, compose_image_prompt,
                             load_preset_overrides, MEDIA_IMAGE_SYS)
-from imaging import render_ad_png
-from text_utils import fit_text
+from imaging import render_ad_png, text_budget, TextOverflowError
+from text_utils import fit_text, clip_report
+from industry_profiles import (resolve_profile, is_complete_sentence, missing_protected,
+                               protected_fragments)
 from media_platforms import get_media_platform
 
 
@@ -121,21 +124,13 @@ def _size_wh(size: str):
 
 
 def _brand_of(analysis: dict) -> str:
-    """从 URL 域名推导品牌名（首字母大写），失败回退空串。"""
-    url = (analysis.get("url") or "").strip()
-    if url:
-        m = re_host(url)
-        if m:
-            name = m.split(".")[-2] if "." in m else m
-            return name.capitalize()
-    ind = (analysis.get("industry") or "").strip()
-    return ind.split("/")[0].strip().capitalize() if ind else ""
+    """V4.39 / F02：品牌只来自结构化数据 / 官方页面资料 / 用户明确确认。
 
-
-def re_host(url: str):
-    import re
-    m = re.search(r"https?://([^/\s?#]+)", url)
-    return m.group(1) if m else None
+    此前用 host 倒数第二段推导：`convert.ctypy.com` → `Ctypy`、
+    `shop.example.co.uk` → `Co`。追踪域名与多级后缀都会让品牌错误，
+    且域名是投放追踪信息，不是产品身份。无法确认时返回空串并由前端标注「待核实」。
+    """
+    return str((analysis or {}).get("brand") or "").strip()[:80]
 
 
 # ----------------------------- 文案生成 -----------------------------
@@ -215,43 +210,65 @@ def _limits_instr(lim: dict, schema) -> str:
     return "；".join(out) or "遵守各字段字数上限"
 
 
-def _build_fields(parsed: dict, schema) -> dict:
-    """把模型 JSON 映射到平台字段结构，逐字段按词边界裁剪到上限。"""
-    out = {}
+def _build_fields_checked(parsed: dict, schema, profile: dict | None = None) -> dict:
+    """把模型 JSON 映射到平台字段，**保留原始输出与裁剪状态**（V4.39 / F01）。
+
+    此前 fit_text 的 clipped 标记被丢弃，_validate 只看长度，于是 "Book in minutes."
+    被裁成 "Book in" 仍判合格。现在返回 fields / clips / raw_fields：
+    clips 里含原文、裁剪结果、丢掉的部分与必须保留的语义片段，供语义压缩与阻断使用。
+    """
+    out: dict = {}
+    clips: list[dict] = []
+    raw: dict = {}
     for f in schema:
         key, mx, cnt = f["key"], f["max"], f["count"]
         if key == "cta":
             v = parsed.get("cta") or parsed.get("cta_button") or ""
             if isinstance(v, list):
                 v = v[0] if v else ""
-            v = (str(v or "").strip())
+            v = str(v or "").strip()
             if v and v.upper() in FB_CTA_HUMAN:
                 v = FB_CTA_HUMAN[v.upper()]
+            raw[key] = v
             out["cta"] = v
             continue
         if cnt > 1:
             arr = parsed.get(key)
             if not isinstance(arr, list):
                 arr = [arr] if arr else []
+            raw[key] = list(arr)
             clipped = []
-            for x in arr:
+            for idx, x in enumerate(arr):
                 s = str(x or "").strip()
                 if not s:
                     continue
-                c, _ = fit_text(s, mx)
-                clipped.append(c)
-            out[key] = clipped[:cnt] if clipped else ([fit_text(str(parsed.get(key, "")), mx)[0]] if parsed.get(key) else [])
+                rep = clip_report(s, mx)
+                clipped.append(rep["result"])
+                if rep["clipped"]:
+                    clips.append({"field": key, "index": idx + 1, **rep,
+                                  "protected": protected_fragments(rep["original"], profile)})
+            out[key] = (clipped[:cnt] if clipped else
+                        ([fit_text(str(parsed.get(key, "")), mx)[0]] if parsed.get(key) else []))
         else:
             v = parsed.get(key)
             if isinstance(v, list):
                 v = v[0] if v else ""
             v = str(v or "").strip()
-            v, _ = fit_text(v, mx)
-            out[key] = v
-    return out
+            raw[key] = v
+            rep = clip_report(v, mx)
+            out[key] = rep["result"]
+            if rep["clipped"]:
+                clips.append({"field": key, "index": 1, **rep,
+                              "protected": protected_fragments(rep["original"], profile)})
+    return {"fields": out, "clips": clips, "raw_fields": raw}
 
 
-def _validate(fields: dict, schema) -> dict:
+def _build_fields(parsed: dict, schema) -> dict:
+    """兼容旧调用：只返回字段结构。"""
+    return _build_fields_checked(parsed, schema)["fields"]
+
+
+def _validate(fields: dict, schema, needs_revision: list | None = None) -> dict:
     problems = []
     for f in schema:
         key, mx, cnt = f["key"], f["max"], f["count"]
@@ -267,10 +284,46 @@ def _validate(fields: dict, schema) -> dict:
         if isinstance(v, list) and len(v) < cnt:
             problems.append({"level": "warn", "field": f["label"],
                              "msg": f"建议 {cnt} 条，当前 {len(v)} 条"})
+    needs_revision = needs_revision or []
+    for item in needs_revision:
+        problems.append({"level": "error", "field": item.get("label") or item.get("field", ""),
+                         "msg": "超长文案语义压缩未通过，需人工修改；不得输出残句"})
     issues = [{"level": p["level"], "code": p["field"], "message": p["msg"]} for p in problems]
-    return {"valid": not any(p["level"] == "error" for p in problems),
-            "ok": not any(p["level"] == "error" for p in problems),
-            "issues": issues, "problems": problems}
+    valid = not any(p["level"] == "error" for p in problems)
+    return {"valid": valid, "ok": valid,
+            "status": "needs_revision" if needs_revision else ("ok" if valid else "invalid"),
+            "issues": issues, "problems": problems, "needs_revision": needs_revision}
+
+
+# ----------------------------- 语义压缩（F01） -----------------------------
+COMPRESS_MAX_ATTEMPTS = 2      # 单个字段最多重试 2 次
+COMPRESS_MAX_CALLS = 6         # 单次文案生成最多 6 次压缩调用，控制成本
+
+
+async def _semantic_compress(llm, field: str, original: str, limit: int,
+                             lang: str, profile: dict, attempt: int) -> str:
+    """请求模型把超长文案压缩成**完整短句**，限定事实与字符预算（说明书 T01 / T02）。"""
+    must_keep = protected_fragments(original, profile)
+    axes = "、".join(profile.get("value_axes") or []) or "页面已呈现的核心价值"
+    sys_prompt = (
+        "你是广告文案压缩器。只改写用户给出的原文，不新增任何事实、价格、优惠、评价或效果数据。"
+        "必须输出一个语义完整的短句，不能是半截句，不能用省略号省略必要说明。"
+        f"字符预算 ≤ {limit}（按字符计）。优先表达：{axes}。"
+        "若原文含否定、限制、价格、期限、订阅/退款条件，必须原样保留其含义。"
+        "只返回 JSON：{\"text\": \"压缩后的完整文案\"}。"
+    )
+    user_prompt = json.dumps({
+        "field": field, "language": LANG_NAME.get(lang, "English"),
+        "char_budget": limit, "attempt": attempt,
+        "must_preserve": must_keep, "value_axes": profile.get("value_axes") or [],
+        "original": original,
+    }, ensure_ascii=False)
+    resp = await llm.chat(sys_prompt, user_prompt)
+    parsed = parse_json(resp) or {}
+    if isinstance(parsed, dict) and parsed.get("text"):
+        return str(parsed["text"]).strip()
+    # 兼容模型直接返回一行纯文本
+    return (resp or "").strip().strip('"').splitlines()[0].strip() if resp else ""
 
 
 def _char_table(fields: dict, schema) -> list:
@@ -288,18 +341,21 @@ def _char_table(fields: dict, schema) -> list:
 
 
 async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en") -> dict:
-    """基于落地页分析结论 + 选中平台，调用大模型生成可编辑广告文案，并标注本次模型。
+    """基于落地页分析结论 + 选中平台，生成可编辑广告文案（V4.39 / F01 + F10）。
 
-    返回：fields(结构化文案) / schema / char_table / validation / model_info / brand。
+    - 保留原始模型输出与每次裁剪的状态；
+    - 超长文案请求有限次「语义压缩」，必须保留否定 / 价格条件 / 订阅限制；
+    - 压缩仍失败则返回 needs_revision（valid=false），绝不把残句标为合格；
+    - 模型展示与真实调用共用同一路由，回退标记在调用结束后刷新。
     """
     platform = platform or "Facebook"
     analysis = _as_dict(analysis)
+    profile = resolve_profile(analysis, key=analysis.get("industry_profile") or "")
     schema = MEDIA_COPY_SCHEMA.get(platform) or MEDIA_COPY_SCHEMA["AppLovin"]
     spec = get_media_platform(platform) or {}
     lim = spec.get("copy_limits", {})
+    labels = {f["key"]: f["label"] for f in schema}
 
-    # V4.35：主提示词来自「素材提示词」目录（可由总结库一键设为系统默认）；
-    # 字段结构 / 字数红线 / 语言等动态约束由 compose_copy_prompt 注入，模板缺失时自动追加输出契约。
     ctx = _analysis_context(analysis, platform, lang, db)
     sys_prompt = compose_copy_prompt(
         get_prompt(db, "media_copy_sys"),
@@ -308,28 +364,71 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
         language=LANG_NAME.get(lang, "English"),
         platform=platform,
     )
-    user_prompt = ctx
 
-    llm = get_llm(db, "copy")
+    llm, info = get_llm_with_info(db, "copy")
     try:
-        resp = await llm.chat(sys_prompt, user_prompt)
+        resp = await llm.chat(sys_prompt, ctx)
+        parsed = parse_json(resp) or {}
+        info = finalize_invocation(info, llm, bool(parsed))
     except Exception:
-        resp = ""
-    used_fallback = bool(getattr(llm, "used_fallback", False))
-    cfg = _active_config(db, "copy")
-    model_info = {
-        "provider": (cfg.provider if cfg else "mock"),
-        "model": (cfg.model or "") if cfg else "",
-        "role": "copy",
-        "fallback": (True if not cfg else used_fallback),
-    }
+        resp, parsed = "", {}
+        info = finalize_invocation(info, llm, False)
+    model_info = dict(info)
+    model_info["role"] = "copy"
 
-    parsed = parse_json(resp) or {}
-    fields = _build_fields(parsed, schema)
-    validation = _validate(fields, schema)
+    built = _build_fields_checked(parsed, schema, profile)
+    fields = built["fields"]
+    revisions: list[dict] = []
+    needs_revision: list[dict] = []
+    compress_llm = None
+    compress_calls = 0
+
+    def _write_back(key: str, index: int, value: str):
+        cur = fields.get(key)
+        if isinstance(cur, list):
+            while len(cur) < index:
+                cur.append("")
+            cur[index - 1] = value
+        else:
+            fields[key] = value
+
+    for clip in built["clips"]:
+        key, index = clip["field"], clip["index"]
+        original, limit = clip["original"], clip["limit"]
+        success = False
+        for attempt in range(1, COMPRESS_MAX_ATTEMPTS + 1):
+            if compress_calls >= COMPRESS_MAX_CALLS:
+                break
+            compress_calls += 1
+            if compress_llm is None:
+                compress_llm = get_llm_with_info(db, "copy")[0]
+            try:
+                cand = await _semantic_compress(compress_llm, key, original, limit,
+                                                lang, profile, attempt)
+            except Exception:
+                cand = ""
+            cand = str(cand or "").strip()
+            lost = missing_protected(original, cand, profile)
+            if (cand and len(cand) <= limit and is_complete_sentence(cand) and not lost):
+                _write_back(key, index, cand)
+                revisions.append({"field": key, "index": index, "status": "compressed",
+                                  "before": original, "after": cand,
+                                  "attempts": attempt, "protected_kept": clip["protected"]})
+                success = True
+                break
+        if not success:
+            # 保留完整原文（不输出残句），但明确阻断：不合格文案不能进入投放
+            _write_back(key, index, original)
+            needs_revision.append({"field": key, "label": labels.get(key, key),
+                                   "index": index, "original": original,
+                                   "limit": limit, "protected": clip["protected"],
+                                   "reason": "语义压缩未能在字符预算内保留全部必要语义"})
+            revisions.append({"field": key, "index": index, "status": "needs_revision",
+                              "before": original, "after": original,
+                              "attempts": COMPRESS_MAX_ATTEMPTS})
+
+    validation = _validate(fields, schema, needs_revision)
     char_rows = _char_table(fields, schema)
-    brand = _brand_of(analysis)
-
     return {
         "platform": platform,
         "lang": lang,
@@ -338,7 +437,14 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
         "char_table": char_rows,
         "validation": validation,
         "model_info": model_info,
-        "brand": brand,
+        "brand": _brand_of(analysis),
+        "raw_fields": built["raw_fields"],
+        "clips": built["clips"],
+        "copy_revisions": revisions,
+        "needs_revision": needs_revision,
+        "industry_profile": profile["key"],
+        "industry_profile_label": profile["label"],
+        "compress_calls": compress_calls,
     }
 
 
@@ -358,6 +464,32 @@ def _overlay_text(copy_fields: dict, platform: str, brand: str):
     if isinstance(cta, str) and cta.upper() in FB_CTA_HUMAN:
         cta = FB_CTA_HUMAN[cta.upper()]
     return (headline or "").strip(), (sub or "").strip(), (cta or "").strip()
+
+
+def build_overlay_text(headline: str, sub: str, cta: str, w: int, h: int,
+                       profile: dict | None = None) -> dict:
+    """V4.39 / F01：平台正文与图内文字分离，按版位像素预算检查。
+
+    平台正文（primary_text / body / description）属于投放字段，不应整段压到图上；
+    图内只放标题 + 短副标 + CTA。超预算时返回 overflow，由调用方阻止该版位出图，
+    而不是用省略号或硬截断把必要说明删掉。
+    """
+    budget = text_budget(w, h)
+    headline = (headline or "").strip()
+    sub = (sub or "").strip()
+    cta = (cta or "").strip()
+    overflow = []
+    if len(headline) > budget["headline_chars"]:
+        overflow.append({"part": "headline", "chars": len(headline),
+                         "budget": budget["headline_chars"]})
+    if budget["sub_chars"] and len(sub) > budget["sub_chars"]:
+        overflow.append({"part": "sub", "chars": len(sub),
+                         "budget": budget["sub_chars"]})
+    if len(cta) > budget["cta_chars"]:
+        overflow.append({"part": "cta", "chars": len(cta),
+                         "budget": budget["cta_chars"]})
+    return {"headline": headline, "sub": sub, "cta": cta,
+            "budget": budget, "overflow": overflow, "ok": not overflow}
 
 
 def _media_image_prompt(analysis: dict, platform: str, directives: dict, design: dict, db=None) -> str:
@@ -465,11 +597,16 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
 
     - 文生图大模型已配置 → 按创意方向/风格/配色生成 AI 背景，再叠加文案合成 PNG；
     - 未配置 → Pillow 品牌渐变模板兜底，并如实标注回退。
-    返回：images(含 url/file/size/placement/variant/copy) / image_model / note / count。
+    V4.39 / F01：图内文字与平台正文分离，按版位像素预算检查；放不下的版位
+    记为 needs_revision 并阻止导出，不再用硬截断或省略号删掉必要说明。
+    返回：images / image_model / note / count / status / issues / skipped。
     """
     platform = platform or "Facebook"
     analysis = _as_dict(analysis)
     style_opts = style_opts or {}
+    profile = resolve_profile(analysis, key=analysis.get("industry_profile") or "")
+    # 上线保留开关：strict_text=False 可临时回到旧的宽松排版（默认严格）
+    strict_text = style_opts.get("strict_text", True) is not False
     creative_direction = style_opts.get("creative_direction") or ""
     content_style = style_opts.get("content_style") or ""
     color_scheme = style_opts.get("color_scheme") or ""
@@ -498,12 +635,14 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
     variants: list[dict] = []
     for raw in (copy_variants or [])[:40]:
         v = raw if isinstance(raw, dict) else {}
-        cta = str(v.get("cta") or "").strip()[:60]
+        cta = str(v.get("cta") or "").strip()[:120]
         if cta.upper() in FB_CTA_HUMAN:
             cta = FB_CTA_HUMAN[cta.upper()]
+        # V4.39：不再把文案硬截到 200 字（那本身就是残句来源），
+        # 只做异常长度防御，真正能否上版由 build_overlay_text 的像素预算决定。
         variants.append({
-            "headline": str(v.get("headline") or "").strip()[:200],
-            "sub": str(v.get("sub") or "").strip()[:200],
+            "headline": str(v.get("headline") or "").strip()[:1000],
+            "sub": str(v.get("sub") or "").strip()[:1000],
             "cta": cta,
             "label": str(v.get("label") or "").strip()[:40],
         })
@@ -522,6 +661,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
 
     # 版位任务：每个版位取一组「被勾选的创意文案」，未勾选的文案不会落到图片上
     tasks = []
+    skipped: list[dict] = []
     for idx, slot in enumerate(slots or []):
         size = slot.get("size") or spec_sizes[0]
         placement = slot.get("placement") or ""
@@ -532,6 +672,16 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             headline, sub, cta, vlabel = v["headline"], v["sub"], v["cta"], v["label"]
         else:
             headline, sub, cta, vlabel = base_headline, base_sub, base_cta, ""
+        # V4.39 / F01：出图前先按该版位的像素预算核对，超预算直接标记并跳过
+        overlay = build_overlay_text(headline, sub, cta, w, h, profile)
+        if strict_text and not overlay["ok"]:
+            skipped.append({
+                "size": size, "placement": placement, "variant": vlabel,
+                "status": "needs_revision",
+                "reason": "图内文案超出该版位可排版预算，已阻止生成；请缩短文案后重试",
+                "overflow": overlay["overflow"], "budget": overlay["budget"],
+            })
+            continue
         # V4.36：文件名带随机后缀。此前同名文案会生成完全相同的文件名，用户点「重新生成」
         # 会直接覆盖上一次的 PNG，导致「素材历史」里旧会话的图片被无声替换、无法再下载。
         ptag = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in platform)[:20]
@@ -553,11 +703,18 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                     ai_used = True
             except Exception:
                 bg_path = None
-        await asyncio.to_thread(
-            render_ad_png, out, w, h,
-            (headline or "")[:200], (sub or "")[:200], (cta or "")[:60], (brand or "")[:40],
-            bg_path or None, logo_path or None,
-        )
+        try:
+            await asyncio.to_thread(
+                render_ad_png, out, w, h,
+                headline, sub, cta, (brand or "")[:40],
+                bg_path or None, logo_path or None, None, strict_text,
+            )
+        except TextOverflowError as e:
+            return {"__skipped__": {
+                "size": size, "placement": placement, "variant": vlabel,
+                "status": "needs_revision", "reason": f"图内文案无法完整排版：{e}",
+                "budget": text_budget(w, h),
+            }}
         return {"url": out, "file": fn, "size": size, "w": w, "h": h,
                 "placement": placement, "variant": vlabel,
                 "copy": {"headline": headline, "sub": sub, "cta": cta}}
@@ -567,6 +724,10 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         results = await asyncio.gather(*[_render_one(*t) for t in tasks], return_exceptions=True)
         for r in results:
             if isinstance(r, Exception):
+                skipped.append({"status": "failed", "reason": f"渲染异常：{type(r).__name__}"})
+                continue
+            if isinstance(r, dict) and "__skipped__" in r:
+                skipped.append(r["__skipped__"])
                 continue
             images.append(r)
 
@@ -583,9 +744,15 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         note = f"图片背景由文生图大模型生成：{image_model['provider']} / {image_model['model']}。"
     if variants:
         note += f" 本批共选用 {len(variants)} 组创意文案，按版位顺序轮换叠加到图片上。"
+    if skipped:
+        note += (f" 另有 {len(skipped)} 个版位因图内文案超出版位预算未生成（needs_revision），"
+                 "请缩短标题 / 副标 / CTA 后重试；未输出省略号残图。")
 
     _cleanup_ai_bgs()
 
+    issues = [{"level": "error" if not images else "warning",
+               "size": s.get("size", ""), "placement": s.get("placement", ""),
+               "message": s.get("reason", "")} for s in skipped]
     return {
         "platform": platform,
         "images": images,
@@ -593,4 +760,8 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         "note": note,
         "count": len(images),
         "copy_variant_count": len(variants),
+        "status": "partial_success" if skipped else "ok",
+        "strict_text": strict_text,
+        "issues": issues,
+        "skipped": skipped,
     }

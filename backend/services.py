@@ -16,9 +16,10 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from models import ModelConfig, PromptConfig
-from providers import get_llm, parse_json
+from models import PromptConfig
+from providers import parse_json, resolve_analysis_llm, finalize_invocation
 from prompt_catalog import PROMPT_META, EXTRA_PROMPTS, preset_prompt_entries
+from industry_profiles import brand_from_page, resolve_profile
 
 # V4.37：旧的 5 条系统级提示词（网站核心内容分析 / 创意方向 / 文案 / 视频分镜 / 图片设计）
 # 只服务于已删除的「创作工作台 / 批量生成」，故从注册表移除。
@@ -208,12 +209,27 @@ CTA_TEXT_RE = re.compile(
     r"sign ?up|start (?:free|now|trial)|subscribe|play (?:now|free)|book (?:now|a demo)|"
     r"了解更多|立即下载|立即体验|免费试用|立即购买|查看详情|开始使用|注册|预约)", re.I)
 
-_PAGE_META_KEYS = ("title", "description", "lang", "h1", "h2", "ctas", "images", "has_video")
+_PAGE_META_KEYS = ("title", "description", "lang", "h1", "h2", "ctas", "images",
+                   "has_video", "final_url", "og_site_name", "jsonld_brand", "canonical_url")
 
 
 def _tag_text(inner: str) -> str:
     txt = re.sub(r"(?s)<[^>]+>", " ", inner or "")
     return re.sub(r"\s+", " ", html_lib.unescape(txt)).strip()
+
+
+def _jsonld_brand(html: str) -> str:
+    """V4.39 / F02：从 JSON-LD 的 Organization / Brand 节点读取官方品牌名。
+
+    只取结构化的官方资料，不从 URL 猜品牌；解析失败返回空串。
+    """
+    for block in re.findall(r"(?is)<script[^>]+application/ld\+json[^>]*>(.*?)</script>", html or ""):
+        for m in re.finditer(r"""(?is)["']@type["']\s*:\s*["'](?:Organization|Brand|Corporation)["']""", block):
+            seg = block[max(0, m.start() - 200): m.end() + 400]
+            nm = re.search(r"""(?i)["']name["']\s*:\s*["']([^"']{2,80})["']""", seg)
+            if nm:
+                return _tag_text(nm.group(1))[:80]
+    return ""
 
 
 def parse_page_meta(html: str, final_url: str = "") -> dict:
@@ -224,7 +240,8 @@ def parse_page_meta(html: str, final_url: str = "") -> dict:
     """
     if not html:
         return {"title": "", "description": "", "lang": "", "h1": [], "h2": [],
-                "ctas": [], "images": 0, "has_video": False, "final_url": final_url}
+                "ctas": [], "images": 0, "has_video": False, "final_url": final_url,
+                "og_site_name": "", "jsonld_brand": "", "canonical_url": ""}
 
     def _first(pattern: str) -> str:
         m = re.search(pattern, html, re.I | re.S)
@@ -256,39 +273,53 @@ def parse_page_meta(html: str, final_url: str = "") -> dict:
         if len(ctas) >= 6:
             break
 
+    site_name = (_first(r'<meta[^>]+property=["\']og:site_name["\'][^>]+content=["\']([^"\']+)')
+                 or _first(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:site_name["\']'))
+    canonical = (_first(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)')
+                 or _first(r'<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\']canonical["\']'))
     return {
         "title": title[:180], "description": description[:300], "lang": lang,
         "h1": _heads("h1", 3), "h2": _heads("h2", 8), "ctas": ctas,
         "images": len(re.findall(r"(?i)<img\b", html)),
         "has_video": bool(re.search(r"(?i)<video\b|youtube\.com/embed|player\.vimeo\.com", html)),
         "final_url": final_url,
+        "og_site_name": _tag_text(site_name)[:80],
+        "jsonld_brand": _jsonld_brand(html),
+        "canonical_url": canonical[:300],
     }
 
 
-def extract_logo(html: str, base_url: str = "") -> str:
-    """从落地页 HTML 中启发式提取品牌 / 公司 logo 的绝对 URL。
+def extract_logo_checked(html: str, base_url: str = "", final_url: str = "") -> dict:
+    """V4.39 / F02：启发式提取 Logo，并**如实标注来源与核验状态**。
 
-    优先级：含 'logo' 关键字的 <img> > apple-touch-icon > og:image > favicon。
-    内联 data: URI 与无法解析的相对路径均跳过。返回空串表示未抓到。
+    - 相对路径一律用 `final_url`（跳转后的最终地址）解析，不再用输入 URL；
+    - og:image 不再被无条件当作 Logo：它通常是社交分享图，只能作为待核验候选；
+    - 所有自动来源 `verified=False`，只有用户上传 / 人工确认的 Logo 才算已核验。
+    返回 {url, source, verified, reason}；url 为空表示未抓到。
     """
+    empty = {"url": "", "source": "", "verified": False, "reason": "未发现可用 Logo"}
     if not html:
-        return ""
+        return empty
+    base = final_url or base_url
 
     def _abs(u: str) -> str:
         u = (u or "").strip()
         if not u or u.startswith("data:"):
             return ""
         if u.startswith("//"):
-            scheme = (urlparse(base_url).scheme or "https")
+            scheme = (urlparse(base).scheme or "https")
             return f"{scheme}:{u}"
         if u.startswith("http://") or u.startswith("https://"):
             return u
-        if base_url:
+        if base:
             try:
-                return urljoin(base_url, u)
+                return urljoin(base, u)
             except Exception:
                 return ""
         return ""
+
+    def hit(url: str, source: str, reason: str) -> dict:
+        return {"url": url, "source": source, "verified": False, "reason": reason}
 
     # 1) 含 logo 关键字的 <img>（class / id / alt / title / src）
     for m in re.finditer(r"(?is)<img\b([^>]*)>", html):
@@ -299,7 +330,7 @@ def extract_logo(html: str, base_url: str = "") -> str:
             if src:
                 a = _abs(src.group(1))
                 if a:
-                    return a
+                    return hit(a, "img[logo]", "自动识别到 logo 图片，需人工核验是否为品牌 Logo")
 
     # 2) apple-touch-icon
     m = re.search(r"(?i)<link\b[^>]*rel=[\"'][^\"']*apple-touch-icon[^\"']*[\"'][^>]*>", html)
@@ -308,16 +339,16 @@ def extract_logo(html: str, base_url: str = "") -> str:
         if href:
             a = _abs(href.group(1))
             if a:
-                return a
+                return hit(a, "apple-touch-icon", "来自站点图标，需人工核验是否为品牌 Logo")
 
-    # 3) og:image
+    # 3) og:image —— 明确标注不可直接当作 Logo
     m = re.search(r"(?i)<meta\b[^>]*property=[\"']og:image[\"'][^>]*content=[\"']([^\"']+)[\"']", html)
     if not m:
         m = re.search(r"(?i)<meta\b[^>]*content=[\"']([^\"']+)[\"'][^>]*property=[\"']og:image[\"']", html)
     if m:
         a = _abs(m.group(1))
         if a:
-            return a
+            return hit(a, "og:image", "og:image 通常是社交分享图，不能直接当作 Logo；请上传或确认品牌 Logo")
 
     # 4) favicon / icon
     for rel in ("icon", "shortcut icon"):
@@ -327,27 +358,40 @@ def extract_logo(html: str, base_url: str = "") -> str:
             if href:
                 a = _abs(href.group(1))
                 if a:
-                    return a
-    return ""
+                    return hit(a, "favicon", "来自站点 favicon，需人工核验是否为品牌 Logo")
+    return empty
+
+
+def extract_logo(html: str, base_url: str = "", final_url: str = "") -> str:
+    """兼容旧调用：只返回 Logo URL。需要核验信息的调用点用 extract_logo_checked。"""
+    return extract_logo_checked(html, base_url, final_url)["url"]
 
 
 async def fetch_page(url: str) -> dict:
-    """抓一次落地页，返回正文 + 页面结构。
+    """抓一次落地页，返回正文 + 页面结构 + 抓取环境（V4.39 / F02）。
 
-    抓取失败不抛异常：网络问题不该变成 500，交由上层在报告里明确写"没抓到"。
+    分别保存 input_url / final_url / redirect_chain / status / content_type / fetch_quality，
+    所有相对链接解析都以最终地址为准。抓取失败不抛异常，交由上层明确写"没抓到"。
     """
     empty = {"text": "", "chars": 0, "status": 0, "fetched": False,
              "title": "", "description": "", "lang": "", "h1": [], "h2": [],
-             "ctas": [], "images": 0, "has_video": False, "final_url": url, "html": ""}
+             "ctas": [], "images": 0, "has_video": False,
+             "final_url": url, "input_url": url, "redirect_chain": [],
+             "content_type": "", "fetch_quality": "not_fetched",
+             "og_site_name": "", "jsonld_brand": "", "canonical_url": "", "html": ""}
     if not url:
         return empty
     html, status = "", 0
+    final_url, redirects, content_type = url, [], ""
     for attempt in range(2):          # 网关偶发 502，重试一次比直接失败更划算
         try:
             async with httpx.AsyncClient(timeout=15, follow_redirects=True,
                                          headers={"User-Agent": "Mozilla/5.0 (compatible; AdFactory/3.2)"}) as cli:
                 r = await cli.get(url)
                 status = r.status_code
+                final_url = str(r.url) or url
+                redirects = [str(x.url) for x in (r.history or [])]
+                content_type = r.headers.get("content-type") or ""
                 if r.status_code < 400:
                     html = r.text
                     break
@@ -355,17 +399,21 @@ async def fetch_page(url: str) -> dict:
         except Exception as e:
             print("[fetch] failed:", url, str(e)[:120])
         await asyncio.sleep(0.8)
+    env = {"status": status, "final_url": final_url, "input_url": url,
+           "redirect_chain": redirects, "content_type": content_type}
     if not html:
-        return {**empty, "status": status}
+        return {**empty, **env, "fetch_quality": "fetch_failed"}
 
-    meta = parse_page_meta(html, url)
+    meta = parse_page_meta(html, final_url)
     cleaned = re.sub(r"(?is)<(script|style|noscript|svg)[^>]*>.*?</\1>", " ", html)
     cleaned = re.sub(r"(?is)<br\s*/?>|</(p|div|li|h[1-6]|section|header|footer|td)>", "\n", cleaned)
     text = re.sub(r"(?s)<[^>]+>", " ", cleaned)
     text = html_lib.unescape(text)
     lines = [re.sub(r"\s+", " ", l).strip() for l in text.splitlines()]
     body = "\n".join([l for l in lines if l])
-    return {**empty, **meta, "text": body, "chars": len(body), "status": status, "fetched": True, "html": html}
+    return {**empty, **meta, **env, "text": body, "chars": len(body),
+            "fetched": True, "html": html,
+            "fetch_quality": "ok" if len(body) >= 200 else "thin_content"}
 
 
 async def fetch_page_text(url: str) -> str:
@@ -400,42 +448,47 @@ def build_landing_prompt(url: str, text: str, page: dict) -> str:
             meta_bits.append(f"META描述: {page.get('description')}")
     meta_str = "；".join(meta_bits) if meta_bits else "无"
     return (
-        f"落地页 URL: {url or '无'}\n"
+        f"输入 URL（仅用于追踪，不代表产品身份）: {(page or {}).get('input_url') or url or '无'}\n"
+        f"最终落地页 URL（相对链接以此为准）: {(page or {}).get('final_url') or url or '无'}\n"
         f"页面结构: {meta_str}\n"
         f"正文:\n{(text or '')[:4000]}\n\n"
-        "请基于以上页面真实内容，输出 8 字段 JSON。"
+        "请基于以上页面真实内容，输出 8 字段 JSON。不得从域名推断品牌，"
+        "不得编造页面未出现的价格、优惠、评价或效果数据；缺资料时留空。"
     )
 
 
 def _resolve_model(db):
-    """返回 (llm, info)。info 记录实际调用的模型与用途，前端据此展示"用了哪个模型"。
+    """返回 (llm, info)（V4.39 / F10 修复）。
 
-    优先用「分析」模型；若未单独配置分析模型，但已配置「文案」文本模型，则复用「文案」模型
-    （V4.22 模式：避免只配了一个大模型却让落地页分析默默走 Mock）。
+    此前本函数自己按 `is_active` 挑一次配置，`get_llm` 又按 `last_test_ok` 挑一次，
+    页面展示的模型可能与实际调用的模型不同；且 `used_fallback` 在调用之前读取，
+    永远是 False。现在统一走 providers.resolve_analysis_llm，展示与调用共用同一
+    config_id / request_id，回退状态由 finalize_invocation 在调用结束后定稿。
     """
-    candidates = []
-    for c in db.query(ModelConfig).filter_by(is_active=True).all():
-        us = c.usages if c.usages is not None else [c.usage]
-        if "analysis" in us and c.api_key and c.base_url and c.model:
-            candidates.append((c, "analysis"))
-        elif "copy" in us and c.api_key and c.base_url and c.model:
-            candidates.append((c, "copy"))
-    cfg, usage = None, None
-    for want in ("analysis", "copy"):
-        best = None
-        for c, role in candidates:
-            if role == want and (best is None or c.id > best.id):
-                best = c
-        if best:
-            cfg, usage = best, want
-            break
-    llm = get_llm(db, usage or "analysis")   # 带 Mock 兜底
-    info = {"provider": "", "model": "", "role": usage or "analysis", "fallback": True}
-    if cfg:
-        info["provider"] = cfg.provider
-        info["model"] = cfg.model or ""
-        info["fallback"] = bool(getattr(llm, "used_fallback", False))
-    return llm, info
+    return resolve_analysis_llm(db)
+
+
+def _landing_identity(url: str, page: dict, logo_info: dict,
+                      brand_info: dict, profile: dict) -> dict:
+    """F02：把「输入链接 / 最终地址 / 跳转记录 / 抓取质量 / 品牌与 Logo 证据」独立保存。"""
+    input_url = page.get("input_url") or url or ""
+    final_url = page.get("final_url") or input_url
+    return {
+        "logo": logo_info.get("url", ""),
+        "logo_source": logo_info.get("source", ""),
+        "logo_verified": bool(logo_info.get("verified")),
+        "logo_reason": logo_info.get("reason", ""),
+        "brand": brand_info.get("brand", ""),
+        "brand_status": brand_info.get("status", "needs_input"),
+        "brand_candidates": brand_info.get("candidates", []),
+        "brand_reason": brand_info.get("reason", ""),
+        "input_url": input_url,
+        "final_url": final_url,
+        "redirect_chain": list(page.get("redirect_chain") or []),
+        "fetch_quality": page.get("fetch_quality") or ("manual_text" if (page.get("text") or url) else "not_fetched"),
+        "industry_profile": profile["key"],
+        "industry_profile_label": profile["label"],
+    }
 
 
 def _normalize_landing(raw: dict, url: str) -> dict:
@@ -495,9 +548,13 @@ def _local_landing(url: str, page: dict) -> dict:
 
 
 async def analyze_landing_concise(db, url, text, page=None) -> dict:
-    """素材创作：落地页分析。抓取（无正文时）→ 拼接提示词 → 调用已配置大模型推理 → 规整 8 字段。
+    """素材创作：落地页分析。抓取 → 拼接提示词 → 调用已配置大模型推理 → 规整 8 字段。
 
-    返回 dict 含 8 字段 + model_info + source。source=llm 表示真用了大模型；local 表示走了兜底。
+    V4.39：
+    - F02：返回 input_url / final_url / redirect_chain / fetch_quality / 品牌与 Logo 的
+      证据来源与核验状态；相对 Logo 用最终地址解析，og:image 不再无条件当 Logo。
+    - F10：模型展示与真实调用共用同一路由与 config_id；回退标记在 `chat()` 之后刷新，
+      Mock 返回可解析 JSON 时 source 必须写 mock，不能误标 llm。
     """
     url = (url or "").strip()
     text = (text or "").strip()
@@ -507,8 +564,12 @@ async def analyze_landing_concise(db, url, text, page=None) -> dict:
     if not text and page.get("text"):
         text = page["text"]
 
-    # 启发式提取品牌 logo（即使走本地兜底也尽量给出，供后续图片合成复用）
-    logo = extract_logo(page.get("html") or "", url)
+    input_url = page.get("input_url") or url or ""
+    final_url = page.get("final_url") or input_url
+    logo_info = extract_logo_checked(page.get("html") or "", input_url, final_url)
+    profile = resolve_profile({"url": input_url}, text, key=page.get("industry_profile") or "")
+    brand_info = brand_from_page({}, page, final_url, input_url)
+    identity = _landing_identity(url, page, logo_info, brand_info, profile)
 
     sys_prompt = get_landing_prompt(db)
     user_prompt = build_landing_prompt(url, text, page)
@@ -516,19 +577,24 @@ async def analyze_landing_concise(db, url, text, page=None) -> dict:
 
     # 没有任何可用的真实模型配置：直接走本地兜底，明确标注
     if not info["provider"]:
-        return {**_local_landing(url, page), "model_info": info, "source": "local", "logo": logo}
+        return {**_local_landing(url, page), **identity,
+                "model_info": finalize_invocation(info, llm, False),
+                "source": "local"}
 
     try:
         resp = await llm.chat(sys_prompt, user_prompt)
         raw = parse_json(resp)
-        if isinstance(raw, dict) and (
+        parsed_ok = isinstance(raw, dict) and bool(
             raw.get("industry") or raw.get("type") or raw.get("audience")
-            or raw.get("language") or raw.get("advantages") or raw.get("channels")
-        ):
-            data = _normalize_landing(raw, url)
-            return {**data, "model_info": info, "source": "mock" if info["fallback"] else "llm", "logo": logo}
+            or raw.get("language") or raw.get("advantages") or raw.get("channels"))
+        info = finalize_invocation(info, llm, parsed_ok)
+        if parsed_ok:
+            data = _normalize_landing(raw, input_url)
+            return {**data, **identity, "model_info": info,
+                    "source": "mock" if info["fallback"] else "llm"}
         print(f"[landing] 模型返回无法解析为 8 字段 JSON（len={len(resp)}），回退本地构造")
     except Exception as e:
         print("[landing] llm failed:", str(e)[:140])
-    # 模型调用 / 解析失败：本地兜底，但保留已识别到的模型信息进行追溯
-    return {**_local_landing(url, page), "model_info": info, "source": "local", "logo": logo}
+        info = finalize_invocation(info, llm, False)
+    # 模型调用 / 解析失败：本地兜底，但保留实际调用信息进行追溯
+    return {**_local_landing(url, page), **identity, "model_info": info, "source": "local"}

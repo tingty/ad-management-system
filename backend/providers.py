@@ -4,7 +4,7 @@ AI 模型接入层（可配置多模型）。
 - 在「设置页」配置 OpenAI 兼容协议的 api_key / base_url / model 后，自动切换为真实调用。
 - 图像 provider 接入真实 DALL·E 风格接口失败时自动回退到占位图，避免阻断主流程。
 """
-import os, json, re, httpx, base64, asyncio, itertools
+import os, json, re, httpx, base64, asyncio, itertools, uuid
 from typing import Optional
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -450,24 +450,46 @@ class GeminiLLM(LLMProvider):
             return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
+def _classify_error(exc: Exception) -> str:
+    """把供应商异常归类，供调用快照记录（不记录密钥、不记录响应正文）。"""
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    if "timeout" in name or "timed out" in text:
+        return "timeout"
+    if "401" in text or "403" in text or "unauthorized" in text or "forbidden" in text:
+        return "auth"
+    if "429" in text or "rate" in text:
+        return "rate_limit"
+    if "connect" in name or "network" in name:
+        return "network"
+    return "upstream"
+
+
 class FallbackLLM(LLMProvider):
     """真实模型调用失败时自动回退 Mock，保证主流程不中断。
 
     used_fallback 记录本次调用是否真的走了兜底，供上层如实标注结果来源，
     避免「配了模型但实际用了 Mock」却被标记成 llm 的错误归因。
+    V4.39 / F10：额外记录错误分类与异常类型名，由 finalize_invocation 在**调用之后**读取。
     """
     def __init__(self, real, fallback):
         self.real = real
         self.fallback = fallback
         self.used_fallback = False
+        self.error_type = ""
+        self.exception_type = ""
+        self.retries = 0
 
     async def chat(self, system, user, **kw):
         try:
             out = await self.real.chat(system, user, **kw)
             self.used_fallback = False
+            self.error_type = ""
             return out
-        except Exception:
+        except Exception as e:
             self.used_fallback = True
+            self.error_type = _classify_error(e)
+            self.exception_type = type(e).__name__
             return await self.fallback.chat(system, user, **kw)
 
 class OpenAIImage(ImageProvider):
@@ -641,23 +663,20 @@ def _usable(cfg) -> bool:
 
 
 def _pick_config(rows, usage):
-    """V4.34：挑选某用途实际生效的配置。
+    """挑选某用途实际生效的配置（V4.39 / F10 修复）。
 
-    优先级（同一用途保存了多条时）：
-      1. 连通测试成功（last_test_ok=True）的配置 —— 用「已验证可用」的模型支撑系统功能；
-         多条成功时优先激活的，其次 id 最大（最近添加）。
-      2. 没有任何测试成功的配置时，退回原逻辑：仅看激活配置，取 id 最大者。
-    说明：仅 `is_active` 不再能决定谁生效——用户可能保留多条备用配置，只要其中一条
-    每日测试通过，系统就自动用它；全部失败/未测试时保持旧行为，避免破坏既有部署。
+    V4.34 的优先级保留：同用途多条时先看每日连通测试成功者，再看 id 最大者。
+    **F10**：候选必须先过 `is_active`。此前 `last_test_ok=True` 的分支没有过滤停用项，
+    导致「已停用但昨天测试成功」的配置仍会被系统自动调用（说明书 T13）。
+    仅显式启用的配置才能进入候选；全部失败 / 未测试时保持旧行为。
     """
-    candidates = [c for c in rows if usage in _usages_of(c) and _usable(c)]
+    candidates = [c for c in rows
+                  if c.is_active and usage in _usages_of(c) and _usable(c)]
     if not candidates:
         return None
     oks = [c for c in candidates if c.last_test_ok is True]
-    if oks:
-        return max(oks, key=lambda c: (1 if c.is_active else 0, c.id))
-    actives = [c for c in candidates if c.is_active]
-    return max(actives, key=lambda c: c.id) if actives else None
+    pool = oks or candidates
+    return max(pool, key=lambda c: c.id)
 
 
 def effective_config_ids(db) -> set:
@@ -680,23 +699,80 @@ def _active_config(db, usage):
     from models import ModelConfig
     return _pick_config(db.query(ModelConfig).all(), usage)
 
-def get_llm(db, usage="analysis") -> LLMProvider:
+def get_llm_with_info(db, usage="analysis") -> tuple[LLMProvider, dict]:
+    """V4.39 / F10：统一路由入口，**只挑选一次配置**，同时返回调用快照。
+
+    此前 services._resolve_model 自己按 is_active 挑一次，get_llm 又按 last_test_ok
+    挑一次，页面展示的配置可能与实际调用的不同。现在展示与调用共用同一个 cfg。
+    快照字段：provider / model / role / config_id / request_id / source / fallback /
+    error_type / retries；不含 api_key、base_url 等敏感信息。
+    """
     cfg = _active_config(db, usage)
-    if cfg and cfg.api_key and cfg.base_url and cfg.model:
-        try:
-            # 按目录协议选择真实 provider；未知厂商按 OpenAI 兼容处理
-            from llm_catalog import _resolve_protocol
-            protocol = _resolve_protocol(cfg.provider)
-            if protocol == "anthropic":
-                real = AnthropicLLM(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
-            elif protocol == "gemini":
-                real = GeminiLLM(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
-            else:
-                real = OpenAICompatibleLLM(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
-            return FallbackLLM(real, MockLLM())
-        except Exception:
-            pass
-    return MockLLM()
+    info = {
+        "provider": (cfg.provider if cfg else ""),
+        "model": ((cfg.model or "") if cfg else ""),
+        "role": usage,
+        "config_id": (cfg.id if cfg else None),
+        "request_id": uuid.uuid4().hex[:12],
+        "source": "mock" if not cfg else "llm",
+        "fallback": not bool(cfg),
+        "error_type": "",
+        "retries": 0,
+    }
+    if not cfg:
+        return MockLLM(), info
+    try:
+        from llm_catalog import _resolve_protocol
+        protocol = _resolve_protocol(cfg.provider)
+        if protocol == "anthropic":
+            real = AnthropicLLM(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
+        elif protocol == "gemini":
+            real = GeminiLLM(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
+        else:
+            real = OpenAICompatibleLLM(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
+        return FallbackLLM(real, MockLLM()), info
+    except Exception:
+        info["fallback"] = True
+        info["source"] = "mock"
+        info["error_type"] = "init_error"
+        return MockLLM(), info
+
+
+def finalize_invocation(info: dict, llm: LLMProvider, parsed_ok: bool = True) -> dict:
+    """V4.39 / F10：在 `chat()` **结束之后**刷新回退与来源标记。
+
+    说明书已复现：used_fallback 在调用前读取永远是 False，Mock 返回可解析 JSON 时
+    会被误标为 source=llm。这里统一按调用后的真实状态定稿。
+    """
+    info = dict(info or {})
+    used = bool(getattr(llm, "used_fallback", False))
+    if used:
+        info["fallback"] = True
+        info["source"] = "mock"
+        info["error_type"] = getattr(llm, "error_type", "") or info.get("error_type", "")
+    elif not info.get("provider"):
+        info["fallback"] = True
+        info["source"] = "mock"
+    else:
+        info["fallback"] = False
+        info["source"] = "llm" if parsed_ok else "invalid_response"
+    info["retries"] = int(getattr(llm, "retries", 0) or 0)
+    return info
+
+
+def resolve_analysis_llm(db) -> tuple[LLMProvider, dict]:
+    """落地页分析专用：优先 analysis 模型，未配置时复用 copy 模型（V4.22 行为）。
+
+    与 get_llm 共用同一套 _active_config 路由，避免「展示一套、调用另一套」。
+    """
+    usage = "analysis" if _active_config(db, "analysis") else (
+        "copy" if _active_config(db, "copy") else "analysis")
+    return get_llm_with_info(db, usage)
+
+
+def get_llm(db, usage="analysis") -> LLMProvider:
+    """兼容旧调用：只取 provider；需要归因的调用点改用 get_llm_with_info。"""
+    return get_llm_with_info(db, usage)[0]
 
 def get_image(db) -> Optional[ImageProvider]:
     """返回激活的文生图 Provider；未配置 Key/URL/Model 时返回 None（由 Pillow 模板兜底）。"""

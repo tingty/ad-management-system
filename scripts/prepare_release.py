@@ -53,6 +53,9 @@ MODULE_RULES: list[tuple[str, str]] = [
     ("frontend/src/pages/*", "前端与菜单"),
     ("frontend/src/*", "前端与菜单"),
     ("backend/release_notes.py", "新版通知"),
+    ("backend/roadmap.py", "新版通知"),
+    ("backend/industry_profiles.py", "行业适配"),
+    ("backend/text_utils.py", "素材创作平台"),
     ("backend/llm_catalog.py", "大模型配置"),
     ("backend/model_health.py", "大模型配置"),
     ("backend/providers.py", "大模型配置"),
@@ -78,9 +81,10 @@ COVERAGE_KEYWORDS: dict[str, str] = {
     "前端与菜单": "前端", "后端接口": "后端", "数据模型": "数据",
     "素材提示词": "提示词", "部署依赖": "部署", "发版流程": "发版",
     "系统设置": "系统设置", "大模型配置": "大模型", "新版通知": "新版通知",
-    "素材创作平台": "素材创作",
+    "素材创作平台": "素材创作", "行业适配": "行业", "改造追踪": "改造",
 }
-CODE_PREFIXES = ("frontend/src/", "backend/", "scripts/")
+CODE_PREFIXES = ("frontend/src/", "backend/", "scripts/", "docs/")
+MODULE_RULES.insert(0, ("docs/REMEDIATION_TRACKER.md", "改造追踪"))
 
 
 def git(args: list[str]) -> str:
@@ -221,7 +225,7 @@ def check(diff_range: str = "", strict: bool = False) -> int:
     code = code_files(files)
 
     print("=" * 68)
-    print("发版前版本通知校验（V4.37）")
+    print("发版前版本通知校验（V4.39 · 含改造期次校验）")
     print("=" * 68)
     print(f"变更文件 {len(files)} 个，其中代码文件 {len(code)} 个")
     print(f"CHANGELOG 最新版本：{latest or '（无）'}，共 {notes['total']} 个版本")
@@ -269,6 +273,23 @@ def check(diff_range: str = "", strict: bool = False) -> int:
             warns.append("本次有文件删除，但「变更类型」未标注「删除」")
         if "新增" in guess_kinds(files) and not ({"新增", "发布"} & set(note["change_types"])):
             warns.append("本次有新增文件，但「变更类型」未标注「新增 / 发布」")
+
+        # 5) V4.39 起：AI 改造「每期 3 个问题、独立发版、版本通知统一发布」
+        #    校验改造期次字段与 roadmap 一致，避免做完改造却没写版本文案。
+        if note.get("phase_text") or note.get("issue_ids"):
+            from roadmap import PHASES, planned_issue_ids
+            ids = note.get("issue_ids") or []
+            if len(ids) != 3:
+                errors.append(f"改造期次应包含 3 个问题，当前 {len(ids)} 个：{ids}")
+            unknown = [i for i in ids if i not in planned_issue_ids()]
+            if unknown:
+                errors.append(f"改造期次含路线图外的问题编号：{unknown}")
+            phase = next((p for p in PHASES
+                          if set(ids) == {i["id"] for i in p["issues"]}), None)
+            if not phase and ids:
+                errors.append(f"本期问题 {ids} 不属于路线图中的同一期")
+            elif phase and phase["version"] != note["version"]:
+                errors.append(f"本期改造应发布为 {phase['version']}，当前版本为 {note['version']}")
 
     for w in warns:
         print("  [WARN] " + w)
