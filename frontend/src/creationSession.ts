@@ -51,6 +51,11 @@ export interface CreationSession {
   /* 后台任务进度（跨页面可见） */
   stage: CreationStage
   running: boolean
+  /** V4.42 / F12：服务端持久任务 ID 与状态；刷新 / 关闭浏览器后据此恢复 */
+  jobId: string | null
+  jobStatus: string
+  /** 出图批次序号：同批次重复提交复用同一幂等键，主动重新生成则递增 */
+  jobSeq: number
   taskLabel: string
   taskDetail: string
   taskStartedAt: number | null
@@ -113,6 +118,9 @@ export function studioDefaults(): Partial<CreationSession> {
     viewer: null,
     checked: [],
     savedNote: '',
+    jobId: null,
+    jobStatus: '',
+    jobSeq: 0,
   }
 }
 
@@ -149,14 +157,27 @@ function sanitize(raw: any): CreationSession {
   merged.assignment = raw.assignment === 'full_cover' ? 'full_cover' : 'round_robin'
   merged.keepDistinctRoles = Boolean(raw.keepDistinctRoles)
   merged.viewer = null
+  merged.jobId = typeof raw.jobId === 'string' && raw.jobId ? raw.jobId : null
+  merged.jobStatus = typeof raw.jobStatus === 'string' ? raw.jobStatus : ''
+  merged.jobSeq = Number.isFinite(raw.jobSeq) ? Math.max(0, Math.floor(raw.jobSeq)) : 0
   if (raw.running) {
     merged.running = false
-    merged.taskLabel = '上次任务未完成'
-    merged.taskDetail = '页面刷新 / 关闭时正在执行的请求被中断；已恢复到中断前的进度，可继续调整或重新执行。'
-    const interrupted: TaskLogEntry = {
-      at: Date.now(), text: '任务在页面刷新 / 关闭时中断，进度已恢复', kind: 'error',
+    if (merged.jobId) {
+      // V4.42 / F12：生成与归档在服务端执行，刷新不再意味着任务中断。
+      merged.taskLabel = '正在恢复服务端任务'
+      merged.taskDetail = `任务 ${merged.jobId} 由服务端继续执行，页面刷新不影响出图与归档；正在查询最新进度。`
+      const resumed: TaskLogEntry = {
+        at: Date.now(), text: `页面刷新，按服务端 job_id ${merged.jobId} 恢复进度`, kind: 'info',
+      }
+      merged.taskLogs = [...merged.taskLogs, resumed].slice(-MAX_LOGS)
+    } else {
+      merged.taskLabel = '上次任务未完成'
+      merged.taskDetail = '页面刷新 / 关闭时正在执行的请求被中断；已恢复到中断前的进度，可继续调整或重新执行。'
+      const interrupted: TaskLogEntry = {
+        at: Date.now(), text: '任务在页面刷新 / 关闭时中断，进度已恢复', kind: 'error',
+      }
+      merged.taskLogs = [...merged.taskLogs, interrupted].slice(-MAX_LOGS)
     }
-    merged.taskLogs = [...merged.taskLogs, interrupted].slice(-MAX_LOGS)
   } else {
     merged.running = false
   }

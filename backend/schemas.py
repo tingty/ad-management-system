@@ -139,6 +139,22 @@ class LandingAnalysis(BaseModel):
     fetch_quality: str = "not_fetched"      # ok / thin_content / fetch_failed / manual_text
     industry_profile: str = "general"       # 行业画像 key（前端可覆盖，实现局部调整）
     industry_profile_label: str = "通用 / 未分类"
+    # V4.42 / F09：事实证据链与空证据阻断
+    facts: List[str] = []                   # 已验证事实（须有 evidence_ids 可引用）
+    assumptions: List[str] = []             # 营销假设，不能当已验证事实投放
+    gaps: List[str] = []                    # 资料缺口
+    evidence_ids: List[str] = []            # 本次采样片段编号 [E###] / EV_S###
+    evidence_chain: List[Any] = []          # [{claim, evidence_ids, kind}]
+    evidence_index: List[Any] = []          # 原文 / 来源 / 区块 / 字符区间 / 核验状态
+    evidence_coverage: List[Any] = []       # 实际送入模型的字符区间
+    evidence_dropped_chars: int = 0
+    evidence_source_chars: int = 0
+    evidence_expired_offers: List[Any] = [] # 已过期优惠，不得沿用
+    evidence_note: str = ""
+    evidence_gate: str = "ok"               # ok / needs_input
+    gate_status: str = "ok"                 # ok / needs_input（router 据此阻断）
+    blocked_reasons: List[str] = []
+    legacy_unverified: bool = False         # 旧数据无证据 ID，不自动补成已验证
     class Config:
         from_attributes = True
         protected_namespaces = ()   # 允许字段名 model_info 不被 "model_" 保护前缀拦截

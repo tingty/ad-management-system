@@ -316,6 +316,46 @@ export interface LandingAnalysis {
   /** 行业 / 品类画像：可局部调整，不改通用主干 */
   industry_profile?: string
   industry_profile_label?: string
+  /** V4.42 / F09：事实证据链、采样覆盖与空证据阻断 */
+  facts?: string[]
+  assumptions?: string[]
+  gaps?: string[]
+  evidence_ids?: string[]
+  evidence_chain?: { claim: string; evidence_ids: string[]; kind: string }[]
+  evidence_index?: EvidenceRecord[]
+  evidence_coverage?: EvidenceCoverage[]
+  evidence_dropped_chars?: number
+  evidence_source_chars?: number
+  evidence_expired_offers?: { expires_on: string; quote: string }[]
+  evidence_note?: string
+  evidence_gate?: 'ok' | 'needs_input'
+  gate_status?: 'ok' | 'needs_input'
+  blocked_reasons?: string[]
+  legacy_unverified?: boolean
+}
+
+/** V4.42 / F09：一条可回溯到原文的证据 */
+export interface EvidenceRecord {
+  evidence_id: string
+  quote: string
+  source_url: string
+  section: string
+  char_start: number
+  char_end: number
+  fetched_at?: string
+  clause_kinds?: string[]
+  verified?: boolean
+  verification?: string
+  applicable_scope?: string
+  legacy_unverified?: boolean
+  has_key_clause?: boolean
+}
+
+export interface EvidenceCoverage {
+  evidence_id: string
+  char_start: number
+  char_end: number
+  tags: string[]
 }
 
 /** V4.39：行业 / 品类画像（用于「素材创作」局部调整） */
@@ -492,6 +532,38 @@ export interface MediaImageItem {
   creative_config_id?: string
   visual_brief?: VisualBrief
   creative_config?: CreativeConfigSnapshot
+  /** V4.42 / F06：请求尺寸 / 实际返回尺寸 / 真实裁切参数 */
+  request_size?: number[]
+  target_size?: number[]
+  returned_size?: number[] | null
+  composition?: ImageComposition
+  size_capability?: {
+    provider: string; needs_outpaint: boolean; ratio_delta: number
+    size_verified_on: string; capability_note: string
+  }
+  /** V4.42 / F12：产出该图的服务端任务 */
+  job_id?: string
+}
+
+/** V4.42 / F06：逐图构图记录（T08 可核对比例与主体保护） */
+export interface ImageComposition {
+  mode: string
+  target_size?: number[]
+  source_size?: number[]
+  requested_size?: number[]
+  returned_size?: number[] | null
+  scale?: number
+  anchor?: number[]
+  crop?: number[] | null
+  subject_box?: number[]
+  text_box?: number[]
+  protected?: boolean
+  extreme_ratio?: boolean
+  ratio_gap?: number
+  layout?: string
+  capability_note?: string
+  applied_mode?: string
+  content_box?: number[]
 }
 
 /** V4.39 / F01：因图内文案超预算被阻止；V4.40 / F11：失败任务同样逐项列出 */
@@ -522,6 +594,24 @@ export interface MediaImageTaskResult {
   layout?: string
   prompt_hash?: string
   creative_config_id?: string
+  /** V4.42：分项重试定位 + 构图记录 */
+  task_index?: number | null
+  request_size?: number[] | null
+  returned_size?: number[] | null
+  composition_mode?: string
+  crop?: number[] | null
+}
+
+/** V4.42 / F12：图片生成入参（同步接口与持久任务共用） */
+export interface MediaImagePayload {
+  analysis: LandingAnalysis; platform: string; lang?: string
+  copy_fields: Record<string, any>; copy_variants?: CopyVariant[]
+  style_opts: Record<string, any>
+  slots: { size: string; placement: string; placement_id?: string
+           concept_index?: number; concept_id?: string }[]
+  logo?: string
+  spec_version?: string
+  total_pixels?: number
 }
 
 export interface MediaImageResult {
@@ -544,6 +634,80 @@ export interface MediaImageResult {
   reference_mode?: string
   capability_note?: string
   rules?: Record<string, any>
+  /** V4.42 / F06：整批构图与尺寸能力汇总 */
+  composition?: {
+    provider: string; modes: string[]; outpaint_count: number
+    protected_count: number; size_capabilities: Record<string, any>; note: string
+  }
+  /** V4.42 / F12：服务端任务与归档信息 */
+  job_id?: string
+  archive?: JobArchiveInfo
+}
+
+/* ----------------------------- V4.42 服务端持久任务 / 不可变资产 ----------------------------- */
+
+export interface JobArchiveInfo {
+  archived?: string[]
+  duplicates?: string[]
+  errors?: string[]
+  history_update?: Record<string, any>
+  retention_policy?: string
+}
+
+/** 服务端持久任务：刷新 / 关闭浏览器后仍可按 job_id 恢复 */
+export interface GenerationJob {
+  job_id: string
+  idempotency_key?: string
+  kind: string
+  status: 'queued' | 'running' | 'succeeded' | 'partial_success' | 'failed' | 'canceled'
+  owner_id?: number | null
+  owner_name?: string
+  history_id?: number | null
+  retry_of?: string | null
+  progress: number
+  attempts?: number
+  cancel_requested?: boolean
+  error?: string
+  result: MediaImageResult | null
+  subtasks?: MediaImageTaskResult[]
+  created_at?: string
+  updated_at?: string
+  finished_at?: string | null
+  terminal: boolean
+  /** 仅创建接口返回 */
+  created?: boolean
+  poll_url?: string
+  message?: string
+}
+
+export interface CreativeAsset {
+  asset_id: string
+  job_id: string | null
+  history_id: number | null
+  file: string
+  url: string
+  size: string
+  placement: string
+  concept_id: string
+  spec_version: string
+  status: string
+  meta: Record<string, any>
+  created_at?: string | null
+}
+
+export interface CreativeAssetList {
+  items: CreativeAsset[]
+  total: number
+  limit: number
+  offset: number
+  retention_policy: string
+}
+
+export interface ImageCapabilities {
+  providers: Record<string, Record<string, any>>
+  ratio_tolerance: number
+  extreme_ratio: number
+  note: string
 }
 
 /* ----------------------------- V4.36 素材历史 ----------------------------- */
@@ -567,6 +731,10 @@ export interface CreationHistory {
   source_id: number | null
   created_at: string | null
   updated_at: string | null
+  /** V4.42 / F12：images 只是展示缓存，完整不可变记录按 history_id 分页读取 */
+  display_cache_limit?: number
+  retention_policy?: string
+  asset_list_url?: string
 }
 
 export interface CreationHistoryList {
@@ -640,6 +808,9 @@ export const api = {
   // V4.40 / F08：版本化媒体规则（强制 / 政策 / 建议、上限、行业版位偏好）
   mediaRules: () =>
     req<MediaRules>('/api/media-rules'),
+  // V4.42 / F06：供应商尺寸能力 / 核验状态
+  imageCapabilities: () =>
+    req<ImageCapabilities>('/api/image-capabilities'),
   // V4.39：行业 / 品类画像（通用主干 + 局部调整）
   industryProfiles: () =>
     req<IndustryProfilesResponse>('/api/industry-profiles'),
@@ -649,17 +820,28 @@ export const api = {
     style_opts?: Record<string, any> }) =>
     req<MediaCopyResult>('/api/media-campaign/copy', { method: 'POST', body: JSON.stringify(payload) }),
   // 基于「勾选的创意文案组合」+ 落地页分析结论 + 风格/样式/颜色，生成推广图片
-  mediaImages: (payload: {
-    analysis: LandingAnalysis; platform: string; lang?: string
-    copy_fields: Record<string, any>; copy_variants?: CopyVariant[]
-    style_opts: Record<string, any>
-    slots: { size: string; placement: string; placement_id?: string
-             concept_index?: number; concept_id?: string }[]
-    logo?: string
-    spec_version?: string
-    total_pixels?: number
-  }) =>
+  mediaImages: (payload: MediaImagePayload) =>
     req<MediaImageResult>('/api/media-campaign/images', { method: 'POST', body: JSON.stringify(payload) }),
+  /* V4.42 / F12：服务端持久任务。生成 + 归档都在服务端完成，浏览器只轮询状态。 */
+  createGenerationJob: (payload: {
+    images_request: MediaImagePayload
+    archive?: { history_id?: number | null; platform?: string; lang?: string
+                copy?: any; style_opts?: Record<string, any> }
+    idempotency_key?: string
+  }) =>
+    req<GenerationJob>('/api/generation-jobs', { method: 'POST', body: JSON.stringify(payload) }),
+  generationJob: (jobId: string) =>
+    req<GenerationJob>(`/api/generation-jobs/${encodeURIComponent(jobId)}`),
+  generationJobs: (params: { history_id?: number; limit?: number; offset?: number } = {}) =>
+    req<{ items: GenerationJob[]; total: number; limit: number; offset: number }>(
+      `/api/generation-jobs${qs(params)}`),
+  cancelGenerationJob: (jobId: string) =>
+    req<{ ok: boolean; status: string; message: string }>(
+      `/api/generation-jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }),
+  retryGenerationJob: (jobId: string) =>
+    req<GenerationJob>(`/api/generation-jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' }),
+  creativeAssets: (params: { history_id?: number; job_id?: string; limit?: number; offset?: number } = {}) =>
+    req<CreativeAssetList>(`/api/creative-assets${qs(params)}`),
   // 素材历史：一次创作会话按「分析 → 文案 → 图片」增量落库
   creationHistory: (params: { q?: string; platform?: string; limit?: number; offset?: number } = {}) =>
     req<CreationHistoryList>(`/api/creation-history${qs(params)}`),

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, CreationHistory, MediaImageItem } from '../api'
+import type { CreativeAssetList } from '../api'
 import { REUSE_HISTORY_KEY, REUSE_HISTORY_EVENT } from './MaterialCreation'
 
 function fmt(iso?: string | null): string {
@@ -33,6 +34,52 @@ const ANALYSIS_FIELDS: { key: string; label: string }[] = [
 ]
 
 type Viewer = { list: MediaImageItem[]; index: number } | null
+
+/** V4.42 / F12：分页读取不可变资产记录；历史超过 80 张仍能查到早期素材（T16）。 */
+function AssetPager({ historyId }: { historyId: number }) {
+  const size = 24
+  const [page, setPage] = useState(0)
+  const [data, setData] = useState<CreativeAssetList | null>(null)
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    let alive = true
+    setErr('')
+    api.creativeAssets({ history_id: historyId, limit: size, offset: page * size })
+      .then(r => { if (alive) setData(r) })
+      .catch(e => { if (alive) setErr(e?.message || '资产查询失败') })
+    return () => { alive = false }
+  }, [historyId, page])
+  if (!data && !err) return null
+  const pages = Math.max(1, Math.ceil((data?.total || 0) / size))
+  return (
+    <div className="asset-pager">
+      <div className="asset-pager-head">
+        <b>完整素材归档 · {data?.total ?? 0} 张（不可变记录）</b>
+        <span className="muted">上方列表只缓存最近 80 张；这里按页读取全部历史素材</span>
+        <button className="btn small ghost" disabled={page <= 0}
+          onClick={() => setPage(p => Math.max(0, p - 1))}>上一页</button>
+        <span>{page + 1} / {pages}</span>
+        <button className="btn small ghost" disabled={page + 1 >= pages}
+          onClick={() => setPage(p => p + 1)}>下一页</button>
+      </div>
+      {err && <p className="muted">{err}</p>}
+      <div className="asset-grid">
+        {(data?.items || []).map(a => (
+          <div className="asset-cell" key={a.asset_id}>
+            <a href={api.mediaFileDownloadUrl(a.file)} title={a.file}>
+              <img src={api.fileUrl(a.file)} alt={a.size} loading="lazy" />
+            </a>
+            <div className="ac-meta">
+              {a.size || '—'} · {a.placement || '—'}<br />
+              {a.concept_id || '—'} · 规则 {a.spec_version || '—'}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="muted">{data?.retention_policy || ''}</p>
+    </div>
+  )
+}
 
 export default function MaterialHistory() {
   const [items, setItems] = useState<CreationHistory[]>([])
@@ -318,6 +365,8 @@ export default function MaterialHistory() {
                       </div>
                     ) : <p className="muted">本次会话未生成推广图片</p>}
                     {h.note && <p className="muted ch-note">{h.note}</p>}
+                    {h.retention_policy && <p className="muted ch-note">{h.retention_policy}</p>}
+                    <AssetPager historyId={h.id} />
                   </div>
 
                   <div className="ch-detail-foot">

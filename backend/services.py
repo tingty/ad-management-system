@@ -20,6 +20,8 @@ from models import PromptConfig
 from providers import parse_json, resolve_analysis_llm, finalize_invocation
 from prompt_catalog import PROMPT_META, EXTRA_PROMPTS, preset_prompt_entries
 from industry_profiles import brand_from_page, resolve_profile
+# V4.42 / F09：事实证据链、分区预算采样与空证据阻断
+from evidence import build_evidence_pack, evidence_contract
 
 # V4.37：旧的 5 条系统级提示词（网站核心内容分析 / 创意方向 / 文案 / 视频分镜 / 图片设计）
 # 只服务于已删除的「创作工作台 / 批量生成」，故从注册表移除。
@@ -432,28 +434,39 @@ def get_landing_prompt(db) -> str:
     return "\n\n".join([p for p in parts if p]).strip()
 
 
-def build_landing_prompt(url: str, text: str, page: dict) -> str:
-    """构造落地页分析的用户提示词：URL（展示）+ 页面结构 + 正文。"""
+def build_landing_prompt(url: str, text: str, page: dict,
+                         evidence_pack: dict | None = None) -> str:
+    """V4.42 / F09：不再只送正文前 4000 字符。
+
+    改为「首尾窗口 + 关键条款区块」的预算内采样，每段带 [E###] 证据编号，
+    并要求模型把已验证事实 / 营销假设 / 缺口分开、每条承诺引用证据编号。
+    旧调用（不传 evidence_pack）也会自动按新规则采样，不再静默截断长页面。
+    """
+    page = page or {}
+    pack = evidence_pack if isinstance(evidence_pack, dict) else build_evidence_pack(page, text)
     meta_bits = []
-    if page:
-        if page.get("title"):
-            meta_bits.append(f"标题: {page.get('title')}")
-        if page.get("h1"):
-            meta_bits.append(f"H1: {page.get('h1')}")
-        if page.get("h2"):
-            meta_bits.append(f"H2: {page.get('h2')}")
-        if page.get("ctas"):
-            meta_bits.append(f"CTA: {page.get('ctas')}")
-        if page.get("description"):
-            meta_bits.append(f"META描述: {page.get('description')}")
+    if page.get("title"):
+        meta_bits.append(f"标题: {page.get('title')}")
+    if page.get("h1"):
+        meta_bits.append(f"H1: {page.get('h1')}")
+    if page.get("h2"):
+        meta_bits.append(f"H2: {page.get('h2')}")
+    if page.get("ctas"):
+        meta_bits.append(f"CTA: {page.get('ctas')}")
+    if page.get("description"):
+        meta_bits.append(f"META描述: {page.get('description')}")
     meta_str = "；".join(meta_bits) if meta_bits else "无"
     return (
-        f"输入 URL（仅用于追踪，不代表产品身份）: {(page or {}).get('input_url') or url or '无'}\n"
-        f"最终落地页 URL（相对链接以此为准）: {(page or {}).get('final_url') or url or '无'}\n"
+        f"输入 URL（仅用于追踪，不代表产品身份）: {page.get('input_url') or url or '无'}\n"
+        f"最终落地页 URL（相对链接以此为准）: {page.get('final_url') or url or '无'}\n"
         f"页面结构: {meta_str}\n"
-        f"正文:\n{(text or '')[:4000]}\n\n"
-        "请基于以上页面真实内容，输出 8 字段 JSON。不得从域名推断品牌，"
-        "不得编造页面未出现的价格、优惠、评价或效果数据；缺资料时留空。"
+        f"正文采样（共 {pack.get('source_chars', 0)} 字符，本次送入 "
+        f"{len(pack.get('coverage') or [])} 个带编号片段，未覆盖 {pack.get('dropped_chars', 0)} 字符）:\n"
+        f"{pack.get('budgeted_text') or '（无正文）'}\n\n"
+        + evidence_contract(pack) + "\n"
+        "请基于以上页面真实内容，输出 8 字段 JSON，并额外输出 facts / assumptions / gaps / "
+        "evidence_ids / evidence_chain（每条事实引用 [E###] 编号）。"
+        "不得从域名推断品牌，不得编造页面未出现的价格、优惠、评价或效果数据；缺资料时留空并写进 gaps。"
     )
 
 
@@ -523,6 +536,20 @@ def _normalize_landing(raw: dict, url: str) -> dict:
         if len(chs) >= 5:
             break
 
+    def as_evidence_ids(v):
+        if isinstance(v, list):
+            return [as_str(x)[:24] for x in v if as_str(x)][:24]
+        return [as_str(v)[:24]] if as_str(v) else []
+
+    chain = []
+    for item in (raw.get("evidence_chain") or [])[:16]:
+        if isinstance(item, dict):
+            chain.append({"claim": as_str(item.get("claim"))[:240],
+                          "evidence_ids": as_evidence_ids(item.get("evidence_ids")),
+                          "kind": as_str(item.get("kind"))[:32] or "fact"})
+        elif isinstance(item, str) and as_str(item):
+            chain.append({"claim": as_str(item)[:240], "evidence_ids": [], "kind": "fact"})
+
     return {
         "url": url or as_str(raw.get("url")),
         "language": as_str(raw.get("language")),
@@ -532,6 +559,12 @@ def _normalize_landing(raw: dict, url: str) -> dict:
         "competitors": as_str_list(raw.get("competitors"), 3),
         "advantages": as_str_list(raw.get("advantages"), 5),
         "channels": chs,
+        # V4.42 / F09：已验证事实 / 营销假设 / 缺口分离，每条承诺可引用证据编号
+        "facts": as_str_list(raw.get("facts"), 12),
+        "assumptions": as_str_list(raw.get("assumptions"), 8),
+        "gaps": as_str_list(raw.get("gaps"), 8),
+        "evidence_ids": as_evidence_ids(raw.get("evidence_ids")),
+        "evidence_chain": chain,
     }
 
 
@@ -555,6 +588,10 @@ async def analyze_landing_concise(db, url, text, page=None) -> dict:
       证据来源与核验状态；相对 Logo 用最终地址解析，og:image 不再无条件当 Logo。
     - F10：模型展示与真实调用共用同一路由与 config_id；回退标记在 `chat()` 之后刷新，
       Mock 返回可解析 JSON 时 source 必须写 mock，不能误标 llm。
+    V4.42 / F09：
+    - 正文按「首尾窗口 + 关键条款区块」预算采样，不再 `text[:4000]`；
+    - 返回证据编号、采样覆盖、已验证事实 / 营销假设 / 缺口；
+    - 空页、抓取失败、薄内容、过期优惠在调用模型**之前**阻断为 needs_input。
     """
     url = (url or "").strip()
     text = (text or "").strip()
@@ -571,15 +608,40 @@ async def analyze_landing_concise(db, url, text, page=None) -> dict:
     brand_info = brand_from_page({}, page, final_url, input_url)
     identity = _landing_identity(url, page, logo_info, brand_info, profile)
 
+    # V4.42 / F09：证据包与阻断门（纯函数，先于任何模型调用）
+    pack = build_evidence_pack(page, text)
+    gate = pack["gate"]
+    evidence_fields = {
+        "facts": [], "assumptions": [], "gaps": [], "evidence_ids": [],
+        "evidence_chain": [], "evidence_gate": gate["status"],
+        "blocked_reasons": gate["reasons"],
+        "evidence_coverage": pack["coverage"],
+        "evidence_dropped_chars": pack["dropped_chars"],
+        "evidence_source_chars": pack["source_chars"],
+        "evidence_index": pack["evidence"],
+        "evidence_expired_offers": gate["expired_offers"],
+        "legacy_unverified": pack["legacy_unverified"],
+        "evidence_note": pack["note"],
+    }
+    if not gate["allowed"]:
+        # 没有事实证据就不进模型，也不从 URL / 行业常识猜产品事实。
+        # 由 router 把 needs_input 转成结构化 422，前端展示具体原因。
+        _blocked_llm, _blocked_info = _resolve_model(db)
+        return {
+            **evidence_fields, **_local_landing(url, page), **identity,
+            "model_info": finalize_invocation(_blocked_info, _blocked_llm, False),
+            "source": "blocked", "gate_status": "needs_input",
+        }
+
     sys_prompt = get_landing_prompt(db)
-    user_prompt = build_landing_prompt(url, text, page)
+    user_prompt = build_landing_prompt(url, text, page, evidence_pack=pack)
     llm, info = _resolve_model(db)
 
     # 没有任何可用的真实模型配置：直接走本地兜底，明确标注
     if not info["provider"]:
-        return {**_local_landing(url, page), **identity,
+        return {**evidence_fields, **_local_landing(url, page), **identity,
                 "model_info": finalize_invocation(info, llm, False),
-                "source": "local"}
+                "source": "local", "gate_status": "ok"}
 
     try:
         resp = await llm.chat(sys_prompt, user_prompt)
@@ -590,11 +652,13 @@ async def analyze_landing_concise(db, url, text, page=None) -> dict:
         info = finalize_invocation(info, llm, parsed_ok)
         if parsed_ok:
             data = _normalize_landing(raw, input_url)
-            return {**data, **identity, "model_info": info,
-                    "source": "mock" if info["fallback"] else "llm"}
+            return {**evidence_fields, **data, **identity, "model_info": info,
+                    "source": "mock" if info["fallback"] else "llm",
+                    "gate_status": "ok"}
         print(f"[landing] 模型返回无法解析为 8 字段 JSON（len={len(resp)}），回退本地构造")
     except Exception as e:
         print("[landing] llm failed:", str(e)[:140])
         info = finalize_invocation(info, llm, False)
-    # 模型调用 / 解析失败：本地兜底，但保留实际调用信息进行追溯
-    return {**_local_landing(url, page), **identity, "model_info": info, "source": "local"}
+    # 模型调用 / 解析失败：本地兜底，但保留实际调用信息与证据链进行追溯
+    return {**evidence_fields, **_local_landing(url, page), **identity,
+            "model_info": info, "source": "local", "gate_status": "ok"}

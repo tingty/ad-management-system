@@ -62,6 +62,11 @@ def history_to_dict(row) -> dict:
         "source_id": row.source_id,
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
+        # V4.42 / F12：明确告知前端「images 只是展示缓存」，完整记录走分页接口
+        "display_cache_limit": 80,
+        "retention_policy": ("完整素材保存在不可变 creative_assets 记录中，不自动截断；"
+                             "按 history_id 分页查询 /api/creative-assets 可读取早期素材"),
+        "asset_list_url": f"/api/creative-assets?history_id={row.id}",
     }
 
 
@@ -215,6 +220,28 @@ def copy_as_text(row) -> str:
                                  if isinstance(x, dict) and x.get("layout")))
     if layouts:
         lines.append("本次使用版式：" + " / ".join(layouts))
+    # V4.42 / F06：逐图记录请求 / 返回尺寸与主体保护构图；F12：服务端任务与归档
+    modes = list(dict.fromkeys(
+        str((x.get("composition") or {}).get("mode") or "").strip()
+        for x in imgs if isinstance(x, dict) and (x.get("composition") or {}).get("mode")))
+    if modes:
+        lines += ["", "【构图与尺寸能力（F06）】"]
+        lines.append("构图模式：" + " / ".join(modes))
+        for x in imgs:
+            if not isinstance(x, dict) or not x.get("composition"):
+                continue
+            comp = x["composition"]
+            req = "×".join(str(v) for v in (x.get("request_size") or [])) or "—"
+            ret = "×".join(str(v) for v in (x.get("returned_size") or [])) or "—"
+            lines.append(f"- {x.get('size') or '—'}：请求 {req} / 实际返回 {ret} / "
+                         f"{comp.get('mode') or '—'} / 裁切 {comp.get('crop') or '未裁切'}")
+        lines.append("说明：尺寸能力以官方文档与受控测试为准；未核验比例由渲染端扩图或主体保护处理。")
+    job_ids = list(dict.fromkeys(str(x.get("job_id") or "").strip() for x in imgs
+                                 if isinstance(x, dict) and x.get("job_id")))
+    if job_ids:
+        lines += ["", "【服务端生成任务（F12）】", "任务 ID：" + " / ".join(job_ids),
+                  "生成与归档由服务端完成，浏览器断开不影响结果；完整资产按 history_id 分页查询。"]
+    lines.append("历史保留策略：完整素材保存在不可变记录中，不自动截断；列表仅缓存最近 80 张。")
     return "\n".join(lines) + "\n"
 
 
@@ -240,6 +267,27 @@ def analysis_as_text(row) -> str:
     if mi:
         lines.append(f"分析模型：{mi.get('provider', '-')} / {mi.get('model', '-')}"
                      + ("（兜底）" if mi.get("fallback") else ""))
+    # V4.42 / F09：事实 / 假设 / 缺口与证据编号可追溯
+    if a.get("evidence_coverage") or a.get("facts") or a.get("gaps") or a.get("legacy_unverified"):
+        lines += ["", "【事实证据链】",
+                  f"证据门：{a.get('evidence_gate') or '—'} ｜ 原文 {a.get('evidence_source_chars') or 0} 字 ｜ "
+                  f"送入 {len(a.get('evidence_coverage') or [])} 段 ｜ 未覆盖 {a.get('evidence_dropped_chars') or 0} 字"]
+        for key, label in (("facts", "已验证事实"), ("assumptions", "营销假设"),
+                           ("gaps", "资料缺口")):
+            vals = a.get(key) or []
+            if vals:
+                lines.append(f"{label}：" + "；".join(str(x) for x in vals))
+        if a.get("evidence_ids"):
+            lines.append("可引用证据编号：" + "、".join(str(x) for x in a["evidence_ids"]))
+        for c in (a.get("evidence_chain") or [])[:12]:
+            if isinstance(c, dict):
+                lines.append(f"  - {c.get('claim') or ''} [{c.get('kind') or 'fact'}] "
+                             f"引用 {', '.join(c.get('evidence_ids') or []) or '未引用'}")
+        if a.get("evidence_expired_offers"):
+            lines.append("过期优惠（不得沿用）："
+                         + "；".join(str(x.get("expires_on")) for x in a["evidence_expired_offers"]))
+        if a.get("legacy_unverified"):
+            lines.append("注意：旧数据无证据 ID，标记为 legacy_unverified，不自动补成已验证。")
     return "\n".join(lines) + "\n"
 
 
@@ -307,6 +355,10 @@ def build_files_zip(files: list[str], metas: list[dict] | None = None,
             "spec_source": SPEC_SOURCE,
             "spec_note": (SPEC_DISCLAIMER +
                           " 适用广告产品与资产角色见「素材历史 → 导出」的生成信息.json。"),
+            "composition_note": ("V4.42 / F06：逐图构图模式、请求 / 返回尺寸与裁切参数见"
+                                 "「素材创作」图片元数据与历史生成信息.json"),
+            "retention_policy": ("V4.42 / F12：完整素材为不可变记录，按 history_id 分页查询"
+                                 " /api/creative-assets；本 ZIP 仅含当前展示缓存中的图片"),
         }))
     buf.seek(0)
     return buf
@@ -360,6 +412,30 @@ def build_history_zip(rows: list, multi: bool = False) -> io.BytesIO:
                 "creative_config": ((row.style_opts_json or {}).get("creative_config")
                                     if isinstance(row.style_opts_json, dict) else None),
                 "creative_note": "配置快照记录当时实际生效的预设，后续修改不覆盖历史",
+                # V4.42 / F06：构图 / 尺寸能力；F12：服务端任务、不可变归档与保留策略
+                "composition_modes": list(dict.fromkeys(
+                    str((im.get("composition") or {}).get("mode") or "").strip()
+                    for im in images if isinstance(im, dict)
+                    and (im.get("composition") or {}).get("mode"))),
+                "request_sizes": [im.get("request_size") for im in images
+                                  if isinstance(im, dict) and im.get("request_size")][:24],
+                "returned_sizes": [im.get("returned_size") for im in images
+                                   if isinstance(im, dict) and im.get("returned_size")][:24],
+                "composition_note": ("尺寸能力以官方文档与受控测试为准；未核验比例由渲染端"
+                                     "扩图或主体保护处理，逐图裁切参数见图片元数据"),
+                "job_ids": tag("job_id"),
+                "display_cache_limit": 80,
+                "retention_policy": ("完整素材保存在不可变 creative_assets 记录中，不自动截断；"
+                                     "按 history_id 分页查询 /api/creative-assets 可读取早期素材"),
+                "evidence": {
+                    "gate": (row.analysis_json or {}).get("evidence_gate") or "—",
+                    "coverage_count": len((row.analysis_json or {}).get("evidence_coverage") or []),
+                    "source_chars": (row.analysis_json or {}).get("evidence_source_chars") or 0,
+                    "dropped_chars": (row.analysis_json or {}).get("evidence_dropped_chars") or 0,
+                    "facts": (row.analysis_json or {}).get("facts") or [],
+                    "gaps": (row.analysis_json or {}).get("gaps") or [],
+                    "legacy_unverified": bool((row.analysis_json or {}).get("legacy_unverified")),
+                },
                 "spec_note": "内部整理规则，正式投放前须按平台官方文档复核",
             }))
             manifest.append({"id": row.id, "title": row.title, "folder": base or ".",

@@ -1,18 +1,30 @@
-# 广告管理系统（在线营销素材管理平台 V4.41）
+# 广告管理系统（在线营销素材管理平台 V4.42）
 
 对应方案文档：《在线营销素材管理平台方案.docx》；开发节奏见《在线营销素材管理平台-版本开发规划.docx》。
-**当前版本：V4.41（2026-11-10）**。每次优化与更改的完整版本内容见 [CHANGELOG.md](CHANGELOG.md)，
+**当前版本：V4.42（2026-11-10）**。每次优化与更改的完整版本内容见 [CHANGELOG.md](CHANGELOG.md)，
 系统内「系统设置 → 新版通知」顶部显示当前更新版本号与主要更新内容，并统一展示各期改造进度
-（当前 9 / 12，支持按涉及模块 / 变更类型筛选、查看影响范围与验证结果）。
+（**12 / 12 全部完成**，支持按涉及模块 / 变更类型筛选、查看影响范围与验证结果）。
 
 **AI 改造分期**：依据《广告素材平台问题诊断与AI改造实施说明书》，12 个问题按「每期 3 个、
 独立提交、独立版本通知」分 4 期推进，问题核对与验收用例见 [docs/REMEDIATION_TRACKER.md](docs/REMEDIATION_TRACKER.md)。
 第 1 期 V4.39 完成 F01 / F02 / F10（输入与输出可信度）；第 2 期 V4.40 完成 F07 / F08 / F11
 （任务矩阵完整覆盖、媒体规则版本化与模型调用前强校验、批次隔离与逐图状态）；
 第 3 期 V4.41 完成 F03 / F04 / F05（概念驱动画面、预设编辑全量生效、动态版式与品牌色）；
-第 4 期 V4.42 为 F06 / F09 / F12。
+第 4 期 V4.42 完成 F06 / F09 / F12（供应商尺寸能力与主体保护构图、落地页事实证据链、
+服务端持久任务与不可变资产），四期收官。
 改造主干对全部行业一致，电商购买与订阅转化只是 `backend/industry_profiles.py` 中的两个画像；
 其它行业通过局部调整价值维度、语义保护、证据类型、视觉主体与版位偏好输出素材，不改通用链路。
+
+**V4.42 新增能力速览**：`backend/image_capabilities.py` 用 `PROVIDER_CAPABILITIES` 声明供应商尺寸候选、
+核验日期与参考图能力，`plan_generation_size()` 把宽高作为一个比例整体选候选（不再分别吸附成方形），
+`plan_composition()` 按版式主体保护框计算裁切锚点，比例差过大或极端横幅走 contain 扩图；每张图回传
+`request_size` / `returned_size` / `composition` / `size_capability` 供逐图核对。
+`backend/evidence.py` 把正文改为「首尾窗口 + 关键条款区块」预算内采样，产出 `[E###]` 证据编号、
+采样覆盖、facts / assumptions / gaps 分离；空页、抓取失败、薄内容与过期优惠在调用模型前阻断为
+`needs_input`（HTTP 422）。`backend/job_service.py` 新增持久 `GenerationJob` 与不可变 `CreativeAsset` 两张表：
+创建任务立即返回 `job_id`（202）并在服务端完成生成与归档，按幂等键去重，刷新 / 关页后按任务 ID 恢复，
+支持取消与「仅重试失败子任务」；历史超过 80 张仍可按页读取早期素材。
+`GET /api/image-capabilities` 下发能力清单，`size_verified_on` 为空表示尚未按供应商官方文档核验。
 
 **V4.41 新增能力速览**：`backend/creative_config.py` 提供 `ResolvedCreativeConfig` / `CreativeConcept` /
 `VisualBrief`——文案与图片共用同一份预设解析结果，先选概念再生成逐任务视觉简报与背景提示词；
@@ -33,7 +45,7 @@
 |---|---|---|---|
 | 素材创作平台 | 素材创作 | 落地页分析 + 营销推广设置（平台 / 文案 / 推广图片） | admin / manager / editor |
 | 素材创作平台 | 素材提示词 | 全量提示词目录（按功能 / 使用类型分类）+ 优秀提示词总结库 + 系统默认 | 读取所有登录角色；写入 admin |
-| 素材创作平台 | 素材历史 | 已分析网站 / 文案 / 图片归档、放大查阅、再下载、批量删除、复用分析 | admin / manager / editor |
+| 素材创作平台 | 素材历史 | 已分析网站 / 文案 / 图片归档、放大查阅、再下载、批量删除、复用分析、全量资产分页读取（V4.42） | admin / manager / editor |
 | 系统设置 | 大模型配置 | 按协议直配、连通性测试、每日自动测试、测试成功优先选配 | admin |
 | 系统设置 | 账号 / 日志 | 账号与角色、审计日志 | admin |
 | 系统设置 | 新版通知 | 当前版本号 + 主要更新内容、分期改造进度、结构化版本发布内容、模块 / 类型筛选、未读红点 | 所有登录角色（含 viewer） |
@@ -112,7 +124,9 @@ git add -A && git commit -m "V4.38 ..." && git push
 > 以下为 V1–V3 历史结构，用于追溯版本演进；其中 `specs_data.py` / `insight.py` / `report.py` /
 > `optimize.py` / `creative.py` / `render.py` / `validation.py` 已在 V4.37 删除。
 > 当前模块以文首「当前模块结构」与 `CHANGELOG.md` 最新版本通知为准。
-> V4.40 新增 `backend/batch_workspace.py` 与 `frontend/src/taskMatrix.ts`。
+> V4.40 新增 `backend/batch_workspace.py` 与 `frontend/src/taskMatrix.ts`；
+> V4.41 新增 `backend/creative_config.py`；V4.42 新增 `backend/image_capabilities.py`、
+> `backend/evidence.py`、`backend/job_service.py`。
 
 ```
 ad-material-platform/
@@ -224,17 +238,18 @@ npm run dev          # http://localhost:5173
 6. **规格库**：7 平台尺寸/视频/字数红线/关键词逻辑；管理员与经理可在线编辑，改动即时影响生成与校验。
 7. **设置（管理员）**：按用途配置模型（analysis/copy/image/video）+ 连通性测试 + 用户与角色 + 审计日志。
 
-## 关键 API（V4.40 当前有效接口，共 36 条路径）
+## 关键 API（V4.42 当前有效接口，共 42 条路径）
 
 | 分组 | 接口 |
 |---|---|
 | 认证 / 健康 | `POST /api/auth/login`、`GET /api/auth/me`、`GET /api/auth/roles`、`GET /api/health` |
 | 用户 / 审计 | `GET/POST /api/users`、`PUT/DELETE /api/users/{uid}`、`GET /api/audit-logs` |
-| 落地页分析 | `POST /api/landing-analysis`、`GET /api/industry-profiles` |
-| 媒体规则与平台 | `GET /api/media-platforms`、`GET /api/media-rules`（V4.40 新增）、`GET /api/settings/creative-presets` |
-| 文案 / 图片生成 | `POST /api/media-campaign/copy`（支持 `ad_product`）、`POST /api/media-campaign/images`（任务矩阵 + 概念索引 + 规则版本） |
+| 落地页分析 | `POST /api/landing-analysis`（证据不足返回结构化 422）、`GET /api/industry-profiles` |
+| 媒体规则与平台 | `GET /api/media-platforms`、`GET /api/media-rules`（V4.40）、`GET /api/image-capabilities`（V4.42）、`GET /api/settings/creative-presets` |
+| 文案 / 图片生成 | `POST /api/media-campaign/copy`（支持 `ad_product` / `style_opts`）、`POST /api/media-campaign/images`（同步接口保留，返回逐图构图记录） |
+| 服务端生成任务 | `POST /api/generation-jobs`（202 + `job_id` + 幂等键）、`GET /api/generation-jobs`、`GET /api/generation-jobs/{job_id}`、`POST .../cancel`、`POST .../retry`（仅失败项，V4.42） |
 | 图片查阅 / 下载 | `GET /api/media-files/download`、`GET /api/media-files/zip`、`POST /api/assets/upload` |
-| 素材历史 | `GET/POST /api/creation-history`、`GET/PUT/DELETE /api/creation-history/{hid}`、`GET .../copy.txt`、`GET .../export.zip`、`GET /api/creation-history/export` |
+| 素材历史 / 资产 | `GET/POST /api/creation-history`、`GET/PUT/DELETE /api/creation-history/{hid}`、`GET .../copy.txt`、`GET .../export.zip`、`GET /api/creation-history/export`、`GET /api/creative-assets?history_id=&offset=`（V4.42 全量分页） |
 | 大模型配置 | `GET/POST /api/settings/models`、`PUT/DELETE /api/settings/models/{mid}`、`/test`、`/test-all`、`/{mid}/test`、`/health`、`/presets` |
 | 提示词与预设 | `GET /api/settings/prompts`、`PUT /api/settings/prompts/{key}`、`/{key}/reset`、`/prompt-taxonomy`、`/prompt-library`、`/prompt-defaults` |
 | 新版通知 | `GET /api/system/release-notes`（`current` 当前版本 + `highlights` + `roadmap` 改造进度） |
@@ -258,6 +273,11 @@ V4.37 已下线的 `/api/analyze`、`/api/generate`、`/api/campaigns/*`、`/api
 | `AD_MAX_IMAGE_CONCURRENCY` | `4` | V4.40：跨批次的文生图供应商并发上限（按供应商实际配额调整） |
 | `AD_IMAGE_TASK_TIMEOUT` | `200` | V4.40：单张图生成超时秒数，超时记为回退并逐图标注，不重试已计费调用 |
 | `AD_BATCH_STALE_TTL` | `3600` | V4.40：批次临时目录遗留回收窗口（秒），须大于单任务超时 |
+
+V4.42 无新增依赖与必填环境变量：新增 `generation_jobs` / `creative_assets` 两张表由 `ensure_schema()` 的
+`create_all` 自动建立，旧库重启即可。供应商尺寸能力的可选登记 `params.size_candidates` /
+`params.size_verified_on` 属于「大模型配置」里的图片模型参数，不是环境变量；未登记时 `GET /api/image-capabilities`
+会明确标注 `size_verified_on` 为空，不会虚构已支持的横版 / 竖版 API 尺寸。
 
 ## AI 模型接入
 
@@ -290,3 +310,9 @@ campaign_<id>_selected.zip        # 定稿：仅导出已选变体（未定稿�
 - 视频模型各厂商协议差异大，当前约定最小通用契约（`video/generations` 返回 `url` 或 `b64_json`），接入具体厂商时替换 `providers.ModelVideo` 即可。
 - 图片为模板化合成（品牌色板在 `imaging.PALETTE`），如需品牌 VI 规范可替换字体与色板。
 - 默认 SQLite 便于本地验收，团队并发使用建议切 PostgreSQL（WAL 与 busy_timeout 已就绪）。
+- V4.42：服务端持久任务是单进程 `asyncio` 后台任务，不是分布式队列；进程被强制杀死不会跨进程自动续跑，
+  重启后 `recover_interrupted()` 把 running / queued 标为 failed 并提示分项重试。
+- V4.42：默认文生图尺寸候选只有代码内已有实测说明的 1024 / 2048 方形；`needs_outpaint` 与空的
+  `size_verified_on` 表示比例差过大且尚未按官方文档核验。媒体规则 `SPEC_VERIFIED_ON` 同样为空，投放前须复核。
+- V4.42：落地页证据「已验证」只表示页面原文可引用，不构成价格、优惠或合规性的真实性背书；动态渲染页面
+  仍未升级浏览器抓取，本期只做分区与预算采样。效果反馈闭环（关联广告 ID / 订单 / 订阅表现）属后续规划。

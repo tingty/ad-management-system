@@ -10,7 +10,7 @@ from routers import router
 from auth import decode_token, hash_password, verify_password
 from services import PROMPT_REGISTRY, sync_prompt_defaults, REMOVED_PROMPT_KEYS
 
-app = FastAPI(title="广告管理系统", version="4.41.0")
+app = FastAPI(title="广告管理系统", version="4.42.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -233,6 +233,11 @@ def on_startup():
     ensure_default_admin()
     seed_prompts()
     seed_default_model()
+    # V4.42 / F12：进程重启后把停在 running/queued 的任务标为失败，避免状态永久卡住
+    from job_service import recover_interrupted
+    n = recover_interrupted()
+    if n:
+        print(f"[jobs] 重启后回收 {n} 个中断任务（状态已标为 failed，可用分项重试）")
 
 
 @app.on_event("startup")

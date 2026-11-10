@@ -6,7 +6,7 @@ import os, time, re
 
 from database import get_db
 from models import (ModelConfig, User, AuditLog, PromptConfig, SystemState,
-                    CreationHistory, utcnow)
+                    CreationHistory, GenerationJob, CreativeAsset, utcnow)
 from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LoginRequest, UserOut, UserCreate, UserUpdate,
                      PromptOut, PromptUpdate, PromptDefaultIn,
@@ -22,6 +22,8 @@ from media_platforms import (list_media_platforms, validate_platform,
                              MediaRuleError, SPEC_VERSION, MEDIA_RULES)
 from media_ad import generate_media_copy, generate_media_images
 from industry_profiles import resolve_profile
+from image_capabilities import public_capabilities
+import job_service
 from auth import (current_user, require_roles, verify_password, hash_password, create_token,
                   user_dict, ROLE_LABELS, CAN_EDIT, CAN_REVIEW, ROLES, decode_token)
 from creation_history import (
@@ -42,6 +44,17 @@ async def landing_analysis(req: LandingAnalysisRequest, db: Session = Depends(ge
     if not url and not text:
         raise HTTPException(400, "请提供落地页 URL 或正文")
     result = await analyze_landing_concise(db, url or None, text or None)
+    # V4.42 / F09 / T12：空页、抓取失败、薄内容或过期优惠在调用模型前明确阻断，
+    # 不返回一份「看起来能用但没有事实证据」的分析结果。
+    if result.get("gate_status") == "needs_input":
+        raise HTTPException(422, detail={
+            "message": "落地页证据不足，已在调用模型前阻断分析（needs_input）",
+            "errors": result.get("blocked_reasons") or [],
+            "evidence_gate": "needs_input",
+            "fetch_quality": result.get("fetch_quality") or "",
+            "expired_offers": result.get("evidence_expired_offers") or [],
+            "hint": "请补充落地页正文 / 检查网址可达性 / 移除过期优惠后重试；系统不会从 URL 猜测产品事实。",
+        })
     return LandingAnalysis(**result)
 
 # ----------------------------- 素材创作：营销推广的媒体平台设置 -----------------------------
@@ -133,6 +146,107 @@ async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depend
                                          req.logo or "", copy_variants=variants,
                                          rules_meta=checked["meta"])
     return result
+
+
+# ===========================================================================
+# V4.42 / F06 + F12：供应商尺寸能力、服务端持久任务与不可变资产
+# ===========================================================================
+
+@router.get("/image-capabilities")
+async def api_image_capabilities(_: User = Depends(require_roles(*CAN_EDIT))):
+    """F06：下发各文生图供应商的尺寸候选 / 能力声明与核验日期（未核验不冒充已支持）。"""
+    return public_capabilities()
+
+
+@router.post("/generation-jobs", status_code=202)
+async def create_generation_job(body: dict, db: Session = Depends(get_db),
+                                user: User = Depends(require_roles(*CAN_EDIT))):
+    """F12：创建持久任务，立即返回 job_id；生成与归档由服务端完成。
+
+    同一个 `idempotency_key` 重复提交只返回原任务，不重复调用模型、不重复归档。
+    浏览器断开 / 刷新后可用 `GET /api/generation-jobs/{job_id}` 恢复结果与状态。
+    """
+    from pydantic import ValidationError
+    try:
+        job, created = job_service.create_job(
+            db, body, user, idempotency_key=str(body.get("idempotency_key") or "").strip())
+    except ValidationError as e:
+        raise HTTPException(422, detail={
+            "message": "生成任务入参不合法，已在排队前拒绝",
+            "errors": [f"{'.'.join(str(x) for x in er.get('loc', []))}: {er.get('msg')}"
+                       for er in e.errors()[:8]],
+        })
+    except Exception as e:
+        raise HTTPException(422, detail={"message": "生成任务创建失败",
+                                        "errors": [f"{type(e).__name__}: {str(e)[:180]}"]})
+    if created:
+        job_service.spawn_job(job.job_id)
+    return {**job_service.job_to_dict(job, include_result=False),
+            "created": created,
+            "poll_url": f"/api/generation-jobs/{job.job_id}",
+            "message": ("任务已创建并在服务端执行，可离开页面；刷新后按 job_id 恢复"
+                        if created else "同一幂等键已存在，返回原任务（不重复生成）")}
+
+
+@router.get("/generation-jobs")
+def list_generation_jobs(history_id: int | None = None, limit: int = 50, offset: int = 0,
+                         db: Session = Depends(get_db),
+                         _: User = Depends(require_roles(*CAN_EDIT))):
+    q = db.query(GenerationJob)
+    if history_id is not None:
+        q = q.filter(GenerationJob.history_id == history_id)
+    lim = max(1, min(int(limit or 50), 200))
+    off = max(0, int(offset or 0))
+    rows = q.order_by(GenerationJob.id.desc()).offset(off).limit(lim).all()
+    return {"items": [job_service.job_to_dict(r, include_result=False) for r in rows],
+            "total": q.count(), "limit": lim, "offset": off}
+
+
+@router.get("/generation-jobs/{job_id}")
+def get_generation_job(job_id: str, db: Session = Depends(get_db),
+                       _: User = Depends(require_roles(*CAN_EDIT))):
+    """刷新 / 关闭浏览器后按 job_id 恢复：状态、逐项结果与归档信息都在这里。"""
+    row = db.query(GenerationJob).filter_by(job_id=job_id).first()
+    if not row:
+        raise HTTPException(404, "生成任务不存在")
+    return job_service.job_to_dict(row, include_result=True)
+
+
+def _job_row(db: Session, job_id: str) -> GenerationJob:
+    row = db.query(GenerationJob).filter_by(job_id=job_id).first()
+    if not row:
+        raise HTTPException(404, "生成任务不存在")
+    return row
+
+
+@router.post("/generation-jobs/{job_id}/cancel")
+def cancel_generation_job(job_id: str, db: Session = Depends(get_db),
+                          _: User = Depends(require_roles(*CAN_EDIT))):
+    return job_service.cancel_job(db, _job_row(db, job_id))
+
+
+@router.post("/generation-jobs/{job_id}/retry", status_code=202)
+async def retry_generation_job(job_id: str, db: Session = Depends(get_db),
+                               user: User = Depends(require_roles(*CAN_EDIT))):
+    """只重试失败子任务：成功项不重复调用模型、不重复归档。"""
+    origin = _job_row(db, job_id)
+    job, message = job_service.retry_failed(db, origin, user)
+    if job is None:
+        raise HTTPException(409, detail={"message": message, "job_id": job_id})
+    db.refresh(job)
+    job_service.spawn_job(job.job_id)
+    return {**job_service.job_to_dict(job, include_result=False),
+            "created": True, "message": message}
+
+
+@router.get("/creative-assets")
+def list_creative_assets(history_id: int | None = None, job_id: str = "",
+                         limit: int = 50, offset: int = 0,
+                         db: Session = Depends(get_db),
+                         _: User = Depends(require_roles(*CAN_EDIT))):
+    """F12 / T16：不可变资产分页查询；历史超过 80 张仍能读取早期素材。"""
+    return job_service.list_assets(db, history_id=history_id, job_id=job_id,
+                                   limit=limit, offset=offset)
 
 
 # ===========================================================================
@@ -270,13 +384,23 @@ def delete_creation_history(body: dict, db: Session = Depends(get_db),
     for r in rows:
         targets.update(image_files_of(r))
     found = [r.id for r in rows]
+    # V4.42 / F12：显式保留 / 删除策略 —— 删除历史会话时同步删除其不可变资产记录，
+    # 文件仍由 cleanup_orphan_files 按「是否被其它记录引用」安全回收。
+    assets = db.query(CreativeAsset).filter(CreativeAsset.history_id.in_(found)).all()
+    for a in assets:
+        fn = os.path.basename(str(a.file or ""))
+        if fn:
+            targets.add(fn)
+        db.delete(a)
     for r in rows:
         db.delete(r)
     db.commit()
     deleted_files = cleanup_orphan_files(db, targets)   # commit 之后再清磁盘，避免误删共享图片
     _audit(db, user, "history.delete", target="creation_history",
-           detail={"ids": found, "deleted_files": deleted_files})
-    return {"ok": True, "deleted": len(found), "deleted_files": deleted_files}
+           detail={"ids": found, "deleted_files": deleted_files,
+                   "deleted_assets": len(assets)})
+    return {"ok": True, "deleted": len(found), "deleted_files": deleted_files,
+            "deleted_assets": len(assets)}
 
 
 @router.put("/creation-history/{hid}")
@@ -317,8 +441,11 @@ def update_creation_history(hid: int, body: dict, db: Session = Depends(get_db),
             item = dict(im)
             item["file"] = os.path.basename(str(item.get("file") or item.get("url") or ""))
             uniq.append(item)
-        row.images_json = uniq[-80:]        # 单会话最多保留 80 张，防止无限膨胀
-        row.image_count = len(row.images_json)
+        # V4.42 / F12：这里只是「最近 80 张的展示缓存」，不再是历史资产的唯一记录。
+        # 完整不可变记录在 creative_assets 表，通过 GET /api/creative-assets?history_id=
+        # 分页读取（T16：超过 80 张仍能查到早期素材）；不再静默丢弃元数据。
+        row.images_json = uniq[-80:]
+        row.image_count = len(uniq)
     row.updated_at = utcnow()
     db.commit(); db.refresh(row)
     return history_to_dict(row)

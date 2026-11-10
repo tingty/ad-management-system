@@ -20,9 +20,16 @@ class LLMProvider:
         raise NotImplementedError
 
 class ImageProvider:
+    # V4.42 / F06：每个具体供应商声明自己的能力目录键，供 plan_generation_size 选尺寸
+    capability_key = "generic_image"
+
     async def generate(self, prompt: str, width: int, height: int, filename: str) -> str:
         """返回保存后的文件路径。"""
         raise NotImplementedError
+
+    def capabilities(self, params: dict | None = None) -> dict:
+        from image_capabilities import capability_of
+        return capability_of(self.capability_key, params)
 
 class VideoProvider:
     async def generate(self, prompt: str, platform: str, filename: str) -> dict:
@@ -281,6 +288,8 @@ def _mock_keywords(user):
 
 class TemplateImage(ImageProvider):
     """默认出图：Pillow 合成真实 PNG（品牌渐变 + 标题/副标/CTA 排版），无需任何 API Key。"""
+    capability_key = "template"
+
     async def generate(self, prompt, width, height, filename, copy=None):
         from imaging import render_ad_png
         path = os.path.join(UPLOAD_DIR, filename)
@@ -498,6 +507,8 @@ class OpenAIImage(ImageProvider):
     只负责"生成背景底图"，文案/版式叠加交给 render_creative 统一合成，
     这样文生图背景能与广告版式（评分卡/折扣角标/对比等）完美贴合。失败返回 None。
     """
+    capability_key = "openai_image"
+
     def __init__(self, api_key, base_url, model, params=None):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -540,6 +551,8 @@ class GenericImageProvider(ImageProvider):
     endpoint 默认 /images/generations；Stable Diffusion 等可经 params.endpoint 指定
     （如 /sdapi/v1/txt2img）。返回解码后的背景底图路径；失败返回 None。
     """
+    capability_key = "generic_image"
+
     def __init__(self, api_key, base_url, model, params=None):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -605,18 +618,26 @@ class DashScopeMaaSImageProvider(ImageProvider):
     该端点仅支持同步调用（X-DashScope-Async 会被拒 403），超时设 180s。
     任意环节失败返回 None，由 Pillow 模板兜底，绝不阻断主流程。
     """
+    capability_key = "dashscope_maas"
+
     def __init__(self, api_key, base_url, model, params=None):
         self.api_key = api_key
         self.base_url = (base_url or "").rstrip("/")
         self.model = model
         self.params = params or {}
+        # V4.42 / F06：记录本实例最近一次真实请求 / 返回尺寸，供逐图归档核对
+        self.last_generation_meta: dict = {}
 
     @staticmethod
     def _snap(n: int) -> int:
-        """把任意请求尺寸对齐到 API 支持的 1024 / 2048（已实测均可用）。"""
+        """兼容旧调用（单维度吸附到 1024 / 2048）。F06 后不再用两个 _snap 拼请求尺寸。"""
         return 2048 if n >= 1536 else 1024
 
     async def generate(self, prompt, width, height, filename, copy=None):
+        from image_capabilities import plan_generation_size
+        plan = plan_generation_size(self.capability_key, width, height, self.params)
+        rw, rh = plan["request_size"]
+        self.last_generation_meta = {**plan, "returned_size": None, "model": self.model}
         try:
             async with httpx.AsyncClient(timeout=180) as c:
                 r = await c.post(
@@ -625,7 +646,8 @@ class DashScopeMaaSImageProvider(ImageProvider):
                     json={
                         "model": self.model,
                         "input": {"messages": [{"role": "user", "content": [{"text": prompt}]}]},
-                        "parameters": {"size": f"{self._snap(width)}*{self._snap(height)}", "n": 1},
+                        # F06：宽高作为比例整体选择已声明的候选，不再各自 _snap 成方形
+                        "parameters": {"size": f"{rw}*{rh}", "n": 1},
                     },
                 )
                 r.raise_for_status()
@@ -642,6 +664,12 @@ class DashScopeMaaSImageProvider(ImageProvider):
                 path = os.path.join(UPLOAD_DIR, filename)
                 with open(path, "wb") as f:
                     f.write(resp.content)
+                try:
+                    from PIL import Image
+                    with Image.open(path) as im:
+                        self.last_generation_meta["returned_size"] = list(im.size)
+                except Exception:
+                    pass
                 return path
         except Exception:
             return None

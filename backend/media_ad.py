@@ -43,6 +43,9 @@ from industry_profiles import (resolve_profile, is_complete_sentence, missing_pr
                                protected_fragments)
 from media_platforms import get_media_platform, SPEC_VERSION
 from batch_workspace import BatchWorkspace
+# V4.42 / F06：供应商尺寸能力目录、按比例构图与主体保护
+from image_capabilities import (plan_generation_size, composition_goal,
+                                capability_of, plan_composition)
 # V4.41 / F03 + F04：统一创意配置、创意概念与视觉简报
 from creative_config import (resolve_creative_config, strategy_block, visual_text_block,
                              build_concept, build_visual_brief, choose_layout,
@@ -771,6 +774,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
     try:
 
         # V4.40 / F07：任务矩阵逐行决定概念；后端不再按 idx % len 机械配对不同字段的文案。
+        cap_key = getattr(img, "capability_key", "template") if img is not None else "template"
         tasks: list[dict] = []
         skipped: list[dict] = []
         for idx, raw_slot in enumerate(slots or []):
@@ -807,7 +811,13 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 # 小横幅没有可用的主体区，不假称已叠加商品图
                 brief["capability_note"] = (capability_note +
                                             " 本版位为小横幅，无可用主体区，未叠加商品图。")
-            bg_prompt = _media_image_prompt(analysis, platform, config, brief, db)
+            # V4.42 / F06：宽高作为一个比例整体选供应商已声明的尺寸；
+            # 同时把「主体放在安全区、给文字留白」的构图目标写进文生图提示词。
+            cap_key = getattr(img, "capability_key", "template") if img is not None else "template"
+            cap_params = (img_cfg.params if img_cfg else None) or {}
+            gen_plan = plan_generation_size(cap_key, w, h, cap_params)
+            bg_prompt = (_media_image_prompt(analysis, platform, config, brief, db)
+                         + "\nComposition goal: " + composition_goal(w, h, layout))
             phash = prompt_hash(bg_prompt)
 
             meta = {
@@ -822,6 +832,15 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 "layout": layout,
                 "prompt_hash": phash,
                 "creative_config_id": config["config_id"],
+                "request_size": gen_plan["request_size"],
+                "target_size": [w, h],
+                "size_capability": {
+                    "provider": gen_plan["provider"],
+                    "needs_outpaint": gen_plan["needs_outpaint"],
+                    "ratio_delta": gen_plan["ratio_delta"],
+                    "size_verified_on": gen_plan["size_verified_on"],
+                    "capability_note": gen_plan["capability_note"],
+                },
             }
             # V4.39 / F01：出图前先按该版式 + Logo 预留框核对像素预算
             overlay = build_overlay_text(headline, sub, cta, w, h, profile,
@@ -832,7 +851,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                     "concept_id": concept_id, "status": "needs_revision",
                     "reason": "图内文案超出该版位可排版预算，已阻止生成；请缩短文案后重试",
                     "overflow": overlay["overflow"], "budget": overlay["budget"],
-                    "batch_id": batch_id, **meta,
+                    "batch_id": batch_id, "task_index": idx, **meta,
                 })
                 continue
             # V4.36：文件名带随机后缀，避免「重新生成」覆盖历史图片。
@@ -867,6 +886,8 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             provider_error = ""
             retries = 0
             request_id = uuid.uuid4().hex[:12]
+            # V4.42 / F06：渲染层把真实裁切参数回填到这里，随图归档
+            trace: dict = {}
             if img is not None:
                 # 临时底图写进本批次目录，不与其他批次共享文件名空间。
                 rel = workspace.temp_name("mabg")
@@ -892,6 +913,15 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             if not ai_ok and not provider_error:
                 provider_error = "未获得 AI 底图"
 
+            returned_size = None
+            if bg_path:
+                try:
+                    from PIL import Image
+                    with Image.open(bg_path) as _probe:
+                        returned_size = list(_probe.size)
+                except Exception:
+                    pass
+
             for attempt in range(MAX_RENDER_RETRIES + 1):
                 try:
                     await asyncio.to_thread(
@@ -900,7 +930,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                         bg_path or None, t["logo_path"] or None, None, strict_text,
                         t["palette"], t["layout"],
                         product_path if reference_mode == "local_composite" else None,
-                        t["dim_ratio"])
+                        t["dim_ratio"], trace=trace)
                     break
                 except TextOverflowError as e:
                     return {"__skipped__": {
@@ -935,9 +965,16 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                           "request_id": request_id},
                 "retries": retries,
                 "batch_id": batch_id,
+                "task_index": t["idx"],
                 # F04：每张图绑定当时的概念、配置快照与最终提示词哈希
                 "visual_brief": brief_view,
                 "creative_config": cfg_snapshot,
+                # F06：请求尺寸 / 实际返回尺寸 / 真实裁切参数，逐图可核对（T08）
+                "returned_size": returned_size,
+                "composition": trace.get("composition") or {
+                    "mode": "gradient", "crop": None, "protected": True,
+                    "requested_size": [t["w"], t["h"]], "returned_size": returned_size,
+                },
                 **meta,
             }}
 
@@ -996,6 +1033,10 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             note_bits.append(f"{revision_count} 个版位因图内文案超预算被阻止生成（needs_revision），未输出省略号残图")
         if status == "failed":
             note_bits.append("整批无可用素材，请检查文案与版位设置后重试")
+        outpaint_count = sum(1 for x in images
+                             if (x.get("composition") or {}).get("mode") == "outpaint")
+        if outpaint_count:
+            note_bits.append(f"{outpaint_count} 张因比例差 / 极端版位改用扩图保留完整主体，未执行居中裁切")
         note = "；".join(note_bits) + "。"
 
         issues = [{
@@ -1012,7 +1053,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             "ad_product": s.get("ad_product", ""), "spec_version": s.get("spec_version", SPEC_VERSION),
             "file": "", "ai_background": False, "fallback": True,
             "error": s.get("reason", ""), "retries": s.get("retries", 0),
-            "batch_id": batch_id,
+            "batch_id": batch_id, "task_index": s.get("task_index"),
             "layout": s.get("layout", ""), "prompt_hash": s.get("prompt_hash", ""),
             "creative_config_id": s.get("creative_config_id", ""),
         } for s in skipped] + [{
@@ -1021,9 +1062,12 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             "spec_version": x["spec_version"], "file": x["file"],
             "ai_background": x["ai_background"], "fallback": x["fallback"],
             "error": x["fallback_reason"], "retries": x["retries"],
-            "batch_id": batch_id,
+            "batch_id": batch_id, "task_index": x.get("task_index"),
             "layout": x.get("layout", ""), "prompt_hash": x.get("prompt_hash", ""),
             "creative_config_id": x.get("creative_config_id", ""),
+            "request_size": x.get("request_size"), "returned_size": x.get("returned_size"),
+            "composition_mode": (x.get("composition") or {}).get("mode", ""),
+            "crop": (x.get("composition") or {}).get("crop"),
         } for x in images]
 
         return {
@@ -1048,6 +1092,18 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                                 "reference_mode": reference_mode},
             "reference_mode": reference_mode,
             "capability_note": capability_note,
+            # F06：整批的构图与尺寸能力汇总，导出与逐图字段互为佐证
+            "composition": {
+                "provider": cap_key if tasks else "template",
+                "modes": sorted({(x.get("composition") or {}).get("mode", "") for x in images}),
+                "outpaint_count": outpaint_count,
+                "protected_count": sum(1 for x in images
+                                       if (x.get("composition") or {}).get("protected")),
+                "size_capabilities": capability_of(
+                    cap_key if tasks else "template",
+                    (img_cfg.params if img_cfg else None) or {}),
+                "note": "尺寸能力以官方文档与受控测试为准；未核验比例由渲染端扩图 / 主体保护处理",
+            },
             "rules": {**rules_meta,
                       "stale_cleanup": stale,
                       "supplier_concurrency": MAX_CONCURRENT_IMAGE_TASKS,

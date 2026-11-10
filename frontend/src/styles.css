@@ -1220,6 +1220,32 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .tm-table tbody tr:last-child td { border-bottom: 0; }
 .tm-table .pill { font-size: 10.5px; }
 .ic-spec { padding: 0 10px 8px; font-size: 10.5px; color: var(--muted); line-height: 1.45; word-break: break-word; }
+/* V4.42 / F06：逐图构图记录 */
+.ic-comp { margin-top: 3px; color: #3d6fb4; font-size: 10px; }
+/* V4.42 / F12：服务端任务条 */
+.job-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 6px 0 12px; padding: 9px 12px; border: 1px solid var(--line, #e2e8f0); border-radius: 8px; background: var(--panel-2, #f8fafc); font-size: 11.5px; }
+.job-bar b { color: #2c5fa8; font-size: 12px; }
+.job-bar .muted { flex-basis: 100%; line-height: 1.5; }
+.job-actions { display: flex; gap: 8px; margin-left: auto; }
+/* V4.42 / F12：素材历史全量资产分页 */
+.asset-pager { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line, #e2e8f0); border-radius: 8px; background: var(--panel-2, #f8fafc); }
+.asset-pager-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; font-size: 12px; }
+.asset-pager-head b { color: #2c5fa8; }
+.asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin-top: 9px; }
+.asset-cell { border: 1px solid var(--line, #e2e8f0); border-radius: 6px; overflow: hidden; background: #fff; }
+.asset-cell img { width: 100%; height: 86px; object-fit: cover; display: block; }
+.asset-cell .ac-meta { padding: 4px 6px; font-size: 10px; color: var(--muted); line-height: 1.4; word-break: break-all; }
+.asset-pager .muted { font-size: 10.5px; line-height: 1.5; }
+/* V4.42 / F09：事实证据链 */
+.la-evidence { margin-top: 10px; padding: 9px 11px; border: 1px solid var(--line, #e2e8f0); border-radius: 8px; background: var(--panel-2, #f8fafc); font-size: 11.5px; }
+.la-evidence > b { color: #2c5fa8; display: block; margin-bottom: 6px; }
+.la-ev-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px 14px; margin: 6px 0; }
+.la-ev-cols > div > span { display: block; font-weight: 600; color: #3d6fb4; margin-bottom: 3px; }
+.la-ev-cols ul { margin: 0; padding-left: 16px; line-height: 1.55; }
+.la-ev-warn { color: #b42318; background: #fff2f0; border-radius: 5px; padding: 5px 8px; margin: 5px 0; }
+.la-ev-details { margin-top: 6px; }
+.la-ev-details summary { cursor: pointer; color: #2c5fa8; }
+.la-ev-details ul { margin: 5px 0 0; padding-left: 18px; line-height: 1.55; }
 .ic-meta { flex-wrap: wrap; }
 /* V4.41 / F03 + F04：配置快照与逐图视觉简报 */
 .cfg-snapshot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;

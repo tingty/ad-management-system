@@ -323,6 +323,41 @@ function ResultView({ data, historyId, logoMode, uploadedLogo, onLogoMode, onUpl
             <span>视觉主体：{currentProfile.visual_subject}</span>
           </div>
         )}
+        {/* V4.42 / F09：事实证据链、采样覆盖与资料缺口 */}
+        {((data.evidence_coverage || []).length > 0 || (data.facts || []).length > 0 ||
+          (data.gaps || []).length > 0 || data.legacy_unverified) && (
+          <div className="la-evidence">
+            <b>事实证据链 · 送入 {data.evidence_coverage?.length || 0} 段 / 原文 {data.evidence_source_chars || 0} 字
+              （未覆盖 {data.evidence_dropped_chars || 0} 字）</b>
+            {data.legacy_unverified && <span className="pill off">旧数据：legacy_unverified</span>}
+            {(data.evidence_expired_offers || []).length > 0 && (
+              <div className="la-ev-warn">
+                检测到 {data.evidence_expired_offers!.length} 条过期优惠，
+                最早过期日 {data.evidence_expired_offers![0].expires_on}；不得作为当前承诺沿用。
+              </div>
+            )}
+            <div className="la-ev-cols">
+              <div><span>已验证事实</span>
+                <ul>{(data.facts || []).length ? data.facts!.map((x, i) => <li key={i}>{x}</li>) : <li className="muted">—</li>}</ul>
+              </div>
+              <div><span>营销假设（不可当事实投放）</span>
+                <ul>{(data.assumptions || []).length ? data.assumptions!.map((x, i) => <li key={i}>{x}</li>) : <li className="muted">—</li>}</ul>
+              </div>
+              <div><span>资料缺口</span>
+                <ul>{(data.gaps || []).length ? data.gaps!.map((x, i) => <li key={i}>{x}</li>) : <li className="muted">—</li>}</ul>
+              </div>
+            </div>
+            <div className="muted">{data.evidence_note || '每条价格 / 承诺须引用证据编号；竞品须独立研究附来源。'}</div>
+            {(data.evidence_chain || []).length > 0 && (
+              <details className="la-ev-details">
+                <summary>查看 {data.evidence_chain!.length} 条承诺 → 证据编号映射</summary>
+                <ul>{data.evidence_chain!.map((c, i) => (
+                  <li key={i}>{c.claim} <span className="muted">[{c.kind}] {c.evidence_ids.join(', ') || '未引用'}</span></li>
+                ))}</ul>
+              </details>
+            )}
+          </div>
+        )}
       </div>
 
       {/* (2)-(5) 基础四字段 */}

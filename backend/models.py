@@ -90,6 +90,57 @@ class CreationHistory(Base):
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
+class GenerationJob(Base):
+    """V4.42 / F12：服务端持久化的生成任务。
+
+    浏览器创建任务后立即拿回 job_id，生成与归档都在服务端完成；刷新 / 关闭浏览器后
+    仍可按 job_id 查到结果与状态。`idempotency_key` 保证重复提交不会重复出图 / 重复归档。
+    """
+    __tablename__ = "generation_jobs"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(String(40), unique=True, index=True)
+    idempotency_key = Column(String(200), unique=True, index=True, nullable=True)
+    kind = Column(String(24), default="images")       # images（文案仍为同步短请求）
+    status = Column(String(24), default="queued")     # queued/running/succeeded/partial_success/failed/canceled
+    owner_id = Column(Integer, nullable=True, index=True)
+    owner_name = Column(String(64), nullable=True)
+    history_id = Column(Integer, nullable=True, index=True)
+    retry_of = Column(String(40), nullable=True)      # 分项重试指向的原任务
+    request_json = Column(JSON, nullable=True)        # 完整入参快照（含归档信息）
+    result_json = Column(JSON, nullable=True)         # generate_media_images 的结果
+    subtasks_json = Column(JSON, nullable=True)       # 逐项状态，供分项重试
+    error = Column(Text, nullable=True)
+    progress = Column(Integer, default=0)
+    attempts = Column(Integer, default=0)
+    cancel_requested = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class CreativeAsset(Base):
+    """V4.42 / F12：不可变的历史资产记录。
+
+    一次生成一张 = 一行；只插入、不覆盖、不静默截断。历史会话的 `images_json`
+    退化为「最近若干张的展示缓存」，完整历史通过 `/api/creative-assets` 分页读取。
+    删除策略显式：删除历史记录时同步删除其资产行与不再被引用的文件。
+    """
+    __tablename__ = "creative_assets"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    asset_id = Column(String(40), unique=True, index=True)
+    job_id = Column(String(40), nullable=True, index=True)
+    history_id = Column(Integer, nullable=True, index=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    file = Column(String(255), nullable=False)
+    size = Column(String(32), nullable=True)
+    placement = Column(String(128), nullable=True)
+    concept_id = Column(String(64), nullable=True)
+    spec_version = Column(String(40), nullable=True)
+    status = Column(String(24), default="ok")
+    meta_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)

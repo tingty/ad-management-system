@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, MediaPlatform, MediaRules, CreativePresets, ModelInfo } from '../api'
+import type { MediaImagePayload, MediaImageResult, GenerationJob } from '../api'
 import {
   useCreationSession, updateSession, beginTask, endTask, failTask,
   allSelectedCopy, selectedCount,
@@ -186,6 +187,76 @@ export default function MediaAdStudio() {
     })
   }
 
+  /** V4.42 / F12：把服务端任务的结果回填到会话（生成与归档都已在服务端完成）。 */
+  function applyImageResult(res: MediaImageResult, prefix = '', jobStatus = '') {
+    updateSession({
+      images: res.images, imageModel: res.image_model, imgNote: res.note || '',
+      imageIssues: res.issues || [],
+      step: 3, viewer: null, checked: [], savedNote: '',
+      ...(jobStatus ? { jobStatus } : {}),
+    })
+    const aiCount = res.images.filter(im => im.ai_background).length
+    const fallbackCount = res.images.length - aiCount
+    const failed = (res.issues || []).filter(x => x.status === 'failed').length
+    endTask(res.status === 'failed' ? 'error' : 'images_ready',
+      res.status === 'failed' ? '本批无可用素材' : '本批推广图片已生成',
+      (prefix ? prefix + '。' : '') +
+      `成功 ${res.images.length} 张（AI 底图 ${aiCount} / 模板兜底 ${fallbackCount}）` +
+      (res.status === 'partial_success' ? `，批次为部分成功；另有 ${(res.issues || []).length} 项未生成` : '') +
+      (failed ? `，其中 ${failed} 项失败（未计入合格素材，可仅重试失败项）` : '') +
+      `；规则版本 ${res.spec_version || '-'}，每张图已标注适用广告产品与所用概念。` +
+      (res.archive?.retention_policy ? ' 素材已由服务端写入不可变归档，无需浏览器另行提交。' : ''))
+  }
+
+  /** V4.42 / F12：轮询服务端任务；浏览器断开 / 刷新都不影响任务本身。 */
+  async function pollJob(jobId: string) {
+    const deadline = Date.now() + 15 * 60 * 1000
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 900))
+      let job: GenerationJob
+      try { job = await api.generationJob(jobId) } catch { continue }
+      updateSession({
+        jobStatus: job.status,
+        taskDetail: `服务端任务 ${job.job_id} · ${job.status} · ${job.progress}%` +
+          (job.error ? ` · ${job.error}` : ''),
+      })
+      if (!job.terminal) continue
+      if (job.status === 'canceled') { failTask(`任务已取消：${job.error || '用户取消'}`); return }
+      if (job.status === 'failed') { failTask(job.error || '服务端生成任务失败'); return }
+      if (job.result) {
+        applyImageResult(job.result, `服务端任务 ${job.job_id} 已完成并自动归档`, job.status)
+        return
+      }
+      failTask('服务端任务已结束但未返回结果，请在「素材历史」查阅归档')
+      return
+    }
+    failTask('任务状态查询超时；服务端可能仍在生成，请稍后在「素材历史」查阅归档')
+  }
+
+  /** V4.42 / F12：刷新 / 关闭浏览器后按 job_id 自动恢复，不重新生成。 */
+  useEffect(() => {
+    const id = s.jobId
+    if (!id || s.running) return
+    if (s.stage !== 'images' && s.stage !== 'error') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const job = await api.generationJob(id)
+        if (cancelled) return
+        if (!job.terminal) {
+          updateSession({ running: true, jobStatus: job.status,
+            taskLabel: '正在恢复服务端任务',
+            taskDetail: `任务 ${id} 仍在服务端执行，正在查询最新进度…` })
+          await pollJob(id)
+        } else if (job.result) {
+          applyImageResult(job.result, `已从服务端任务 ${id} 恢复结果`, job.status)
+        }
+      } catch { /* 旧任务记录不存在时忽略，保持原有进度 */ }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.jobId])
+
   async function genImages() {
     if (!s.analysis || !s.platform || !s.copy) return
     if (s.running) return
@@ -200,63 +271,72 @@ export default function MediaAdStudio() {
       return
     }
     updateSession({ studioError: '' })
+    const payloadCopy = { ...s.copyEdit, brand: s.brandEdit }
+    const payload: MediaImagePayload = {
+      analysis: s.analysis, platform: s.platform, lang: s.lang,
+      copy_fields: payloadCopy,
+      copy_variants: effectiveVariants,
+      style_opts: { creative_direction: s.direction, content_style: s.styleName, color_scheme: s.colorName },
+      slots,
+      logo: selectedLogo || '',
+      spec_version: matrix.specVersion || '',
+      total_pixels: matrix.tasks.reduce((n, t) => {
+        const [w, h] = t.size.toLowerCase().split('x').map(Number)
+        return n + (w || 0) * (h || 0)
+      }, 0),
+    }
+    const finalCopy = {
+      ...s.copy, fields: { ...s.copyEdit }, brand: s.brandEdit,
+      selected_copy: s.selectedCopy, copy_variants: effectiveVariants,
+      task_matrix: { tasks: matrix.tasks, concepts: matrix.concepts.map(c => ({
+        key: c.key, label: c.label, headline: c.headline, sub: c.sub, cta: c.cta,
+        sourceIndices: c.sourceIndices, subKey: c.subKey,
+      })), spec_version: matrix.specVersion },
+    }
+    const seq = (s.jobSeq || 0) + 1
     beginTask('images', '正在生成推广图片',
-      `任务矩阵 ${slots.length} 个版位 · ${matrix.concepts.length} 个概念 · 规则 ${matrix.specVersion || '服务端解析中'}…`)
+      `任务矩阵 ${slots.length} 个版位 · ${matrix.concepts.length} 个概念 · 规则 ${matrix.specVersion || '服务端解析中'}；提交到服务端队列…`)
     try {
-      const payloadCopy = { ...s.copyEdit, brand: s.brandEdit }
-      const res = await api.mediaImages({
-        analysis: s.analysis, platform: s.platform, lang: s.lang,
-        copy_fields: payloadCopy,
-        copy_variants: effectiveVariants,
-        style_opts: { creative_direction: s.direction, content_style: s.styleName, color_scheme: s.colorName },
-        slots,
-        logo: selectedLogo || '',
-        spec_version: matrix.specVersion || '',
-        total_pixels: matrix.tasks.reduce((n, t) => {
-          const [w, h] = t.size.toLowerCase().split('x').map(Number)
-          return n + (w || 0) * (h || 0)
-        }, 0),
-      })
-      updateSession({
-        images: res.images, imageModel: res.image_model, imgNote: res.note || '',
-        imageIssues: res.issues || [],
-        step: 3, viewer: null, checked: [], savedNote: '',
-      })
-      const aiCount = res.images.filter(im => im.ai_background).length
-      const fallbackCount = res.images.length - aiCount
-      const failed = (res.issues || []).filter(x => x.status === 'failed').length
-      endTask(res.status === 'failed' ? 'error' : 'images_ready',
-        res.status === 'failed' ? '本批无可用素材' : '本批推广图片已生成',
-        `成功 ${res.images.length} 张（AI 底图 ${aiCount} / 模板兜底 ${fallbackCount}）` +
-        (res.status === 'partial_success' ? `，批次为部分成功；另有 ${(res.issues || []).length} 项未生成` : '') +
-        (failed ? `，其中 ${failed} 项失败（未计入合格素材，可仅重试失败项）` : '') +
-        `；规则版本 ${res.spec_version || '-'}，每张图已标注适用广告产品与所用概念。`)
-      // V4.36：把「编辑后的最终文案 + 本批图片 + 风格 / 模型」写回历史会话（追加）
-      if (s.historyId) {
-        const finalCopy = {
-          ...s.copy, fields: { ...s.copyEdit }, brand: s.brandEdit,
-          selected_copy: s.selectedCopy, copy_variants: effectiveVariants,
-          task_matrix: { tasks: matrix.tasks, concepts: matrix.concepts.map(c => ({
-            key: c.key, label: c.label, headline: c.headline, sub: c.sub, cta: c.cta,
-            sourceIndices: c.sourceIndices, subKey: c.subKey,
-          })), spec_version: matrix.specVersion },
-        }
-        api.updateCreationHistory(s.historyId, {
-          platform: s.platform, lang: s.lang, copy: finalCopy,
-          images: res.images.map(im => ({ ...im, url: im.file })),
-          images_mode: 'append',
+      const job = await api.createGenerationJob({
+        images_request: payload,
+        archive: {
+          history_id: s.historyId, platform: s.platform, lang: s.lang,
+          copy: finalCopy,
           style_opts: {
             creative_direction: s.direction, content_style: s.styleName, color_scheme: s.colorName,
-            // V4.41 / F04：历史保存「当时实际生效」的配置快照，改预设不会覆盖旧任务
-            creative_config: res.creative_config || null,
           },
-          image_model: res.image_model,
-          note: res.note || '',
-        }).then(() => updateSession({ savedNote: '本批图片与选用文案已存入「素材历史」，可随时再下载' }))
-          .catch(() => updateSession({ savedNote: '图片已生成，但写入「素材历史」失败' }))
-      }
+        },
+        // 同批次重复提交复用同一幂等键；主动重新生成递增 seq，不误用旧任务
+        idempotency_key: `hist-${s.historyId ?? 'none'}-p-${s.platform}-seq-${seq}`,
+      })
+      updateSession({ jobId: job.job_id, jobStatus: job.status, jobSeq: seq,
+                      taskDetail: `服务端任务 ${job.job_id} 已创建（${job.status}）；生成与归档不依赖浏览器连接` })
+      await pollJob(job.job_id)
     } catch (e: any) {
-      failTask(e?.message || '图片生成失败')
+      failTask(e?.message || '图片生成任务提交失败')
+    }
+  }
+
+  async function cancelJob() {
+    if (!s.jobId) return
+    try {
+      const r = await api.cancelGenerationJob(s.jobId)
+      updateSession({ jobStatus: r.status || 'canceled' })
+    } catch (e: any) {
+      updateSession({ studioError: e?.message || '取消任务失败' })
+    }
+  }
+
+  /** 仅重试 failed 子任务；成功项不重复调用模型、不重复归档。 */
+  async function retryJob() {
+    if (!s.jobId || s.running) return
+    beginTask('images', '正在重试失败项', `按任务 ${s.jobId} 的失败子任务重建请求…`)
+    try {
+      const job = await api.retryGenerationJob(s.jobId)
+      updateSession({ jobId: job.job_id, jobStatus: job.status })
+      await pollJob(job.job_id)
+    } catch (e: any) {
+      failTask(e?.message || '分项重试失败')
     }
   }
 
@@ -640,6 +720,23 @@ export default function MediaAdStudio() {
       {s.step === 3 && (
         <div className="card">
           <h3>③ 推广图片素材</h3>
+          {s.jobId && (
+            <div className="job-bar">
+              <b>服务端任务 {s.jobId}</b>
+              <span className={`pill ${s.jobStatus === 'failed' || s.jobStatus === 'canceled' ? 'err' : s.jobStatus === 'succeeded' ? 'ok' : 'off'}`}>
+                {s.jobStatus || 'queued'}
+              </span>
+              <span className="muted">生成与归档由服务端完成；刷新 / 关闭页面后按任务 ID 恢复，浏览器断开不丢素材</span>
+              <div className="job-actions">
+                {!['succeeded', 'partial_success', 'failed', 'canceled'].includes(s.jobStatus) && (
+                  <button className="btn small ghost" onClick={cancelJob}>取消任务</button>
+                )}
+                {(s.jobStatus === 'failed' || s.jobStatus === 'partial_success') && (
+                  <button className="btn small ghost" onClick={retryJob} disabled={s.running}>仅重试失败项</button>
+                )}
+              </div>
+            </div>
+          )}
           {s.imageModel && <ModelBadge info={s.imageModel} fallbackText="使用 Pillow 模板兜底" />}
           {s.imgNote && <p className="muted">{s.imgNote}</p>}
           {batchConfig && (
@@ -726,9 +823,16 @@ export default function MediaAdStudio() {
                     <span>{img.copy.sub || '（无副标）'}</span>
                   </div>
                 )}
-                {(img.ad_product || img.spec_version) && (
+                {(img.ad_product || img.spec_version || img.composition) && (
                   <div className="ic-spec">
                     {img.ad_product || '未标注广告产品'} · 规则 {img.spec_version || '—'}
+                    {img.composition && (
+                      <div className="ic-comp" title={img.composition.capability_note || '主体保护构图'}>
+                        构图 {img.composition.mode === 'outpaint' ? '扩图保主体' : img.composition.mode === 'protected_crop' ? '主体保护裁切' : img.composition.mode}
+                        {img.returned_size ? ` · 底图 ${img.returned_size.join('×')}` : ''}
+                        {img.request_size ? ` · 请求 ${img.request_size.join('×')}` : ''}
+                      </div>
+                    )}
                   </div>
                 )}
                 {img.visual_brief && (

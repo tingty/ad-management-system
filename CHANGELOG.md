@@ -1443,3 +1443,52 @@
 - `CreativeConcept` / `VisualBrief` / `ResolvedCreativeConfig` 在本期以「生成链路中的结构化解析结果」落地；产品事实、报价、证据 ID、服务端持久任务与效果反馈闭环（批次 B / C / D 的完整数据模型）仍属第 4 期及后续，不把本期结构等同于完整数据模型。
 - 媒体尺寸与政策仍是内部整理，`SPEC_VERIFIED_ON` 为空；正式投放前须按平台官方文档复核。新版通知的当前版本与改造进度完全由 CHANGELOG 的发版记录驱动，改代码不改发版文案不会更新进度。
 
+## V4.42 AI 改造第 4 期：事实与工程化（F06 / F09 / F12）
+
+**发布日期**：2026-11-10
+**变更类型**：修复 / 新增 / 优化 / 发布
+**涉及模块**：素材创作平台、创意文案、推广图片、素材提示词、行业适配、素材历史、后端接口、数据模型、前端与菜单、新版通知、发版流程、改造追踪、系统设置、大模型配置
+**变更摘要**：按《广告素材平台问题诊断与AI改造实施说明书》完成第 4 期，也是四期改造的收官期，修复 3 个问题——F06 建立供应商尺寸能力目录与按比例构图，宽高不再各自吸附成方形，渲染端用主体保护框与极端版位扩图替代无条件 cover 居中裁切，逐图归档请求尺寸、实际返回尺寸与真实裁切参数；F09 把落地页正文从「只送前 4000 字符」改为首尾窗口加关键条款区块的预算内采样，新增证据编号、采样覆盖、已验证事实 / 营销假设 / 资料缺口分离，空页、抓取失败、薄内容与过期优惠在调用模型之前明确阻断为 needs_input；F12 把长耗时出图与归档整体搬到服务端，新增持久 `GenerationJob` 与不可变 `CreativeAsset` 两张表，任务创建立即返回 `job_id` 且按幂等键去重，刷新 / 关闭浏览器后按任务 ID 恢复，失败 / 取消状态真实可见，仅重试失败子任务，历史素材超过 80 张仍可按页读取早期记录。四期共 12 个问题全部完成，行业 / 品类适配继续只作为通用主干上的局部配置。
+**改造期次**：第 4 期（F06 / F09 / F12）
+
+**本次优化与更改的功能 / 模块**
+- 【新增】推广图片 / F06 供应商尺寸能力目录：新增 `backend/image_capabilities.py`，用 `PROVIDER_CAPABILITIES` 声明各文生图供应商的尺寸候选、参考图、局部编辑、透明图、并发上限与核验日期。默认候选只沿用代码内已有实测说明的 1024 / 2048 方形尺寸，其它比例须由部署方通过 `params.size_candidates` 显式配置并附 `size_verified_on`；`GET /api/image-capabilities` 下发能力清单，核验日期为空时明确标注未核验，不编造 API 已支持的尺寸。
+- 【修复】推广图片 / F06 按比例请求与构图目标：`providers.py` 给每个供应商加 `capability_key`，`DashScopeMaaSImageProvider.generate` 改用 `plan_generation_size()` 把宽高作为一个比例整体选候选，废弃「两个 `_snap()` 拼成方形」的旧做法（1200×628 不再被静默请求为 1024×1024）。`composition_goal()` 按横版 / 竖版 / 方版 / 极端比例写入「主体放安全区、给文字留白」的构图目标，随每条文生图请求发出。
+- 【修复】推广图片 / F06 主体保护裁切与扩图：`imaging.py` 新增 `COMPOSITION_REGIONS`（每种版式的主体保护区与文字区）与 `_prepare_bg` 的主体保护构图；`plan_composition()` 计算能完整保留主体框的裁切锚点并按文字区避让，源图比例与目标差异过大或极端横幅时走 contain 扩图加边缘延展，源图一个像素都不裁。T08 用带中心与四角颜色标记的测试图验证四角标记全部保留。
+- 【新增】推广图片 / F06 逐图可核对的比例记录：每张图片回传 `request_size` / `target_size` / `returned_size` / `composition`（mode、crop、anchor、subject_box、text_box、protected、ratio_gap）与 `size_capability`；`task_results`、批次 `composition` 汇总、`copy.txt` 与历史 `生成信息.json` 同步记录。前端图片卡片显示构图模式、底图与请求尺寸。
+- 【新增】落地页分析 / F09 分区采集与证据链：新增 `backend/evidence.py`，`split_sections()` 按标题 / 段落切出带字符区间的区块，`key_clauses()` 定位价格、退货、订阅、试用、运费、保证与优惠有效期，`build_evidence_index()` 为每条区块生成 `evidence_id`、原文、来源地址、区块、字符位置、核验状态与适用范围；`verified` 只表示有原文可引用，不代表商业真实性背书。
+- 【修复】落地页分析 / F09 不再截前 4000 字符：`select_evidence_budget()` 改为「首尾窗口 + 关键条款区块」的预算内采样并如实返回 `coverage` 与 `dropped_chars`；`build_landing_prompt()` 输出带 `[E###]` 编号的分段正文，要求模型把 facts / assumptions / gaps 分开、每条价格或承诺引用证据编号、竞品只来自正文且独立研究附来源、不从域名猜产品事实。`schemas.LandingAnalysis` 增加证据链、覆盖、缺口、过期优惠、阻断原因与 `legacy_unverified` 字段。
+- 【修复】落地页分析 / F09 空证据与过期优惠阻断：`evidence_gate()` 在调用模型之前检查空页、抓取失败、薄内容与明确已过期的优惠；不通过时 `analyze_landing_concise` 返回 `gate_status=needs_input` 且不发起模型调用，`/api/landing-analysis` 返回结构化 422 并列出具体原因，前端展示证据链、采样覆盖、事实 / 假设 / 缺口与承诺到证据编号的映射。
+- 【新增】素材历史 / F12 服务端持久任务：新增 `GenerationJob` 表与 `backend/job_service.py`。`POST /api/generation-jobs` 立即返回 `job_id`（202）并在后台执行规则校验 → 生成 → 归档，浏览器断开或刷新都不影响；`GET /api/generation-jobs/{job_id}` 可恢复状态与结果，列表、取消、分项重试接口齐备。同一 `idempotency_key` 重复提交只返回原任务，不重复调用模型、不重复归档。
+- 【新增】素材历史 / F12 不可变资产与分页：新增 `CreativeAsset` 表，一次生成一张即插入一行，只插入不覆盖；`GET /api/creative-assets?history_id=&offset=` 分页读取，历史超过 80 张仍能查到早期素材。`update_creation_history` 的 `uniq[-80:]` 明确降级为「最近 80 张展示缓存」，不再静默丢弃元数据；删除历史时按显式策略同步删除资产行并安全回收不再被引用的文件。进程重启时 `recover_interrupted()` 把停在 running / queued 的任务标为 failed 并写明原因，不假装任务仍在跑。
+- 【新增】素材历史 / F12 分项重试：`POST /api/generation-jobs/{job_id}/retry` 只按 `task_index` 取回 `status=failed` 的子任务重建请求，成功项不重复生成、不重复收费；`needs_revision` 明确要求人工修改文案后重试，不会被当成可自动重试的失败项。取消状态真实可见，运行中任务在检查点停止并保留已生成素材。
+- 【优化】前端与菜单 / 服务端任务与恢复：`creationSession.ts` 增加 `jobId` / `jobStatus` / `jobSeq` 并持久化，刷新后不再误报「任务已中断」而是按 `job_id` 自动恢复；`MediaAdStudio.tsx` 的出图改为创建持久任务 + 轮询，生成与归档不再由浏览器另发请求，Step 3 显示任务状态、取消与「仅重试失败项」入口；`MaterialHistory.tsx` 增加全量资产分页面板；`api.ts` 增加任务、资产、尺寸能力接口与全部对应类型。
+- 【优化】素材历史 / 导出追溯：`copy_as_text` 增加构图与尺寸能力、服务端任务、历史保留策略；`analysis_as_text` 增加事实证据链与承诺到证据编号的映射；`生成信息.json` 增加 `composition_modes` / `request_sizes` / `returned_sizes` / `job_ids` / `evidence` / `retention_policy`；打包 `清单.json` 增加构图说明与保留策略。空历史与旧记录保持兼容。
+- 【优化】系统设置 / 新版通知收官：`**改造期次**：第 4 期（F06 / F09 / F12）` 让「新版通知」当前版本自动切换为 V4.42 并展示本期主要更新内容，改造进度由 9/12 更新为 12/12，四期全部标为 done；`main.py` 版本升至 4.42.0，README 与追踪表同步。
+- 【发布】发版流程 / V4.42：本条按结构化规范整理本次优化和更改的功能与模块，发版前由 `prepare_release.py --check` 校验模块覆盖、字段完整性与「每期 3 个问题 / 版本一致」后再同步 git。
+
+**影响范围**
+- 前端：`api.ts` 增加任务 / 资产 / 尺寸能力类型与接口、`MediaImagePayload` 共用入参；`creationSession.ts` 增加三个会话字段；`MediaAdStudio.tsx` 出图改为持久任务 + 轮询并新增恢复 effect；`MaterialCreation.tsx` 展示证据链；`MaterialHistory.tsx` 新增资产分页面板；`styles.css` 增加任务条、证据链、资产分页与逐图构图样式。原有版位任务矩阵、规则版本校验、跨页面会话与素材历史交互保持不变。
+- 后端：新增 `backend/image_capabilities.py` / `evidence.py` / `job_service.py`；`providers.py` 声明能力键并按比例请求；`imaging.py` 主体保护构图；`media_ad.py` 逐图记录请求 / 返回尺寸与裁切参数并给 `task_results` 加 `task_index`；`services.py` 证据采样与阻断门；`schemas.py` 增加分析证据字段；`models.py` 新增两张表；`routers.py` 新增 7 个接口并把落地页分析 422 阻断；`creation_history.py` 导出追溯；`main.py` 版本与重启回收。
+- 数据：新增 `generation_jobs` 与 `creative_assets` 两张表，由 `ensure_schema()` 的 `create_all` 自动建表，无需手写迁移，旧库直接重启即可；`creation_history` 不新增列。旧分析没有证据 ID 时按 `legacy_unverified` 展示，不自动补成已验证；旧图片保留文件与历史身份，不重新生成替换。
+- 兼容性：`POST /api/media-campaign/images` 同步出图接口完整保留，仍返回逐图构图记录；`render_ad_png` 旧位置参数与 `text_budget` 默认口径不变；`build_landing_prompt` 旧三参数调用自动按新规则采样；`style_opts.strict_text=false` 应急开关保留。行为变化：正文过短、抓取失败或含过期优惠的落地页分析现在返回 422 而不再给出无证据结论；出图默认走服务端任务，前端不再主动写回历史；历史列表只展示最近 80 张缓存，完整素材改由分页读取。
+- 权限：新增任务与资产接口均要求 admin / manager / editor；落地页分析 422 阻断对所有可编辑角色一致；新版通知、媒体规则、行业画像、尺寸能力对所有登录角色可读。
+- 部署：无新增依赖与必填环境变量。`git pull` 后重启后端（自动建两张新表）、前端重新构建即可。可选配置：`params.size_candidates` / `params.size_verified_on` 用于登记已核验的供应商尺寸能力。
+
+**验证**
+- 后端全量 `compileall` 通过，`import main` 正常，版本号 4.42.0，有效 `/api` 路径 42 条。
+- T08（F06）回归：1200×628 与方形候选比例差超阈值时标记 `needs_outpaint`、`size_verified_on` 为空；宽版与 320×50 极端横幅走扩图且 `crop=None`，方版走主体保护裁切且锚点不再固定居中；带中心与四角颜色标记的测试图经扩图输出后四种边缘标记全部保留；逐图 `request_size` / `returned_size` / `composition` / `size_capability` 齐备且 `requested_size` 与目标尺寸一致；构图目标确实写进模拟供应商收到的提示词。
+- T11 / T12（F09）回归：关键订阅条款位于第 4080 字符仍进入提示词且 `coverage` 记录其字符区间；长页面如实标注未覆盖字符；空页、抓取失败、过期优惠三类输入均在调用模型前判定 `needs_input` 并给出可解释原因，HTTP 层返回结构化 422；未来优惠不误判过期；分析结果回传证据门、采样覆盖与原文字符数。
+- T16（F12）回归：创建任务立即返回 `job_id` 与 queued，同一幂等键重复提交返回原任务；浏览器不参与时任务自行跑完并按 `job_id` 取回结果；生成后由服务端自动写不可变资产与历史；插入 95 条资产后按 `offset=85` 仍能分页读取早期素材元数据；分项重试只取回失败子任务、成功项不重复生成；排队任务可取消且状态真实可见；刷新后 `job_id` 保留并由会话中枢自动恢复（Node 回归 18 项断言全通过）。
+- 前 3 期不回退：F01 超预算文案仍被阻断、F08 未知平台仍在调用模型前拒绝、F04 编辑过的预设仍进入配置、F11 批次 A 清理不影响批次 B、旧同步出图与文案接口均 200、媒体规则 / 行业画像 / 新版通知 / 素材历史 / 大模型配置接口未受影响。
+- 后端回归共 85 项断言全通过（临时数据库 + TestClient + 模拟供应商，强制清空真实密钥，全程只走本地 Mock）；会话中枢 18 项断言全通过；导出文本与 `生成信息.json` 新增字段及空历史兼容单独验证通过。
+- 前端 `tsc --noEmit` 通过；`vite build` 44 模块，271.34 kB JS / 56.82 kB CSS；`prepare_release.py --check` 通过（含改造期次 3 问题 / 版本一致性 / 模块覆盖校验）。
+- 所有回归在临时数据库、临时 uploads 目录与模拟供应商上执行，测试 PNG、临时库与批次目录已清理；未修改生产数据、未读取或输出任何密钥、未产生真实付费模型调用。
+
+**说明 / 默认约定**
+- 本期修复的是「尺寸能力声明、原文证据链、服务端任务与归档」三条工程链路，不等于已验证投放效果。未运行真实付费文本 / 文生图模型调用、未做真实样本逐图人工抽检、未测量 CTR / CPA / ROAS，不承诺效果提升。
+- F06 不宣称任何供应商已支持横版 / 竖版 API 尺寸：默认候选仍是代码内已有实测说明的方形尺寸，`needs_outpaint` 表明比例差过大，由渲染端扩图或主体保护处理；`size_verified_on` 为空表示尚未按官方文档与受控测试核验。媒体尺寸与政策规则 `SPEC_VERIFIED_ON` 同样为空，正式投放前须复核。
+- F09 的证据「已验证」只表示页面原文可引用，不构成价格、优惠、效果或合规性的真实性背书；竞品识别仍须独立研究附来源。动态渲染页面尚未升级浏览器抓取，本次只做分区与预算采样。
+- F12 的任务状态与资产记录在数据库，但进程被强制杀死时运行中的内存任务不会跨进程自动续跑，重启后由 `recover_interrupted()` 标为 failed 并提示分项重试；本实现是单进程服务端持久任务，不宣称分布式队列或跨进程事务。效果反馈闭环（关联广告 ID、订单、退款、订阅与概念表现）属批次 E，未在四期改造内实现。
+- 四期共 12 个问题已按「每期 3 个、独立提交、独立版本通知」全部完成；Product / Offer / SpecProfile / GenerationJob / CreativeAsset 中，GenerationJob 与 CreativeAsset 已按本期范围落地，Product / Offer / SpecProfile 的完整独立建模与效果反馈仍属后续规划，不把现有结构等同于说明书中的完整目标数据模型。新版通知的当前版本与改造进度完全由 CHANGELOG 发版记录驱动。
+

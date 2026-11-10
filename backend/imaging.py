@@ -461,25 +461,57 @@ def _apply_local_veil(img: Image.Image, pal: dict, layout: str,
     return Image.composite(layer, img, mask)
 
 
-def _prepare_bg(w: int, h: int, bg_path: str | None, pal: dict | None = None,
-                layout: str = "hero", dim_ratio: float = 0.28) -> Image.Image:
-    """AI 底图按 cover 裁剪到目标尺寸；只在文字区做局部遮罩保证可读性。
+# V4.42 / F06：每种内容版式的「主体保护区 / 文字区」（目标画布相对坐标）。
+# 与 _SUBJECT_REGION（商品合成落位）分离：裁切要保护的是**主视觉**，不是贴图层。
+COMPOSITION_REGIONS: dict[str, tuple[tuple[float, ...], tuple[float, ...]]] = {
+    "hero":   ((0.38, 0.06, 0.96, 0.58), (0.02, 0.60, 0.66, 0.98)),
+    "demo":   ((0.08, 0.04, 0.92, 0.54), (0.02, 0.58, 0.98, 0.98)),
+    "detail": ((0.04, 0.14, 0.50, 0.88), (0.52, 0.10, 0.98, 0.92)),
+    "offer":  ((0.28, 0.04, 0.72, 0.52), (0.04, 0.56, 0.96, 0.96)),
+    "review": ((0.58, 0.04, 0.96, 0.52), (0.04, 0.58, 0.94, 0.96)),
+    "banner": ((0.34, 0.10, 0.72, 0.90), (0.00, 0.00, 0.36, 1.00)),
+}
 
-    注意：主体保护框与比例适配属于第 4 期 F06，此处仍为居中 cover，不宣称已修复。
+
+def composition_regions(layout: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    return COMPOSITION_REGIONS.get(layout, COMPOSITION_REGIONS["hero"])
+
+
+def _prepare_bg(w: int, h: int, bg_path: str | None, pal: dict | None = None,
+                layout: str = "hero", dim_ratio: float = 0.28,
+                composition: dict | None = None,
+                trace: dict | None = None) -> Image.Image:
+    """V4.42 / F06：按主体保护框构图，而不是无条件 cover 居中裁切。
+
+    - `composition` 由调用方（media_ad）按「实际返回底图尺寸」算好后传入；
+      为空时本函数自行按源图尺寸规划，保证旧调用也能得到主体保护。
+    - `trace` 为可写 dict，渲染后回填 `composition`（含 crop / anchor / mode /
+      requested_size / returned_size），供逐图归档满足 T08 的记录要求。
+    - 极端横幅或比例差过大时走扩图（contain + 边缘延展），源图内容一个像素都不裁。
     """
     p = pal or PALETTE
     if bg_path and os.path.exists(bg_path):
         try:
-            src = Image.open(bg_path).convert("RGB")
-            scale = max(w / src.width, h / src.height)
-            src = src.resize((max(1, int(src.width * scale)),
-                              max(1, int(src.height * scale))), Image.LANCZOS)
-            left = (src.width - w) // 2
-            top = (src.height - h) // 2
-            src = src.crop((left, top, left + w, top + h))
-            return _apply_local_veil(src, p, layout, dim_ratio)
+            from image_capabilities import plan_composition, apply_composition
+            with Image.open(bg_path) as probe:
+                sw, sh = probe.size
+                src = probe.convert("RGB")
+            sb, tb = composition_regions(layout)
+            comp = composition or plan_composition(
+                w, h, sw, sh, subject_box=sb, text_box=tb, layout=layout)
+            fitted, applied = apply_composition(src, comp, fill=p["bg1"])
+            if trace is not None:
+                trace["composition"] = {**applied, "returned_size": [sw, sh],
+                                        "requested_size": [w, h]}
+            return _apply_local_veil(fitted, p, layout, dim_ratio)
         except Exception:
             pass
+    if trace is not None:
+        trace["composition"] = {
+            "mode": "gradient", "crop": None, "protected": True,
+            "returned_size": None, "requested_size": [w, h],
+            "capability_note": "无 AI 底图，使用本地渐变模板，无裁切",
+        }
     return _gradient(w, h, p)
 
 
@@ -555,7 +587,9 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
                   strict_text: bool = False, palette: dict | None = None,
                   layout: str = "", product_image_path: str | None = None,
                   dim_ratio: float = 0.28,
-                  remove_white_logo_bg: bool = False) -> str:
+                  remove_white_logo_bg: bool = False,
+                  composition: dict | None = None,
+                  trace: dict | None = None) -> str:
     """V4.41 / F05：按内容需求选布局、按品牌 token 上色、先预留 Logo 区。
 
     仍保留 V4.39 / F01 的硬约束：`strict_text=True` 时文字放不下就抛
@@ -569,7 +603,8 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
     margin = max(10, int(min(w, h) * 0.06))
     accent_c = pal["accent"]
 
-    img = _prepare_bg(w, h, bg_path, pal, eff, dim_ratio)
+    img = _prepare_bg(w, h, bg_path, pal, eff, dim_ratio,
+                      composition=composition, trace=trace)
     img = _composite_product(img, product_image_path, eff)
     d = ImageDraw.Draw(img)
 
