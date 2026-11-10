@@ -1,14 +1,24 @@
-# 广告管理系统（在线营销素材管理平台 V4.39）
+# 广告管理系统（在线营销素材管理平台 V4.40）
 
 对应方案文档：《在线营销素材管理平台方案.docx》；开发节奏见《在线营销素材管理平台-版本开发规划.docx》。
-**当前版本：V4.39（2026-11-10）**。每次优化与更改的完整版本内容见 [CHANGELOG.md](CHANGELOG.md)，
+**当前版本：V4.40（2026-11-10）**。每次优化与更改的完整版本内容见 [CHANGELOG.md](CHANGELOG.md)，
 系统内「系统设置 → 新版通知」顶部显示当前更新版本号与主要更新内容，并统一展示各期改造进度
-（支持按涉及模块 / 变更类型筛选、查看影响范围与验证结果）。
+（当前 6 / 12，支持按涉及模块 / 变更类型筛选、查看影响范围与验证结果）。
 
 **AI 改造分期**：依据《广告素材平台问题诊断与AI改造实施说明书》，12 个问题按「每期 3 个、
 独立提交、独立版本通知」分 4 期推进，问题核对与验收用例见 [docs/REMEDIATION_TRACKER.md](docs/REMEDIATION_TRACKER.md)。
+第 1 期 V4.39 完成 F01 / F02 / F10（输入与输出可信度）；第 2 期 V4.40 完成 F07 / F08 / F11
+（任务矩阵完整覆盖、媒体规则版本化与模型调用前强校验、批次隔离与逐图状态）；
+第 3–4 期 V4.41 / V4.42 分别为 F03 / F04 / F05 与 F06 / F09 / F12。
 改造主干对全部行业一致，电商购买与订阅转化只是 `backend/industry_profiles.py` 中的两个画像；
-其它行业通过局部调整价值维度、语义保护、证据类型与视觉主体输出素材，不改通用链路。
+其它行业通过局部调整价值维度、语义保护、证据类型、视觉主体与版位偏好输出素材，不改通用链路。
+
+**V4.40 新增能力速览**：`frontend/src/taskMatrix.ts` 提供可确认的版位任务矩阵（预览数量 = 实际请求数量，
+预算不足明确提示不静默截断）；`backend/media_platforms.py` 提供版本化规则目录与
+`validate_task_matrix()`，`GET /api/media-rules` 下发强制 / 政策 / 建议三层规则；
+`backend/batch_workspace.py` 让每批出图拥有独立临时目录，`generate_media_images` 增加供应商并发 / 超时限制、
+逐图 `ok / fallback / failed` 状态与 `partial_success / failed` 批次结果。
+规则版本 `2026-11-10.2` 为内部整理，`SPEC_VERIFIED_ON` 为空表示尚未按各平台官方文档核验。
 
 **定位**：面向投放人员的「素材创作 + 推广图片交付」工具。核心链路是
 **落地页 URL / 正文 → 大模型 8 字段分析 → 营销推广平台设置 → 广告推广文案 → 推广图片 →
@@ -95,6 +105,11 @@ git add -A && git commit -m "V4.38 ..." && git push
 | V4.7 | 成片级关键帧 | 关键帧只保留广告画面（满画幅，去掉镜号/时间码/进度条/说明文字），分镜说明与旁白改为素材墙图片右侧逐帧标注；文案随镜头推进（钩子→卖点→证据→CTA）；提示词明确 `visual`=拍摄说明、`text`=上屏字幕、`shot`=镜头名；每镜按秒单独编码后拼接，成片时长精确 |
 
 ## 目录结构
+
+> 以下为 V1–V3 历史结构，用于追溯版本演进；其中 `specs_data.py` / `insight.py` / `report.py` /
+> `optimize.py` / `creative.py` / `render.py` / `validation.py` 已在 V4.37 删除。
+> 当前模块以文首「当前模块结构」与 `CHANGELOG.md` 最新版本通知为准。
+> V4.40 新增 `backend/batch_workspace.py` 与 `frontend/src/taskMatrix.ts`。
 
 ```
 ad-material-platform/
@@ -206,20 +221,23 @@ npm run dev          # http://localhost:5173
 6. **规格库**：7 平台尺寸/视频/字数红线/关键词逻辑；管理员与经理可在线编辑，改动即时影响生成与校验。
 7. **设置（管理员）**：按用途配置模型（analysis/copy/image/video）+ 连通性测试 + 用户与角色 + 审计日志。
 
-## 关键 API
+## 关键 API（V4.40 当前有效接口，共 36 条路径）
 
 | 分组 | 接口 |
 |---|---|
-| 认证 | `POST /api/auth/login`、`GET /api/auth/me`、`GET /api/auth/roles` |
-| 用户 | `GET/POST /api/users`、`PUT/DELETE /api/users/{id}`、`GET /api/audit-logs` |
-| 分析/生成 | `POST /api/analyze`、`POST /api/generate`、`POST /api/materials/{id}/regenerate` |
-| 版本/A-B | `GET /api/materials/{id}/versions`、`GET /api/materials/{id}/compare?against=`、`POST /api/materials/{id}/select`、`GET /api/campaigns/{id}/slots` |
-| 批量 | `POST /api/batch/parse`、`POST /api/batch/upload`、`POST /api/batch/jobs`、`GET /api/jobs/{id}`、`POST /api/jobs/{id}/cancel`、`GET /api/batch/template` |
-| 审阅 | `POST /api/campaigns/{id}/submit`、`/approve`、`/reject`、`/comment`、`GET /api/campaigns/{id}/reviews` |
-| 导出 | `GET /api/export/campaign/{id}`、`/api/export/batch?ids=`、`/api/export/ab/{id}?selected_only=`、`/api/materials/{id}/download` |
-| 规格/设置 | `GET/PUT /api/platform-specs`、`/api/settings/models`（含 `/test`） |
+| 认证 / 健康 | `POST /api/auth/login`、`GET /api/auth/me`、`GET /api/auth/roles`、`GET /api/health` |
+| 用户 / 审计 | `GET/POST /api/users`、`PUT/DELETE /api/users/{uid}`、`GET /api/audit-logs` |
+| 落地页分析 | `POST /api/landing-analysis`、`GET /api/industry-profiles` |
+| 媒体规则与平台 | `GET /api/media-platforms`、`GET /api/media-rules`（V4.40 新增）、`GET /api/settings/creative-presets` |
+| 文案 / 图片生成 | `POST /api/media-campaign/copy`（支持 `ad_product`）、`POST /api/media-campaign/images`（任务矩阵 + 概念索引 + 规则版本） |
+| 图片查阅 / 下载 | `GET /api/media-files/download`、`GET /api/media-files/zip`、`POST /api/assets/upload` |
+| 素材历史 | `GET/POST /api/creation-history`、`GET/PUT/DELETE /api/creation-history/{hid}`、`GET .../copy.txt`、`GET .../export.zip`、`GET /api/creation-history/export` |
+| 大模型配置 | `GET/POST /api/settings/models`、`PUT/DELETE /api/settings/models/{mid}`、`/test`、`/test-all`、`/{mid}/test`、`/health`、`/presets` |
+| 提示词与预设 | `GET /api/settings/prompts`、`PUT /api/settings/prompts/{key}`、`/{key}/reset`、`/prompt-taxonomy`、`/prompt-library`、`/prompt-defaults` |
+| 新版通知 | `GET /api/system/release-notes`（`current` 当前版本 + `highlights` + `roadmap` 改造进度） |
 
-除 `/api/auth/login`、`/api/meta`、`/api/health`、`/api/auth/roles` 外，所有 `/api/*` 需要 `Authorization: Bearer <token>`；浏览器直链下载支持 `?token=`。
+V4.37 已下线的 `/api/analyze`、`/api/generate`、`/api/campaigns/*`、`/api/materials/*`、`/api/batch/*`、`/api/platform-specs`、`/api/export/*` 等旧接口均返回 404；下方历史章节用于版本追溯，不作为当前接口清单。
+除 `/api/auth/login`、`/api/health`、`/api/auth/roles` 外，所有 `/api/*` 需要 `Authorization: Bearer <token>`；浏览器直链下载支持 `?token=`。
 
 ## 环境变量
 
@@ -234,6 +252,9 @@ npm run dev          # http://localhost:5173
 | `DEFAULT_LLM_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | 默认模型 OpenAI 兼容地址（`/api/v1` 是 DashScope 原生协议路径，不兼容本系统） |
 | `DEFAULT_LLM_MODEL` | `qwen-plus` | 默认模型名 |
 | `DEFAULT_LLM_API_KEY` | 空 | 默认模型密钥；为空则不播种、回退本地 Mock。建议写入 `backend/.env`（已 gitignore）或部署环境变量，勿提交进仓库 |
+| `AD_MAX_IMAGE_CONCURRENCY` | `4` | V4.40：跨批次的文生图供应商并发上限（按供应商实际配额调整） |
+| `AD_IMAGE_TASK_TIMEOUT` | `200` | V4.40：单张图生成超时秒数，超时记为回退并逐图标注，不重试已计费调用 |
+| `AD_BATCH_STALE_TTL` | `3600` | V4.40：批次临时目录遗留回收窗口（秒），须大于单任务超时 |
 
 ## AI 模型接入
 

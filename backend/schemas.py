@@ -149,11 +149,21 @@ class MediaCopyRequest(BaseModel):
     analysis: LandingAnalysis      # 落地页分析结论（生成依据）
     platform: str                  # 选中的媒体推广平台
     lang: str = "en"              # 文案语言
+    # V4.40 / F08：可选广告产品，用于把 Google RSA 与 UAC 之类不同产品的文案 schema 分开。
+    ad_product: str = ""
 
 class MediaImageSlot(BaseModel):
-    """单个图片版位（尺寸 + 位置）。"""
+    """V4.40 / F07 + F08：任务矩阵中的一行（一个版位 × 尺寸 × 概念）。
+
+    `size` 仍是自由字符串（旧调用兼容），但格式、允许尺寸与像素上限由服务端规则目录
+    `media_platforms.validate_task_matrix()` 在调用模型前统一校验并给出明确错误。
+    广告产品 / 资产角色 / 规则版本一律由服务端目录重新解析，不接受客户端自报。
+    """
     size: str                     # 尺寸，如 1080x1080
-    placement: str = ""          # 广告版位 id / 名称
+    placement: str = ""          # 广告版位名称（旧调用只传这个）
+    placement_id: str = ""       # 广告版位 id（V4.40 任务矩阵传）
+    concept_index: Optional[int] = None   # 本任务使用的创意文案组合下标（旧调用为空 → 顺序轮换）
+    concept_id: str = ""         # 前端可展示的概念标识（不参与服务端解析）
 
 class MediaCopyVariant(BaseModel):
     """V4.38：一条被用户勾选的「创意文案组合」，作为一张推广图的叠加文案。"""
@@ -174,6 +184,9 @@ class MediaImageRequest(BaseModel):
     style_opts: dict = {}         # {creative_direction, content_style, color_scheme}
     slots: List[MediaImageSlot] = []
     logo: str = ""               # 品牌 logo（/files/... 已上传路径 或 远程 http(s) URL），用于合成到图片
+    # V4.40 / F08：客户端声明的规则版本与像素总量，仅用于一致性核对，不作为放行依据。
+    spec_version: str = ""
+    total_pixels: Optional[int] = None
 
 class LoginRequest(BaseModel):
     email: str

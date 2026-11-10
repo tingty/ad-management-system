@@ -225,7 +225,7 @@ def check(diff_range: str = "", strict: bool = False) -> int:
     code = code_files(files)
 
     print("=" * 68)
-    print("发版前版本通知校验（V4.39 · 含改造期次校验）")
+    print("发版前版本通知校验（含结构化字段、模块覆盖与改造期次校验）")
     print("=" * 68)
     print(f"变更文件 {len(files)} 个，其中代码文件 {len(code)} 个")
     print(f"CHANGELOG 最新版本：{latest or '（无）'}，共 {notes['total']} 个版本")

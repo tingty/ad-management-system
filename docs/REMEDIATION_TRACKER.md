@@ -23,9 +23,9 @@
 | F01 截断文案被判定合格 | 已复现；P1 | 存在。`media_ad._build_fields` 调用 `fit_text` 后丢弃裁剪标记；`_validate` 只比较长度，残句 `valid=true`；`imaging._wrap` 超行数追加省略号 | 英文完整句超过平台字数上限（如 `Book in minutes.`） | `text_utils.py`、`media_ad.py`、`imaging.py`、`industry_profiles.py` | T01 / T02 | 第 1 期 / V4.39 | 已修复（T01 / T02 通过：残句阻断、语义压缩保留限制条件） |
 | F02 域名被误当品牌和最终站点 | 已复现 + 静态确认；P1 | 存在。`media_ad._brand_of` 取 host 倒数第二段（`shop.example.co.uk` → `Co`）；`fetch_page` 跟随跳转但 `parse_page_meta(html, url)` / `extract_logo(html, url)` 仍用原始 URL；`og:image` 被无条件当 Logo | 追踪域名 `convert.ctypy.com`、多级后缀商品链接、含相对 Logo 的跳转页 | `services.py`、`media_ad.py`、`industry_profiles.py`、`schemas.py` | T03 / T04 | 第 1 期 / V4.39 | 已修复（T03 / T04 通过：追踪域名与多级后缀不再定品牌、相对 Logo 用最终地址） |
 | F10 实际模型和来源标记不可靠 | 已复现 + 静态确认；P1 | 存在。`providers._pick_config` 的 `last_test_ok` 分支未过滤 `is_active`；`services._resolve_model` 自行挑配置、与 `get_llm` 路由不一致；`fallback` 在 `chat()` 之前读取且调用后不刷新 | 停用但测试成功的配置、真实模型超时回退 Mock、返回可解析 JSON 的 Mock | `providers.py`、`services.py`、`media_ad.py` | T13 / T14 | 第 1 期 / V4.39 | 已修复（T13 / T14 通过：停用配置不可选、回退与 source 在调用后定稿） |
-| F07 任务截断和文案轮换破坏覆盖 | 已复现 + 静态确认；P1 | 存在。`MediaAdStudio.buildSlots` 把所选版位尺寸展开后 `slice(0, count)`；副文案池混合 `description/body/primary_text` | Facebook / Google / Unity 默认配置 | `MediaAdStudio.tsx`、`creationSession.ts` | T09 | 第 2 期 / V4.40 | 待实施 |
-| F08 媒体与接口规则不足以保证交付 | 静态确认；P1 | 存在。`media_platforms.py` 按平台名组织、无广告产品 / 资产角色 / 规则版本；`schemas.MediaImageSlot.size` 为无约束字符串 | 异常尺寸、超像素总量、超任务数、未知平台 | `media_platforms.py`、`schemas.py`、`routers.py` | T10 | 第 2 期 / V4.40 | 待实施 |
-| F11 批次失败和临时文件缺少隔离 | 静态风险；P1 | 存在。`media_ad._cleanup_ai_bgs` 按目录通配符删除全部 `_mabg_*` / `_mlogo_*`；`asyncio.gather` 无并发上限且异常直接跳过；`ai_used` 为批次级 | 两批并发出图、混合成功 / 回退 / 失败 | `media_ad.py`、`imaging.py` | T15 | 第 2 期 / V4.40 | 待实施 |
+| F07 任务截断和文案轮换破坏覆盖 | 已复现 + 静态确认；P1 | 存在（V4.38）。`MediaAdStudio.buildSlots` 把所选版位尺寸展开后 `slice(0, count)`；副文案池混合 `description/body/primary_text` | Facebook / Google / Unity 默认配置 | `taskMatrix.ts`、`MediaAdStudio.tsx`、`creationSession.ts`、`media_ad.py` | T09 | 第 2 期 / V4.40 | 已修复（T09 40 项通过：完整清单含 Stories / UAC、Unity 重复任务合并、概念同源配对、预算不足不截断） |
+| F08 媒体与接口规则不足以保证交付 | 静态确认；P1 | 存在（V4.38）。`media_platforms.py` 按平台名组织、无广告产品 / 资产角色 / 规则版本；`schemas.MediaImageSlot.size` 为无约束字符串 | 异常尺寸、超像素总量、超任务数、未知平台 | `media_platforms.py`、`schemas.py`、`routers.py`、`media_ad.py`、`creation_history.py` | T10 | 第 2 期 / V4.40 | 已修复（T10 通过：版本化目录、模型调用前 422 拒绝、导出标注产品与规则版本；官方核验日期仍为空） |
+| F11 批次失败和临时文件缺少隔离 | 静态风险；P1 | 存在（V4.38）。`media_ad._cleanup_ai_bgs` 按目录通配符删除全部 `_mabg_*` / `_mlogo_*`；`asyncio.gather` 无并发上限且异常直接跳过；`ai_used` 为批次级 | 两批并发出图、混合成功 / 回退 / 失败 | `batch_workspace.py`、`media_ad.py` | T15 | 第 2 期 / V4.40 | 已修复（T15 通过：批次独立目录、超时遗留回收、并发 / 超时限制、逐图 ok / fallback / failed 与 partial_success） |
 | F03 文案概念没有进入背景生成 | 静态确认；P1 | 存在。`_media_image_prompt` 不接收标题 / 副文案 / 证据；任务构造先算 `bg_prompt` 再选文案组合 | 同一 SKU 的「清洗演示 / 通勤场景」两个概念 | `media_ad.py`、`prompt_catalog.py` | T05 | 第 3 期 / V4.41 | 待实施 |
 | F04 预设编辑结果没有完整参与生成 | 静态确认；P1 | 存在。`build_directives` 返回的 `direction_text/style_text/color_text/design_prompt` 未被 `_media_image_prompt` 消费；文案入口不接收视觉设置 | 管理员给方向 / 风格文本加唯一标记 | `presets.py`、`media_ad.py` | T06 | 第 3 期 / V4.41 | 待实施 |
 | F05 固定排版和固定色板削弱表达 | 静态确认；P1 | 存在。`render_ad_png` 只有「小横幅 / 其他」两套布局，`accent` 调用方未传；`_prepare_bg` 固定混合 42% 暗色；`_composite_logo` 统一透明化近白像素 | 320×50 横幅、白色 Logo、新品牌色 | `imaging.py`、`media_ad.py` | T07 | 第 3 期 / V4.41 | 待实施 |
@@ -41,7 +41,7 @@
 | 期次 | 版本 | 问题 | 主题 | 行业/品类适配的落点 | 状态 |
 |---|---|---|---|---|---|
 | 第 1 期 | V4.39 | F01 / F02 / F10 | 输入与输出可信度 | 建立 `industry_profiles.py` 通用主干；压缩语义保护、品牌来源规则、归因规则对全行业一致，各 profile 只提供局部词表与价值维度 | 已完成（V4.39，2026-11-10） |
-| 第 2 期 | V4.40 | F07 / F08 / F11 | 任务与规则可靠性 | 版位矩阵与媒体规则按 profile 给出偏好，不写死电商版位 | 规划中 |
+| 第 2 期 | V4.40 | F07 / F08 / F11 | 任务与规则可靠性 | 版位矩阵与媒体规则按 profile 给出偏好，不写死电商版位 | 已完成（V4.40，2026-11-10） |
 | 第 3 期 | V4.41 | F03 / F04 / F05 | 创意与视觉表达 | profile 的 `visual_subject` / 配色 / 布局偏好驱动 `VisualBrief`，其它行业只改配置即可出图 | 规划中 |
 | 第 4 期 | V4.42 | F06 / F09 / F12 | 事实与工程化 | profile 的 `evidence_types` 决定要核验的事实类型；服务端任务与归档全行业通用 | 规划中 |
 
@@ -62,6 +62,22 @@
 | 未验证 | 真实付费模型调用、真实投放效果与视觉逐图人工抽检（本期未改视觉生成逻辑）；并发隔离 F11、商品一致性 F03 / F05 / F06 属后续期次 |
 
 所有回归均在数据库副本与模拟供应商上执行，测试生成的 PNG 与临时库已清理；未修改生产数据、未读取或输出任何密钥。
+
+## 第 2 期验证记录（V4.40 · 2026-11-10）
+
+| 项目 | 实际执行结果 |
+|---|---|
+| 后端编译 | `python3 -m compileall -q backend` 通过；`import main` 正常，版本 4.40.0，注册路由 49 条 |
+| T09 / F07 | 前端纯函数（esbuild 编译 `taskMatrix.ts` 后 Node 执行）40 项断言全通过：Facebook 默认 4 任务含 Stories 1080x1920、Google 保留 UAC 1080x1920 / 640x640 且 RSA 与 UAC 分开标注、Unity 两个同尺寸全屏任务合并为 1 且可显式保留、概念标题与证据同源、平台正文 `primary_text` 不入图、副标条数多于标题时复用首条不回绕、预算 3 时仍保留 4 任务并明确提示、`full_cover` 2×4=8、预览数与实际请求数一致、空清单边界 |
+| T10 / F08 | 服务端规则纯函数 + HTTP 共 17+ 项断言：未知平台、异常尺寸、非法格式、尺寸不在清单、任务数 >24、累计像素 >40 MP、`concept_index` 越界、规则版本不一致、文案接口未知平台全部在调用模型前返回 422 与结构化原因；合法任务解析出广告产品 / 资产角色 / 规则版本；行业版位偏好随 `/api/media-rules` 下发且不同画像不同 |
+| T15 / F11 | 批次 A 清理后 B 的临时文件仍在；超时遗留目录回收、运行中批次不误清；混合批次 3 任务逐项 ok / fallback / failed，`status=partial_success`、`task_results` 3 条、AI 底图 1 / 模板 1 / 失败 1 且 `image_model.mixed=true`；两批并发用屏障交错，双方临时底图均未被对方删除，结束后无 `_mabatch_*` 残留 |
+| HTTP 端到端 | DB 副本 TestClient 85 项断言全通过：7 平台目录与规则接口、异常请求 422、合法 4 任务出图且 PNG 真实落盘、概念按矩阵分配、旧调用兼容、Google UAC 独立文案 schema、历史导出 / 打包清单的规则版本标记、新版通知 / 行业画像 / 素材历史 / 大模型配置未受影响 |
+| 会话中枢 | Node 回归 19 项断言：新增 4 个控制量默认值、概念组合同源与平台正文隔离、刷新恢复归零与数值边界清洗、账号隔离 |
+| 前端 | `tsc --noEmit` 通过；`vite build` 44 模块，263.40 kB JS / 54.41 kB CSS |
+| 发版校验 | `python3 scripts/prepare_release.py --check` 通过（含改造期次 3 问题 / 版本一致性 / 模块覆盖校验） |
+| 未验证 | 真实付费文本 / 文生图模型调用、真实供应商并发与配额、真实样本逐图人工抽检、投放效果数据；媒体尺寸与政策尚未按各平台官方文档核验（`SPEC_VERIFIED_ON` 为空）。第 3–4 期 F03–F06 / F09 / F12 未实施 |
+
+所有回归均在数据库副本、临时 uploads 目录与模拟供应商上执行；测试生成的 PNG、临时库与批次目录已清理，未修改生产数据、未读取或输出任何密钥。
 
 ## 发布门槛（沿用说明书，按每期执行）
 

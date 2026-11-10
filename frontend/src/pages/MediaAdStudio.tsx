@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, MediaPlatform, CreativePresets, ModelInfo } from '../api'
+import { api, MediaPlatform, MediaRules, CreativePresets, ModelInfo } from '../api'
 import {
   useCreationSession, updateSession, beginTask, endTask, failTask,
-  allSelectedCopy, selectedCount, buildCopyVariants,
+  allSelectedCopy, selectedCount,
 } from '../creationSession'
 import type { StudioStep } from '../creationSession'
+import {
+  buildConcepts, buildAdaptations, buildTaskMatrix, toCopyVariants, toSlots,
+} from '../taskMatrix'
 
 function ModelBadge({ info, fallbackText }: { info: ModelInfo; fallbackText?: string }) {
   if (!info) return null
@@ -26,6 +29,7 @@ export default function MediaAdStudio() {
   const s = useCreationSession()
   const [platforms, setPlatforms] = useState<MediaPlatform[]>([])
   const [presets, setPresets] = useState<CreativePresets | null>(null)
+  const [rules, setRules] = useState<MediaRules | null>(null)
 
   // 放大预览的键盘操作：ESC 关闭 / ← → 切换
   useEffect(() => {
@@ -43,28 +47,57 @@ export default function MediaAdStudio() {
   }, [s.viewer, s.images.length])
 
   useEffect(() => {
-    Promise.all([api.mediaPlatforms().catch(() => []), api.creativePresets().catch(() => null)])
-      .then(([ps, pr]) => {
-        setPlatforms(ps as MediaPlatform[])
-        setPresets(pr as CreativePresets)
-      })
+    Promise.all([
+      api.mediaPlatforms().catch(() => []),
+      api.creativePresets().catch(() => null),
+      api.mediaRules().catch(() => null),
+    ]).then(([ps, pr, mr]) => {
+      setPlatforms(ps as MediaPlatform[])
+      setPresets(pr as CreativePresets)
+      setRules(mr as MediaRules | null)
+    })
   }, [])
 
   const spec = useMemo(() => platforms.find(p => p.platform === s.platform) || null, [platforms, s.platform])
-  const variants = useMemo(() => buildCopyVariants(s), [s])
   const selCount = selectedCount(s)
   const selectedLogo = s.logoMode === 'upload' ? s.uploadedLogo
     : s.logoMode === 'none' ? '' : (s.analysis?.logo || '')
 
+  // V4.40 / F07：概念与任务矩阵都是纯函数派生，预览与实际请求使用同一份数据。
+  const concepts = useMemo(() => buildConcepts({
+    copy: s.copy, copyEdit: s.copyEdit, selectedCopy: s.selectedCopy,
+    brand: (s.brandEdit || s.copy?.brand || '').trim(),
+    variantsPerConcept: s.variantsPerConcept,
+  }), [s.copy, s.copyEdit, s.selectedCopy, s.brandEdit, s.variantsPerConcept])
+
+  const matrix = useMemo(() => buildTaskMatrix({
+    spec, selectedPlacementIds: s.selectedPlacements,
+    keepDistinctRoles: s.keepDistinctRoles,
+    concepts, conceptCount: s.conceptCount,
+    assignment: s.assignment, budget: s.count,
+  }), [spec, s.selectedPlacements, s.keepDistinctRoles, concepts,
+       s.conceptCount, s.assignment, s.count])
+
+  const effectiveVariants = useMemo(() => toCopyVariants(matrix.concepts), [matrix.concepts])
+  const preferredIds: string[] = useMemo(() => {
+    const key = s.analysis?.industry_profile || 'general'
+    return rules?.industry_placement_preferences?.[key] || []
+  }, [rules, s.analysis?.industry_profile])
+
   function choosePlatform(p: string) {
     if (s.running) return   // 任务进行中不重置工作台，避免结果写回错乱
-    const sp = platforms.find(x => x.platform === p)
+    const sp = platforms.find(x => x.platform === p) || null
+    const defaults = sp ? sp.placements.filter(pl => pl.default).map(pl => pl.id) : []
+    // 默认预算 = 选中版位的完整任务数，不再用 recommended_count 静默截断 Stories / UAC
+    const { adaptations } = buildAdaptations(sp, defaults, false)
     updateSession({
       platform: p,
-      selectedPlacements: sp ? sp.placements.filter(pl => pl.default).map(pl => pl.id) : [],
-      count: sp ? sp.recommended_count : 3,
+      selectedPlacements: defaults,
+      count: Math.max(1, adaptations.length),
+      conceptCount: 3, variantsPerConcept: 1,
+      assignment: 'round_robin', keepDistinctRoles: false,
       copy: null, copyEdit: {}, selectedCopy: {}, images: [], imageModel: null,
-      viewer: null, checked: [], savedNote: '', studioError: '',
+      imageIssues: [], viewer: null, checked: [], savedNote: '', studioError: '',
     })
   }
 
@@ -75,17 +108,6 @@ export default function MediaAdStudio() {
         ? st.selectedPlacements.filter(x => x !== id)
         : [...st.selectedPlacements, id],
     }))
-  }
-
-  function buildSlots(): { size: string; placement: string }[] {
-    if (!spec) return []
-    const pairs: { size: string; placement: string }[] = []
-    for (const id of s.selectedPlacements) {
-      const pl = spec.placements.find(p => p.id === id)
-      if (!pl) continue
-      for (const size of pl.sizes) pairs.push({ size, placement: pl.name })
-    }
-    return pairs.slice(0, Math.max(1, s.count))
   }
 
   async function genCopy() {
@@ -162,38 +184,57 @@ export default function MediaAdStudio() {
   async function genImages() {
     if (!s.analysis || !s.platform || !s.copy) return
     if (s.running) return
-    const slots = buildSlots()
+    const slots = toSlots(matrix.tasks)
     if (!slots.length) { updateSession({ studioError: '请至少选择一个广告版位' }); return }
-    if (!variants.length) {
+    if (!effectiveVariants.length) {
       updateSession({ studioError: '请至少勾选一条创意文案作为图片素材（标题 / 描述 / 正文 / CTA 均可）' })
+      return
+    }
+    if (!matrix.budgetOk) {
+      updateSession({ studioError: matrix.warnings.find(w => w.startsWith('预算不足')) || '生成预算不足，请调整后再出图' })
       return
     }
     updateSession({ studioError: '' })
     beginTask('images', '正在生成推广图片',
-      `共 ${slots.length} 个版位，按 ${variants.length} 组选用文案轮换出图…`)
+      `任务矩阵 ${slots.length} 个版位 · ${matrix.concepts.length} 个概念 · 规则 ${matrix.specVersion || '服务端解析中'}…`)
     try {
       const payloadCopy = { ...s.copyEdit, brand: s.brandEdit }
       const res = await api.mediaImages({
         analysis: s.analysis, platform: s.platform, lang: s.lang,
         copy_fields: payloadCopy,
-        copy_variants: variants,
+        copy_variants: effectiveVariants,
         style_opts: { creative_direction: s.direction, content_style: s.styleName, color_scheme: s.colorName },
         slots,
         logo: selectedLogo || '',
+        spec_version: matrix.specVersion || '',
+        total_pixels: matrix.tasks.reduce((n, t) => {
+          const [w, h] = t.size.toLowerCase().split('x').map(Number)
+          return n + (w || 0) * (h || 0)
+        }, 0),
       })
       updateSession({
         images: res.images, imageModel: res.image_model, imgNote: res.note || '',
         imageIssues: res.issues || [],
         step: 3, viewer: null, checked: [], savedNote: '',
       })
-      endTask('images_ready', '本批推广图片已生成',
-        `成功 ${res.images.length} 张；每张图片已标注所用创意文案，可放大查阅、单张或打包下载。` +
-        (res.issues?.length ? ` 另有 ${res.issues.length} 个版位因图内文案超预算被阻止生成（needs_revision）。` : ''))
+      const aiCount = res.images.filter(im => im.ai_background).length
+      const fallbackCount = res.images.length - aiCount
+      const failed = (res.issues || []).filter(x => x.status === 'failed').length
+      endTask(res.status === 'failed' ? 'error' : 'images_ready',
+        res.status === 'failed' ? '本批无可用素材' : '本批推广图片已生成',
+        `成功 ${res.images.length} 张（AI 底图 ${aiCount} / 模板兜底 ${fallbackCount}）` +
+        (res.status === 'partial_success' ? `，批次为部分成功；另有 ${(res.issues || []).length} 项未生成` : '') +
+        (failed ? `，其中 ${failed} 项失败（未计入合格素材，可仅重试失败项）` : '') +
+        `；规则版本 ${res.spec_version || '-'}，每张图已标注适用广告产品与所用概念。`)
       // V4.36：把「编辑后的最终文案 + 本批图片 + 风格 / 模型」写回历史会话（追加）
       if (s.historyId) {
         const finalCopy = {
           ...s.copy, fields: { ...s.copyEdit }, brand: s.brandEdit,
-          selected_copy: s.selectedCopy, copy_variants: variants,
+          selected_copy: s.selectedCopy, copy_variants: effectiveVariants,
+          task_matrix: { tasks: matrix.tasks, concepts: matrix.concepts.map(c => ({
+            key: c.key, label: c.label, headline: c.headline, sub: c.sub, cta: c.cta,
+            sourceIndices: c.sourceIndices, subKey: c.subKey,
+          })), spec_version: matrix.specVersion },
         }
         api.updateCreationHistory(s.historyId, {
           platform: s.platform, lang: s.lang, copy: finalCopy,
@@ -307,20 +348,63 @@ export default function MediaAdStudio() {
                   <label key={pl.id} className={`placement-card ${s.selectedPlacements.includes(pl.id) ? 'on' : ''}`}>
                     <input type="checkbox" checked={s.selectedPlacements.includes(pl.id)}
                            onChange={() => togglePlacement(pl.id)} disabled={s.running} />
-                    <span className="pl-name">{pl.name}{pl.default && <em>常规</em>}</span>
+                    <span className="pl-name">
+                      {pl.name}{pl.default && <em>常规</em>}
+                      {preferredIds.includes(pl.id) && <em className="pl-pref">行业建议</em>}
+                    </span>
                     <span className="pl-desc">{pl.desc}</span>
                     <span className="pl-sizes">{pl.sizes.join(' · ')}</span>
+                    {(pl.ad_product || pl.asset_role) && (
+                      <span className="pl-role">{pl.ad_product || '未标注广告产品'} · {pl.asset_role}</span>
+                    )}
                   </label>
                 ))}
               </div>
               <div className="sp-count">
-                <label>生成图片数量：</label>
+                <label>生成预算（任务数上限）：</label>
                 <input
-                  type="number" min={1} max={20} value={s.count}
-                  onChange={e => updateSession({ count: Math.max(1, parseInt(e.target.value || '1', 10)) })}
+                  type="number" min={1} max={24} value={s.count}
+                  onChange={e => updateSession({ count: Math.max(1, Math.min(24, parseInt(e.target.value || '1', 10))) })}
+                  disabled={s.running}
                 />
-                <span className="muted">（按所选版位顺序取前 {Math.max(1, s.count)} 张）</span>
+                <span className="muted">
+                  当前版位清单共需 <b>{matrix.required}</b> 个任务（{matrix.adaptationCount} 个适配
+                  {matrix.droppedDuplicates.length ? ` · 已合并 ${matrix.droppedDuplicates.length} 个重复` : ''}）；
+                  预算不足时不会静默截断，会明确提示并禁止出图。
+                </span>
               </div>
+              <div className="sp-count">
+                <label className="tm-check">
+                  <input type="checkbox" checked={s.keepDistinctRoles}
+                         onChange={e => updateSession({ keepDistinctRoles: e.target.checked })}
+                         disabled={s.running} />
+                  保留同尺寸但不同广告产品的任务
+                </label>
+                {matrix.budgetOk ? (
+                  <span className="pill ok">预算充足</span>
+                ) : (
+                  <button className="btn small" disabled={s.running}
+                          onClick={() => updateSession({ count: matrix.required })}>
+                    按清单补足预算（{matrix.required}）
+                  </button>
+                )}
+              </div>
+              {spec.spec_version && (
+                <div className="sp-rules">
+                  <b>媒体规则 {spec.spec_version}</b>
+                  <span className="muted">
+                    来源：{spec.spec_source}；
+                    官方核验日期：{spec.spec_verified_on || '未核验'}。
+                    {spec.spec_disclaimer}
+                  </span>
+                  <span className="muted">单批最多 {spec.rules?.limits.max_slots ?? 24} 个任务、
+                    累计像素 {((spec.rules?.limits.max_total_pixels ?? 40000000) / 1e6).toFixed(0)} MP；
+                    未知平台、异常尺寸与超量请求会在调用模型前被拒绝。</span>
+                </div>
+              )}
+              {matrix.warnings.filter(w => w.startsWith('预算不足')).map((w, i) => (
+                <div className="alert warn" key={`bw-${i}`}>{w}</div>
+              ))}
               <div className="sp-lang">
                 <label>文案语言：</label>
                 <select value={s.lang} onChange={e => updateSession({ lang: e.target.value })}>
@@ -428,28 +512,79 @@ export default function MediaAdStudio() {
             </div>
           </div>
 
-          {/* V4.38：生成图片前预览将实际使用的文案组合 */}
+          {/* V4.40 / F07：概念 → 任务矩阵，预览数量与实际请求完全一致 */}
           <div className="cv-panel">
             <div className="cv-head">
-              <h4>将用于图片的创意文案组合（{variants.length} 组）</h4>
-              <span className="muted">按版位顺序轮换叠加到 {Math.max(1, s.count)} 张图片</span>
+              <h4>创意概念（{concepts.length} 个 · 本批使用 {matrix.concepts.length} 个）</h4>
+              <span className="muted">同一概念的主标题、证据与 CTA 来自同一来源位置，不做取模错配</span>
             </div>
-            {variants.length ? (
+            {concepts.length ? (
               <div className="cv-list">
-                {variants.map((v, i) => (
-                  <div className="cv-card" key={i}>
-                    <span className="pill img">{v.label}</span>
-                    <b>{v.headline || '（无标题）'}</b>
-                    <span>{v.sub || '（无副标 / 正文）'}</span>
-                    <em>{v.cta || '（无 CTA）'}</em>
+                {concepts.map((c, i) => (
+                  <div className={`cv-card ${i < matrix.concepts.length ? '' : 'off'}`} key={c.key}>
+                    <span className="pill img">{c.label}</span>
+                    <b>{c.headline || '（无标题）'}</b>
+                    <span>{c.sub || '（无副标 / 证据）'}</span>
+                    <em>{c.cta || '（无 CTA）'}</em>
+                    <small>来源：标题 #{c.sourceIndices.headline + 1} ·
+                      {c.subKey || '证据'} #{c.sourceIndices.sub + 1} · CTA #{c.sourceIndices.cta + 1}
+                      {c.headlineVariants.length > 1 ? ` · ${c.headlineVariants.length} 个标题变体` : ''}</small>
                   </div>
                 ))}
               </div>
             ) : (
               <div className="alert err">尚未勾选任何文案，请至少选择一条标题 / 描述 / 正文 / CTA 后再生成图片。</div>
             )}
+            <div className="tm-controls">
+              <label>使用概念数
+                <input type="number" min={1} max={Math.max(1, concepts.length)}
+                       value={Math.min(s.conceptCount, Math.max(1, concepts.length))}
+                       onChange={e => updateSession({ conceptCount: Math.max(1, parseInt(e.target.value || '1', 10)) })}
+                       disabled={s.running} />
+              </label>
+              <label>每概念标题变体数
+                <input type="number" min={1} max={4} value={s.variantsPerConcept}
+                       onChange={e => updateSession({ variantsPerConcept: Math.max(1, Math.min(4, parseInt(e.target.value || '1', 10))) })}
+                       disabled={s.running} />
+              </label>
+              <label>概念分配方式
+                <select value={s.assignment} disabled={s.running}
+                        onChange={e => updateSession({ assignment: e.target.value as 'round_robin' | 'full_cover' })}>
+                  <option value="round_robin">先覆盖版位（顺序分配）</option>
+                  <option value="full_cover">每个概念覆盖全部版位</option>
+                </select>
+              </label>
+              <span className="tm-count">
+                适配数 <b>{matrix.adaptationCount}</b> × 概念数 <b>{matrix.conceptCount}</b>
+                → 任务 <b>{matrix.required}</b> / 预算 {matrix.budget}
+              </span>
+            </div>
+            {matrix.warnings.map((w, i) => (
+              <div className="alert warn" key={`mw-${i}`}>{w}</div>
+            ))}
+            <div className="tm-table-wrap">
+              <table className="tm-table">
+                <thead>
+                  <tr><th>#</th><th>版位</th><th>尺寸</th><th>广告产品</th><th>资产角色</th><th>概念</th></tr>
+                </thead>
+                <tbody>
+                  {matrix.tasks.map((t, i) => (
+                    <tr key={`${t.placement_id}-${t.size}-${t.concept_index}-${i}`}>
+                      <td>{i + 1}</td>
+                      <td>{t.placement || '—'}</td>
+                      <td><span className="pill img">{t.size}</span></td>
+                      <td>{t.ad_product || '—'}</td>
+                      <td>{t.asset_role || '—'}</td>
+                      <td><b>{t.concept_id || '—'}</b></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!matrix.tasks.length && <p className="muted">任务清单为空，请回到第 ① 步选择广告版位。</p>}
+            </div>
             <p className="muted">
-              第 n 张图片使用第 (n-1) % {Math.max(1, variants.length)} + 1 组文案；未勾选的文案仍保留在文案库与「素材历史」中，但不会出现在图片上。
+              平台正文（primary_text）不进入图内文字；未勾选的文案仍保留在文案库与「素材历史」中，但不会出现在图片上。
+              规则版本 {matrix.specVersion || '由服务端解析'}；每张导出的图片都会标注适用广告产品。
             </p>
           </div>
 
@@ -480,8 +615,10 @@ export default function MediaAdStudio() {
 
           <div className="form-actions">
             <button className="btn" onClick={() => gotoStep(1)}>← 上一步</button>
-            <button className="btn primary" disabled={s.running || !variants.length} onClick={genImages}>
-              {s.running ? '任务进行中…' : '生成推广图片 →'}
+            <button className="btn primary"
+                    disabled={s.running || !effectiveVariants.length || !matrix.budgetOk || !matrix.tasks.length}
+                    onClick={genImages}>
+              {s.running ? '任务进行中…' : `生成推广图片（${matrix.required} 个任务）→`}
             </button>
           </div>
         </div>
@@ -494,13 +631,21 @@ export default function MediaAdStudio() {
           {s.imageModel && <ModelBadge info={s.imageModel} fallbackText="使用 Pillow 模板兜底" />}
           {s.imgNote && <p className="muted">{s.imgNote}</p>}
           {(s.imageIssues || []).length > 0 && (
-            <div className="alert warn rev-alert">
-              <b>{s.imageIssues.length} 个版位未生成（needs_revision）</b>
+            <div className={`alert ${s.imageIssues.some(x => x.status === 'failed') ? 'err' : 'warn'} rev-alert`}>
+              <b>{s.imageIssues.length} 个任务未生成（逐项状态见下）</b>
               <ul className="rev-list">
                 {s.imageIssues.map((x, i) => (
-                  <li key={i}><b>{x.size}{x.placement ? ` · ${x.placement}` : ''}</b>：{x.message}</li>
+                  <li key={i}>
+                    <span className={`pill ${x.status === 'failed' ? 'err' : 'off'}`}>
+                      {x.status === 'failed' ? '失败' : 'needs_revision'}
+                    </span>
+                    <b>{x.size}{x.placement ? ` · ${x.placement}` : ''}</b>
+                    {x.concept_id ? ` · ${x.concept_id}` : ''}
+                    {x.ad_product ? ` · ${x.ad_product}` : ''}：{x.message}
+                  </li>
                 ))}
               </ul>
+              <div className="muted">失败任务未计入合格素材；可返回上一步仅重试失败项，不会对已成功图片重复计费或重复归档。</div>
             </div>
           )}
           {s.savedNote && <div className="alert ok">{s.savedNote}</div>}
@@ -542,12 +687,22 @@ export default function MediaAdStudio() {
                 <div className="ic-meta">
                   <span className="pill img">{img.size}</span>
                   <span className="muted">{img.placement || '—'}</span>
+                  <span className={`pill ${img.ai_background ? 'ok' : 'off'}`}
+                        title={img.fallback_reason || (img.ai_background ? '文生图模型生成背景' : 'Pillow 模板兜底')}>
+                    {img.ai_background ? 'AI 底图' : '模板兜底'}
+                  </span>
                 </div>
                 {img.copy && (
                   <div className="ic-copy" title="本张图片选用的创意文案">
                     {img.variant && <span className="pill off">{img.variant}</span>}
+                    {img.concept_id && <span className="pill off">{img.concept_id}</span>}
                     <b>{img.copy.headline || '（无标题）'}</b>
                     <span>{img.copy.sub || '（无副标）'}</span>
+                  </div>
+                )}
+                {(img.ad_product || img.spec_version) && (
+                  <div className="ic-spec">
+                    {img.ad_product || '未标注广告产品'} · 规则 {img.spec_version || '—'}
                   </div>
                 )}
                 <div className="ic-actions">

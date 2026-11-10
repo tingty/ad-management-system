@@ -327,6 +327,8 @@ export interface IndustryProfile {
   visual_subject: string
   must_preserve: string[]
   copy_focus: string
+  /** V4.40 / 第 2 期：行业局部配置——建议版位 id（仅提示，不自动勾选） */
+  placement_preferences?: string[]
 }
 export interface IndustryProfilesResponse {
   profiles: IndustryProfile[]
@@ -342,6 +344,24 @@ export interface MediaPlacement {
   sizes: string[]
   desc: string
   default: boolean
+  /** V4.40 / F08：版位的交付语义（服务端目录给出，前端不自行推断） */
+  ad_product?: string
+  asset_role?: string
+  os?: string
+}
+
+export interface MediaRules {
+  spec_version: string
+  spec_source: string
+  spec_verified_on: string
+  disclaimer: string
+  limits: { max_slots: number; max_total_pixels: number; max_slot_pixels: number
+            min_side: number; max_side: number; max_copy_variants: number }
+  hard: string[]
+  policy: string[]
+  advisory: string[]
+  platforms?: Record<string, string[]>
+  industry_placement_preferences?: Record<string, string[]>
 }
 
 export interface MediaPlatform {
@@ -353,6 +373,13 @@ export interface MediaPlatform {
   copy_limits: { title_max?: number; description_max?: number; primary_text_max?: number; body_max?: number }
   usage: string
   cta_options: string[]
+  /** V4.40 / F08：版本化媒体规则 */
+  ad_products?: string[]
+  spec_version?: string
+  spec_source?: string
+  spec_verified_on?: string
+  spec_disclaimer?: string
+  rules?: MediaRules
 }
 
 /** V4.39 / F01：一条需要人工修改的超长文案（不得作为合格素材导出） */
@@ -367,6 +394,8 @@ export interface CopyRevisionNeeded {
 }
 export interface MediaCopyResult {
   platform: string
+  /** V4.40 / F08：广告产品（用于区分 Google RSA / UAC 等文案 schema） */
+  ad_product?: string
   lang: string
   fields: Record<string, any>
   schema: { key: string; label: string; max: number; count: number }[]
@@ -397,6 +426,8 @@ export interface CopyVariant {
   cta: string
   brand: string
   label: string
+  /** V4.40 / F07：概念标识，用于追溯同一概念跨版位的承诺一致性 */
+  concept_id?: string
 }
 
 export interface MediaImageItem {
@@ -406,18 +437,53 @@ export interface MediaImageItem {
   w: number
   h: number
   placement: string
-  /** V4.38：本张图片实际选用的文案组合（后端按版位轮换写入） */
+  /** V4.38：本张图片实际选用的文案组合 */
   variant?: string
   copy?: { headline: string; sub: string; cta: string }
+  /** V4.40 / F11：逐图状态，不再用批次级 ai_used 掩盖模板回退 */
+  status?: 'ok' | 'fallback'
+  ai_background?: boolean
+  fallback?: boolean
+  fallback_reason?: string
+  model?: { provider: string; model: string; config_id: number | null; request_id: string }
+  retries?: number
+  batch_id?: string
+  /** V4.40 / F07 + F08：任务矩阵与规则标记 */
+  concept_id?: string
+  concept_index?: number
+  placement_id?: string
+  ad_product?: string
+  asset_role?: string
+  os?: string
+  spec_version?: string
 }
 
-/** V4.39 / F01：因图内文案超出版位预算而被阻止生成的版位 */
+/** V4.39 / F01：因图内文案超预算被阻止；V4.40 / F11：失败任务同样逐项列出 */
 export interface MediaImageIssue {
   level: string
+  status?: string
   size: string
   placement: string
+  concept_id?: string
+  ad_product?: string
   message: string
 }
+
+export interface MediaImageTaskResult {
+  status: string
+  size: string
+  placement: string
+  concept_id: string
+  ad_product: string
+  spec_version: string
+  file: string
+  ai_background: boolean
+  fallback: boolean
+  error: string
+  retries: number
+  batch_id: string
+}
+
 export interface MediaImageResult {
   platform: string
   images: MediaImageItem[]
@@ -425,10 +491,15 @@ export interface MediaImageResult {
   note: string
   count: number
   copy_variant_count?: number
-  status?: 'ok' | 'partial_success'
+  /** V4.40 / F11：failed = 整批无可用素材，不静默当成功 */
+  status?: 'ok' | 'partial_success' | 'failed'
   issues?: MediaImageIssue[]
   skipped?: any[]
   strict_text?: boolean
+  task_results?: MediaImageTaskResult[]
+  batch_id?: string
+  spec_version?: string
+  rules?: Record<string, any>
 }
 
 /* ----------------------------- V4.36 素材历史 ----------------------------- */
@@ -488,7 +559,15 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     const t = await res.text().catch(() => '')
     let detail = t
-    try { detail = JSON.parse(t).detail || t } catch { /* 保留原文 */ }
+    try {
+      const d = JSON.parse(t).detail
+      // V4.40 / F08：服务端规则校验返回结构化错误对象时，展开成人读原因
+      detail = typeof d === 'string' ? d
+        : Array.isArray(d) ? d.map((x: any) => x?.msg || x?.message || String(x)).join('；')
+        : d && typeof d === 'object'
+          ? [d.message, ...(Array.isArray(d.errors) ? d.errors : [])].filter(Boolean).join('；')
+          : t
+    } catch { /* 保留原文 */ }
     throw new Error(`请求失败 ${res.status}: ${detail || res.statusText}`)
   }
   return res.json() as Promise<T>
@@ -514,6 +593,9 @@ export const api = {
   // 素材创作：营销推广的媒体平台设置 —— 平台规格目录
   mediaPlatforms: () =>
     req<MediaPlatform[]>('/api/media-platforms'),
+  // V4.40 / F08：版本化媒体规则（强制 / 政策 / 建议、上限、行业版位偏好）
+  mediaRules: () =>
+    req<MediaRules>('/api/media-rules'),
   // V4.39：行业 / 品类画像（通用主干 + 局部调整）
   industryProfiles: () =>
     req<IndustryProfilesResponse>('/api/industry-profiles'),
@@ -524,8 +606,12 @@ export const api = {
   mediaImages: (payload: {
     analysis: LandingAnalysis; platform: string; lang?: string
     copy_fields: Record<string, any>; copy_variants?: CopyVariant[]
-    style_opts: Record<string, string>; slots: { size: string; placement: string }[]
+    style_opts: Record<string, string>
+    slots: { size: string; placement: string; placement_id?: string
+             concept_index?: number; concept_id?: string }[]
     logo?: string
+    spec_version?: string
+    total_pixels?: number
   }) =>
     req<MediaImageResult>('/api/media-campaign/images', { method: 'POST', body: JSON.stringify(payload) }),
   // 素材历史：一次创作会话按「分析 → 文案 → 图片」增量落库

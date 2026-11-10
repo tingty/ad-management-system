@@ -173,13 +173,25 @@ def copy_as_text(row) -> str:
                 lines.append(f"- {labels.get(k, k)}：{' / '.join(picked)}")
     vs = c.get("copy_variants") or []
     if isinstance(vs, list) and vs:
-        lines += ["", "【图片使用的文案组合（按版位轮换）】"]
+        lines += ["", "【图片使用的文案组合（按任务矩阵指定概念）】"]
         for i, v in enumerate(vs[:40], 1):
             if isinstance(v, dict):
                 lines.append(f"- {v.get('label') or f'组合 {i}'}："
                              f"{v.get('headline') or '（无标题）'} | "
                              f"{v.get('sub') or '（无副标）'} | "
                              f"{v.get('cta') or '（无 CTA）'}")
+    # V4.40 / F08：每份导出标记适用广告产品与规则版本，避免把内部尺寸当永久官方标准。
+    imgs = row.images_json if isinstance(row.images_json, list) else []
+    tagged = [x for x in imgs if isinstance(x, dict) and
+              (x.get("ad_product") or x.get("spec_version"))]
+    if tagged:
+        lines += ["", "【适用广告产品与规则版本】"]
+        for key, label in (("ad_product", "广告产品"), ("spec_version", "规则版本")):
+            vals = list(dict.fromkeys(str(x.get(key) or "").strip() for x in tagged
+                                     if str(x.get(key) or "").strip()))
+            if vals:
+                lines.append(f"{label}：{' / '.join(vals)}")
+        lines.append("说明：规则版本为系统内部整理，正式投放前须按平台官方文档复核。")
     return "\n".join(lines) + "\n"
 
 
@@ -264,9 +276,14 @@ def build_files_zip(files: list[str], metas: list[dict] | None = None,
             z.write(path, arc)
             packed.append({"file": f, "size": m.get("size", ""),
                            "placement": m.get("placement", ""), "path_in_zip": arc})
+        from media_platforms import SPEC_VERSION, SPEC_SOURCE, SPEC_DISCLAIMER
         z.writestr(f"{label}/清单.json", _json_bytes({
             "label": label, "count": len(packed), "missing": missing, "images": packed,
             "exported_at": datetime.now(timezone.utc).isoformat(),
+            "spec_version": SPEC_VERSION,
+            "spec_source": SPEC_SOURCE,
+            "spec_note": (SPEC_DISCLAIMER +
+                          " 适用广告产品与资产角色见「素材历史 → 导出」的生成信息.json。"),
         }))
     buf.seek(0)
     return buf
@@ -294,6 +311,10 @@ def build_history_zip(rows: list, multi: bool = False) -> io.BytesIO:
             if row.analysis_json:
                 z.writestr(f"{base}落地页分析.txt", analysis_as_text(row))
                 z.writestr(f"{base}落地页分析.json", _json_bytes(row.analysis_json))
+            # V4.40 / F08：导出标记适用广告产品 / 资产角色 / 规则版本 / 批次 id
+            tag = lambda k: list(dict.fromkeys(
+                str(im.get(k) or "").strip() for im in images
+                if isinstance(im, dict) and str(im.get(k) or "").strip()))
             z.writestr(f"{base}生成信息.json", _json_bytes({
                 "id": row.id, "title": row.title, "url": row.url,
                 "platform": row.platform, "lang": row.lang,
@@ -304,6 +325,11 @@ def build_history_zip(rows: list, multi: bool = False) -> io.BytesIO:
                 "image_model": row.image_model_json or {},
                 "note": row.note or "",
                 "owner": row.owner_name or "",
+                "ad_products": tag("ad_product"),
+                "asset_roles": tag("asset_role"),
+                "spec_versions": tag("spec_version"),
+                "batch_ids": tag("batch_id"),
+                "spec_note": "内部整理规则，正式投放前须按平台官方文档复核",
             }))
             manifest.append({"id": row.id, "title": row.title, "folder": base or ".",
                              "images": packed})

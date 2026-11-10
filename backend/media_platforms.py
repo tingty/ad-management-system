@@ -18,7 +18,138 @@
   copy_limits       结构化字数红线（标题/正文/描述/主文案上限），供文案校验
   usage             常规使用方案说明（人读）
   cta_options       可选 CTA 文案（展示文案可从此选择）
+
+V4.40 / F08：目录从「按平台名 + 尺寸字符串」升级为**版本化交付规则**。
+- 每个版位补 `ad_product` / `asset_role` / `os`，避免 Google RSA 文案混到 UAC 图片、
+  以及同尺寸不同用途被当成同一交付物；
+- 规则分三层：`hard`（服务端强制，模型调用前拦截）/ `policy`（业务政策，显式提示）
+  / `advisory`（建议，不阻断）；
+- `SPEC_SOURCE` / `SPEC_VERIFIED_ON` 明确规则来源与核验日期：**本目录是内部整理，
+  不是官方投放规范的永久标准**，上线前须按官方文档复核并更新 `SPEC_VERSION`。
 """
+
+# ---------------------------------------------------------------------------
+# V4.40 / F08：规则版本、来源与三层规则
+# ---------------------------------------------------------------------------
+import re
+
+SPEC_VERSION = "2026-11-10.2"
+SPEC_SOURCE = "内部整理：media_platforms.py + 《广告素材平台问题诊断与AI改造实施说明书》v1.0 静态审查"
+SPEC_VERIFIED_ON = ""      # 空 = 尚未按各平台官方文档核验；核验后填 YYYY-MM-DD
+SPEC_DISCLAIMER = ("目录中的尺寸、字数与安全区为内部参考，不是官方投放规范的永久标准；"
+                   "正式投放前须按平台官方文档复核，并同步更新 SPEC_VERSION / SPEC_VERIFIED_ON。")
+
+#: 服务端强制上限。总像素按全部任务累加，用于在调用模型前挡住异常请求。
+MEDIA_LIMITS = {
+    "max_slots": 24,
+    "max_total_pixels": 40_000_000,
+    "max_slot_pixels": 8_300_000,
+    "min_side": 16,
+    "max_side": 4096,
+    "max_copy_variants": 40,
+}
+
+MEDIA_RULES = {
+    "spec_version": SPEC_VERSION,
+    "spec_source": SPEC_SOURCE,
+    "spec_verified_on": SPEC_VERIFIED_ON,
+    "disclaimer": SPEC_DISCLAIMER,
+    "limits": dict(MEDIA_LIMITS),
+    # 强制规则：违反即在调用任何模型 / 文生图接口之前返回明确错误
+    "hard": [
+        "platform 必须是目录中的已知平台，未知平台不得静默回退到其它平台 schema",
+        "slots.size 必须为 WxH 且在平台允许尺寸清单内，边长与单张像素数在上限内",
+        "slots 数量与累计像素总量不得超过 MEDIA_LIMITS",
+        "concept_index 若提供，必须是非负整数且落在本次文案组合范围内",
+    ],
+    # 业务政策：不阻断生成，但必须在结果 / 导出里显式标注，不允许静默替换
+    "policy": [
+        "同一批次混用不同 ad_product 时逐张标注适用产品，不合并为同一交付物",
+        "Google RSA 文案字段与 UAC 图片素材分开标注，避免把 RSA 标题当应用广告素材",
+        "品牌、价格、评价等事实不得由目录或域名推导补齐（见 V4.39 / F02）",
+        "未核验官方规则时，导出只标注内部规则版本，不宣称符合平台审核规范",
+    ],
+    # 建议：仅提示，不阻断
+    "advisory": [
+        "优先使用 recommended_sizes 覆盖主要版位，再按需扩展",
+        "小横幅需为文字与 Logo 预留安全区，避免贴边裁切",
+        "规则更新必须附来源链接与核验日期，不把本目录的旧尺寸当永久标准",
+    ],
+}
+
+_SIZE_RE = re.compile(r"^(\d{1,5})[xX×](\d{1,5})$")
+
+
+class MediaRuleError(ValueError):
+    """F08：调用模型前被规则挡下；errors 为可直接展示给用户的原因列表。"""
+
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+        super().__init__("；".join(errors))
+
+
+def parse_size(size: str) -> tuple[int, int]:
+    """严格解析 `1080x1080`；不合法时抛 ValueError（含可读原因）。"""
+    m = _SIZE_RE.match(str(size or "").strip())
+    if not m:
+        raise ValueError(f"尺寸格式不合法：{size!r}，应形如 1080x1080")
+    w, h = int(m.group(1)), int(m.group(2))
+    if not (MEDIA_LIMITS["min_side"] <= w <= MEDIA_LIMITS["max_side"]
+            and MEDIA_LIMITS["min_side"] <= h <= MEDIA_LIMITS["max_side"]):
+        raise ValueError(f"尺寸 {w}x{h} 超出允许边长 "
+                         f"[{MEDIA_LIMITS['min_side']}, {MEDIA_LIMITS['max_side']}]")
+    if w * h > MEDIA_LIMITS["max_slot_pixels"]:
+        raise ValueError(f"尺寸 {w}x{h} 单张像素 {w * h:,} 超过上限 "
+                         f"{MEDIA_LIMITS['max_slot_pixels']:,}")
+    return w, h
+
+
+#: 每个版位的交付语义（platform → placement id → 规则）。
+#: asset_role 相同 + 尺寸相同 = 默认视为重复任务（F07 去重依据）；
+#: 广告产品不同仍可通过前端「保留同尺寸不同资产角色」显式保留。
+PLACEMENT_RULES: dict[str, dict[str, dict]] = {
+    "Facebook": {
+        "feed": {"ad_product": "Facebook Feed Image Ad", "asset_role": "feed_image", "os": "iOS/Android/Web"},
+        "stories": {"ad_product": "Facebook Stories", "asset_role": "story_vertical", "os": "iOS/Android"},
+        "reels": {"ad_product": "Facebook Reels", "asset_role": "reels_vertical", "os": "iOS/Android"},
+    },
+    "Google": {
+        "display_mrec": {"ad_product": "Google Display (RSA 配图)", "asset_role": "display_banner", "os": "Web"},
+        "display_leader": {"ad_product": "Google Display (RSA 配图)", "asset_role": "display_banner", "os": "Web"},
+        "display_mobile": {"ad_product": "Google Display (RSA 配图)", "asset_role": "display_banner", "os": "Android/iOS Web"},
+        "display_half": {"ad_product": "Google Display (RSA 配图)", "asset_role": "display_banner", "os": "Web"},
+        "uac": {"ad_product": "Google App Campaign (UAC)", "asset_role": "app_portrait", "os": "Android/iOS"},
+    },
+    "Unity": {
+        "rewarded": {"ad_product": "Unity Rewarded", "asset_role": "fullscreen_portrait", "os": "Android/iOS"},
+        "interstitial": {"ad_product": "Unity Interstitial", "asset_role": "fullscreen_portrait", "os": "Android/iOS"},
+        "banner": {"ad_product": "Unity Banner", "asset_role": "banner", "os": "Android/iOS"},
+    },
+    "AppLovin": {
+        "app_discovery": {"ad_product": "AppLovin App Discovery", "asset_role": "app_large", "os": "Android/iOS"},
+        "mrec": {"ad_product": "AppLovin MREC", "asset_role": "display_banner", "os": "Android/iOS"},
+        "banner": {"ad_product": "AppLovin Banner", "asset_role": "banner", "os": "Android/iOS"},
+    },
+    "Adsterra": {
+        "banner_mrec": {"ad_product": "Adsterra Banner / MREC", "asset_role": "display_banner", "os": "Web"},
+        "leader": {"ad_product": "Adsterra Leaderboard", "asset_role": "display_banner", "os": "Web"},
+        "skyscraper": {"ad_product": "Adsterra Skyscraper", "asset_role": "display_banner", "os": "Web"},
+        "mobile": {"ad_product": "Adsterra Mobile Banner", "asset_role": "banner", "os": "Android/iOS Web"},
+    },
+    "Mintegral": {
+        "rewarded": {"ad_product": "Mintegral Rewarded / Interstitial", "asset_role": "fullscreen_portrait", "os": "Android/iOS"},
+        "mrec": {"ad_product": "Mintegral MREC", "asset_role": "display_banner", "os": "Android/iOS"},
+        "banner": {"ad_product": "Mintegral Banner", "asset_role": "banner", "os": "Android/iOS"},
+    },
+    "TikTok": {
+        "in_feed": {"ad_product": "TikTok In-Feed", "asset_role": "in_feed_vertical", "os": "Android/iOS"},
+        "topview": {"ad_product": "TikTok TopView", "asset_role": "splash_vertical", "os": "Android/iOS"},
+        "square": {"ad_product": "TikTok In-Feed Square", "asset_role": "feed_image", "os": "Android/iOS"},
+        "horizontal": {"ad_product": "TikTok Horizontal", "asset_role": "horizontal_still", "os": "Android/iOS"},
+    },
+}
+
+_UNKNOWN_ROLE = {"ad_product": "未标注广告产品", "asset_role": "unspecified", "os": "unknown"}
 
 # 各平台常规版位与尺寸（基于主流投放规范整理，供展示与预选）
 MEDIA_PLATFORMS = [
@@ -151,15 +282,188 @@ MEDIA_PLATFORMS = [
     },
 ]
 
-# 平台名 -> 规格 的索引
+# 平台名 -> 规格 的索引（大小写不敏感的别名便于旧调用兼容）
 MEDIA_PLATFORM_MAP = {p["platform"]: p for p in MEDIA_PLATFORMS}
+_PLATFORM_ALIASES = {k.lower(): k for k in MEDIA_PLATFORM_MAP}
+
+
+def canonical_platform(name: str) -> str:
+    return _PLATFORM_ALIASES.get(str(name or "").strip().lower(), "")
+
+
+def validate_platform(name: str) -> str:
+    """F08：未知平台必须显式拒绝，不能静默套用其它平台的文案 schema。"""
+    key = canonical_platform(name)
+    if not key:
+        raise MediaRuleError([
+            f"未知媒体平台：{name!r}；当前规则版本 {SPEC_VERSION} 支持："
+            + "、".join(MEDIA_PLATFORM_MAP.keys()),
+            "请从「素材创作 → 营销推广的媒体平台设置」选择已配置平台；系统不会静默改用其它平台规则。",
+        ])
+    return key
+
+
+def placement_rule(platform: str, placement_id: str) -> dict:
+    return (PLACEMENT_RULES.get(platform, {}).get(placement_id)
+            or dict(_UNKNOWN_ROLE))
+
+
+def _enrich(spec: dict) -> dict:
+    out = dict(spec)
+    rules = PLACEMENT_RULES.get(spec["platform"], {})
+    out["placements"] = [{**pl, **rules.get(pl["id"], dict(_UNKNOWN_ROLE))}
+                         for pl in spec.get("placements", [])]
+    out["ad_products"] = sorted({r["ad_product"] for r in rules.values()})
+    out["spec_version"] = SPEC_VERSION
+    out["spec_source"] = SPEC_SOURCE
+    out["spec_verified_on"] = SPEC_VERIFIED_ON
+    out["spec_disclaimer"] = SPEC_DISCLAIMER
+    out["rules"] = MEDIA_RULES
+    return out
 
 
 def get_media_platform(name: str) -> dict | None:
-    """按平台名取规格；不存在返回 None。"""
-    return MEDIA_PLATFORM_MAP.get(name)
+    """按平台名取规格（含版位交付语义与规则版本）；不存在返回 None。"""
+    key = canonical_platform(name)
+    return _enrich(MEDIA_PLATFORM_MAP[key]) if key else None
 
 
 def list_media_platforms() -> list[dict]:
-    """返回全部平台规格（供前端构建选择器与展示）。"""
-    return MEDIA_PLATFORMS
+    """返回全部平台规格（供前端构建选择器与任务矩阵）。"""
+    return [_enrich(p) for p in MEDIA_PLATFORMS]
+
+
+def allowed_sizes(platform: str) -> set[str]:
+    """允许尺寸 = 平台总览尺寸 ∪ 所有版位尺寸（避免目录漏登记导致误拒）。"""
+    spec = MEDIA_PLATFORM_MAP.get(canonical_platform(platform))
+    if not spec:
+        return set()
+    out = set(spec.get("image_sizes") or [])
+    for pl in spec.get("placements", []):
+        out.update(pl.get("sizes") or [])
+    return out
+
+
+def match_placement(platform: str, placement: str = "", placement_id: str = "") -> dict:
+    """前端可能传版位 id 或展示名；两者都尝试匹配，匹配不到返回未标注规则。"""
+    spec = MEDIA_PLATFORM_MAP.get(canonical_platform(platform))
+    if not spec:
+        return {}
+    for pl in spec.get("placements", []):
+        if (placement_id and pl["id"] == placement_id) or (placement and pl["name"] == placement):
+            return {**pl, **placement_rule(spec["platform"], pl["id"])}
+    return {}
+
+
+def media_rules_payload() -> dict:
+    """`GET /api/media-rules`：把规则版本与限制显式暴露给前端，避免前后端各写一套。"""
+    from industry_profiles import list_profiles
+    return {
+        **MEDIA_RULES,
+        "platforms": {p: sorted(allowed_sizes(p)) for p in MEDIA_PLATFORM_MAP},
+        "industry_placement_preferences": {
+            x["key"]: x.get("placement_preferences", []) for x in list_profiles()
+        },
+    }
+
+
+def validate_task_matrix(platform: str, slots: list, total_pixels: int | None = None,
+                         variant_count: int = 0, profile: dict | None = None) -> dict:
+    """F08：在调用任何模型 / 文生图之前校验整批任务。
+
+    返回 `{"slots": [...], "meta": {...}}`；不合规则抛 `MediaRuleError`，
+    errors 中逐条给出可读原因。全部尺寸与广告产品由**服务端目录**重新解析，
+    不信任前端传入的 ad_product / spec_version。
+    """
+    errors: list[str] = []
+    key = canonical_platform(platform)
+    if not key:
+        errors.append(f"未知媒体平台：{platform!r}（规则版本 {SPEC_VERSION}）")
+        raise MediaRuleError(errors)
+    rows = list(slots or [])
+    if not rows:
+        errors.append("任务清单为空：请至少选择一个广告版位")
+        raise MediaRuleError(errors)
+    if len(rows) > MEDIA_LIMITS["max_slots"]:
+        errors.append(f"任务数 {len(rows)} 超过上限 {MEDIA_LIMITS['max_slots']}，请减少版位或分批生成")
+
+    allowed = allowed_sizes(key)
+    normalized: list[dict] = []
+    pixels = 0
+    seen: set[tuple] = set()
+    dropped: list[dict] = []
+    products: set[str] = set()
+    for i, raw in enumerate(rows):
+        slot = raw if isinstance(raw, dict) else {}
+        size = str(slot.get("size") or "").strip()
+        if size.lower().replace("×", "x") not in {s.lower() for s in allowed}:
+            errors.append(f"第 {i + 1} 个任务尺寸 {size or '(空)'} 不在 {key} 允许清单内")
+            continue
+        try:
+            w, h = parse_size(size)
+        except ValueError as e:
+            errors.append(f"第 {i + 1} 个任务：{e}")
+            continue
+        pixels += w * h
+        ci = slot.get("concept_index")
+        if ci is not None:
+            try:
+                ci = int(ci)
+            except (TypeError, ValueError):
+                errors.append(f"第 {i + 1} 个任务 concept_index 不是整数：{ci!r}")
+                ci = None
+            else:
+                if ci < 0 or (variant_count and ci >= variant_count):
+                    errors.append(f"第 {i + 1} 个任务 concept_index={ci} 超出本次文案组合范围"
+                                 f"（0..{max(0, variant_count - 1)}）")
+        pl = match_placement(key, slot.get("placement") or "", slot.get("placement_id") or "")
+        role = pl.get("asset_role") or _UNKNOWN_ROLE["asset_role"]
+        product = pl.get("ad_product") or _UNKNOWN_ROLE["ad_product"]
+        products.add(product)
+        # 前端已确认的任务矩阵（带 concept_index）服务端不再删行，避免预览与实际不一致；
+        # 仅旧调用（concept_index 为空）才按「同尺寸 + 同资产角色」合并无意义重复任务。
+        dedupe_key = (size.lower(), role, pl.get("os") or "unknown", ci)
+        row = {
+            "size": size.lower(), "placement": slot.get("placement") or pl.get("name") or "",
+            "placement_id": slot.get("placement_id") or pl.get("id") or "",
+            "concept_index": ci,
+            "ad_product": product,
+            "asset_role": role,
+            "os": pl.get("os") or "unknown",
+            "spec_version": SPEC_VERSION,
+            "w": w, "h": h,
+        }
+        if ci is None and dedupe_key in seen:
+            dropped.append({"size": row["size"], "placement": row["placement"],
+                            "asset_role": role, "reason": "旧调用中同尺寸且同资产角色的重复任务"})
+            continue
+        seen.add(dedupe_key)
+        normalized.append(row)
+
+    if pixels > MEDIA_LIMITS["max_total_pixels"]:
+        errors.append(f"累计像素 {pixels:,} 超过单批上限 {MEDIA_LIMITS['max_total_pixels']:,}")
+    # 旧调用发生去重时，服务端像素总量会小于客户端上报值，此时跳过一致性核对。
+    if total_pixels is not None and not dropped and total_pixels != pixels:
+        errors.append(f"客户端上报像素总量 {total_pixels:,} 与服务端解析 {pixels:,} 不一致")
+    if errors:
+        raise MediaRuleError(errors)
+
+    pref = (profile or {}).get("placement_preferences") or []
+    meta = {
+        "spec_version": SPEC_VERSION,
+        "spec_source": SPEC_SOURCE,
+        "spec_verified_on": SPEC_VERIFIED_ON,
+        "disclaimer": SPEC_DISCLAIMER,
+        "platform": key,
+        "requested_tasks": len(rows),
+        "effective_tasks": len(normalized),
+        "dropped_duplicates": dropped,
+        "total_pixels": pixels,
+        "ad_products": sorted(products),
+        "mixed_ad_products": len(products) > 1,
+        "industry_profile": (profile or {}).get("key", "general"),
+        "industry_preferred_placements": pref,
+        "policy": MEDIA_RULES["policy"],
+        "advisory": MEDIA_RULES["advisory"],
+    }
+    return {"slots": normalized, "meta": meta}

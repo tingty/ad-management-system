@@ -13,6 +13,7 @@ import type {
   LandingAnalysis, MediaCopyResult, MediaImageItem, MediaImageIssue,
   ModelInfo, CopyVariant,
 } from './api'
+import { buildConcepts, toCopyVariants } from './taskMatrix'
 export type { CopyVariant } from './api'
 
 export type CreationStage =
@@ -66,6 +67,11 @@ export interface CreationSession {
   brandEdit: string
   /** V4.38：字段 key → 每条文案是否被选为创意素材（单条字段长度为 1） */
   selectedCopy: Record<string, boolean[]>
+  /** V4.40 / F07：任务矩阵的四个独立控制量 */
+  conceptCount: number             // 本批使用概念数
+  variantsPerConcept: number       // 每概念标题变体数
+  assignment: 'round_robin' | 'full_cover'
+  keepDistinctRoles: boolean       // 是否保留同尺寸但不同广告产品的任务
   direction: string
   styleName: string
   colorName: string
@@ -93,6 +99,10 @@ export function studioDefaults(): Partial<CreationSession> {
     copyEdit: {},
     brandEdit: '',
     selectedCopy: {},
+    conceptCount: 3,
+    variantsPerConcept: 1,
+    assignment: 'round_robin',
+    keepDistinctRoles: false,
     direction: '',
     styleName: '',
     colorName: '',
@@ -133,6 +143,11 @@ function sanitize(raw: any): CreationSession {
   merged.taskLogs = Array.isArray(raw.taskLogs) ? raw.taskLogs.slice(-MAX_LOGS) : []
   merged.copyEdit = raw.copyEdit && typeof raw.copyEdit === 'object' ? raw.copyEdit : {}
   merged.selectedCopy = raw.selectedCopy && typeof raw.selectedCopy === 'object' ? raw.selectedCopy : {}
+  merged.conceptCount = Number.isFinite(raw.conceptCount) ? Math.max(1, Math.min(40, raw.conceptCount)) : 3
+  merged.variantsPerConcept = Number.isFinite(raw.variantsPerConcept)
+    ? Math.max(1, Math.min(4, raw.variantsPerConcept)) : 1
+  merged.assignment = raw.assignment === 'full_cover' ? 'full_cover' : 'round_robin'
+  merged.keepDistinctRoles = Boolean(raw.keepDistinctRoles)
   merged.viewer = null
   if (raw.running) {
     merged.running = false
@@ -297,29 +312,23 @@ export function allSelectedCopy(copy: MediaCopyResult, edit?: Record<string, any
 }
 
 /**
- * 由「勾选的文案」拼出创意文案组合，交给后端按版位轮换叠加到图片上。
- * 标题 / 副标 / CTA 各自成池；第 i 个组合取各池第 i % len 条，数量以最长池为准。
+ * V4.40 / F07：由「勾选的文案」构造概念组合。
+ *
+ * 旧实现把 description / body / primary_text 混成一个副文案池，再用 `i % len`
+ * 与标题取模配对，主标题与证据可能来自不同概念；平台正文也被压到图上。
+ * 现在委托 `taskMatrix.buildConcepts`：同一概念的三段来自同一来源位置，
+ * 平台正文不进图内文案，字段不足时复用首条而不是回绕错配。
+ * 保留本函数名与返回类型，供「素材历史」与旧调用继续使用。
  */
 export function buildCopyVariants(s: CreationSession): CopyVariant[] {
-  const picked = copyItems(s).filter(x => x.selected && x.text.trim())
-  const pool = (keys: string[]) => picked.filter(x => keys.includes(x.key)).map(x => x.text.trim())
-  const heads = pool(['headline', 'title'])
-  const subs = pool(['description', 'body', 'primary_text'])
-  const ctas = pool(['cta'])
-  const n = Math.max(heads.length, subs.length, ctas.length)
-  if (!n) return []
-  const brand = (s.brandEdit || s.copy?.brand || '').trim()
-  const variants: CopyVariant[] = []
-  for (let i = 0; i < n; i++) {
-    variants.push({
-      headline: heads.length ? heads[i % heads.length] : '',
-      sub: subs.length ? subs[i % subs.length] : '',
-      cta: ctas.length ? ctas[i % ctas.length] : '',
-      brand,
-      label: `组合 ${i + 1}`,
-    })
-  }
-  return variants.slice(0, 40)
+  const concepts = buildConcepts({
+    copy: s.copy,
+    copyEdit: s.copyEdit,
+    selectedCopy: s.selectedCopy,
+    brand: (s.brandEdit || s.copy?.brand || '').trim(),
+    variantsPerConcept: s.variantsPerConcept,
+  })
+  return toCopyVariants(concepts)
 }
 
 export function selectedCount(s: CreationSession): { selected: number; total: number } {

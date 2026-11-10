@@ -98,12 +98,19 @@ def is_complete_sentence(text: str) -> bool:
 def _profile(key: str, label: str, aliases: list[str], value_axes: list[str],
              evidence_types: list[str], visual_subject: str,
              must_preserve: list[str], copy_focus: str,
-             protected_extra: list[str] | None = None) -> dict:
+             protected_extra: list[str] | None = None,
+             placement_preferences: list[str] | None = None) -> dict:
+    """V4.40 / 第 2 期：`placement_preferences` 只是版位建议，不改变通用任务矩阵主干。
+
+    值为 media_platforms.PLACEMENT_RULES 中的 placement id；前端仅作提示，
+    用户仍可自由勾选任意版位。其它行业新增画像时只需在此登记偏好。
+    """
     return {
         "key": key, "label": label, "aliases": aliases,
         "value_axes": value_axes, "evidence_types": evidence_types,
         "visual_subject": visual_subject, "must_preserve": must_preserve,
         "copy_focus": copy_focus, "protected_extra": protected_extra or [],
+        "placement_preferences": placement_preferences or [],
     }
 
 
@@ -190,6 +197,23 @@ INDUSTRY_PROFILES: dict[str, dict] = {
         [],
     ),
 }
+
+# V4.40 / 第 2 期：行业局部配置 —— 版位偏好（placement id）。
+# 只用于「素材创作」的版位建议提示与批次规则标注，不写死电商版位、不自动替用户勾选。
+# 新增行业时在此登记即可，任务矩阵主干（F07）与服务端规则（F08）无需改动。
+PLACEMENT_PREFERENCES: dict[str, list[str]] = {
+    "ecommerce": ["feed", "stories", "in_feed", "square"],
+    "subscription": ["feed", "uac", "stories", "app_discovery"],
+    "app_game": ["uac", "rewarded", "interstitial", "app_discovery", "in_feed"],
+    "b2b_service": ["feed", "display_mrec", "display_leader", "square"],
+    "travel_local": ["feed", "stories", "in_feed", "display_mrec"],
+    "education": ["feed", "stories", "square", "uac"],
+    "finance": ["feed", "display_mrec", "display_leader", "square"],
+    "general": ["feed", "stories", "square"],
+}
+for _key, _prefs in PLACEMENT_PREFERENCES.items():
+    if _key in INDUSTRY_PROFILES:
+        INDUSTRY_PROFILES[_key]["placement_preferences"] = list(_prefs)
 
 # 多级公共后缀：避免 shop.example.co.uk → "Co"、x.com.au → "Com"
 MULTI_SUFFIXES = (
@@ -294,5 +318,6 @@ def resolve_profile(analysis: dict | None = None, text: str = "",
 def list_profiles() -> list[dict]:
     """供前端「行业 / 品类」局部调整选择器使用（不暴露正则实现）。"""
     return [{k: p[k] for k in ("key", "label", "value_axes", "evidence_types",
-                               "visual_subject", "must_preserve", "copy_focus")}
+                               "visual_subject", "must_preserve", "copy_focus",
+                               "placement_preferences")}
             for p in INDUSTRY_PROFILES.values()]

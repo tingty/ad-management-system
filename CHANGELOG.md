@@ -1353,3 +1353,48 @@
 - 行业局部调整纯函数断言：8 个画像共用主干，电商与旅游画像的背景提示词 / 文案依据分别包含各自视觉主体与价值维度且互不相同，事实边界约束存在。
 - 前端 `tsc --noEmit` 与 `vite build` 通过（43 模块，253.88 kB JS / 52.51 kB CSS）；`prepare_release.py --check` 通过且无警告（含改造期次 3 问题 / 版本一致性校验）。详细命令与结果见 `docs/REMEDIATION_TRACKER.md` 第 1 期验证记录。
 - 未验证 / 未实施：F03–F09、F11、F12 属第 2–4 期，本次未改动；未运行真实付费模型调用、未测量投放效果，不承诺任何 ROAS / CPA 提升；新增媒体规格、真实商品图与效果反馈链路均留待对应期次并附官方来源与核验日期。
+
+## V4.40 AI 改造第 2 期：任务与规则可靠性（F07 / F08 / F11）
+
+**发布日期**：2026-11-10
+**变更类型**：修复 / 新增 / 优化 / 发布
+**涉及模块**：素材创作平台、创意文案、推广图片、媒体规则、行业适配、素材历史、后端接口、数据模型、前端与菜单、新版通知、发版流程、改造追踪、系统设置
+**变更摘要**：按《广告素材平台问题诊断与AI改造实施说明书》推进第 2 期，修复 3 个 P1 问题——版位清单不再被数量静默截断、文案按「概念」整体配对而不机械混池；媒体规则升级为带广告产品 / 资产角色 / 版本与来源的版本化目录，异常请求在调用模型前被明确拒绝；并发生成的临时文件按批次隔离、供应商限流与超时生效，逐图标注成功 / 回退 / 失败，批次可为 partial_success 或 failed。行业画像继续以局部配置方式提供版位偏好，主干对所有行业一致。
+**改造期次**：第 2 期（F07 / F08 / F11）
+
+**本次优化与更改的功能 / 模块**
+- 【修复】推广图片 / F07 任务矩阵完整覆盖：删除 `MediaAdStudio.buildSlots` 的 `slice(0, count)`，新增前端纯函数模块 `taskMatrix.ts`，把「选中版位 × 尺寸」全量展开成可确认的任务矩阵。默认 Facebook 4 个任务含 Stories 1080x1920、Google 保留 UAC 竖版、Unity 的两个同尺寸全屏任务按「尺寸 + 资产角色」自动合并；预览表格的每行（版位 / 尺寸 / 广告产品 / 资产角色 / 概念）与实际请求完全一致。生成预算改为任务数上限，预算不足时明确提示并提供「按清单补足预算」，禁止静默截断。
+- 【修复】创意文案 / F07 概念一致性：`buildConcepts` 让同一概念的主标题、证据副标与 CTA 取自同一来源位置，字段条数不足时复用首条而不是按 `i % len` 回绕错配；平台正文 `primary_text` 不再混入图内副标，也不与 description / body 混池。新增「使用概念数 / 每概念标题变体数 / 概念分配方式（先覆盖版位 · 每个概念覆盖全部版位）/ 保留同尺寸不同广告产品」四个独立控制量，任务逐行带 `concept_index`，后端按该索引取文案，旧调用不带索引时兼容按序轮换。
+- 【新增】媒体规则 / F08 版本化目录：`media_platforms.py` 为每个版位补充 `platform` / `ad_product` / `placement` / `asset_role` / `os` / `spec_version`，并把规则分成 `hard`（服务端强制）/ `policy`（业务政策）/ `advisory`（建议）；新增 `SPEC_VERSION=2026-11-10.2`、`SPEC_SOURCE`、`SPEC_VERIFIED_ON`（空值=尚未按官方文档核验）与免责说明。Google RSA 配图与 UAC 素材分别标注广告产品，文案接口支持按 `ad_product` 选择独立 schema，不再把 RSA 长描述当应用广告图片素材。新增 `GET /api/media-rules` 暴露规则与行业版位偏好。
+- 【新增】后端接口 / F08 模型调用前强校验：`validate_task_matrix` 在调用任何模型或文生图前重新解析尺寸，校验允许尺寸、边长、单张像素、任务数（≤24）、累计像素（≤40 MP）、`concept_index` 与规则版本一致性；未知平台（如 Moloco）显式返回 422 与可读原因，不静默套用其它平台 schema。`MediaImageSlot` 增加 `placement_id` / `concept_index` / `concept_id`，`MediaImageRequest` 增加 `spec_version` / `total_pixels` 供一致性核对；前端错误提示支持展开结构化原因。
+- 【修复】推广图片 / F11 批次隔离与失败处理：新增 `batch_workspace.py`，每批独立 `_mabatch_<id>/` 目录并维护自有文件清单，只清理本批文件；替换掉按目录通配符删除全部 `_mabg_*` / `_mlogo_*` 的旧实现，远程 Logo 下载也写入本批目录。新增超时遗留目录回收（TTL 1 小时），运行中的批次不被误清。`asyncio.gather` 增加供应商级信号量（默认并发 4）、单任务超时（默认 200s）与本地渲染有限重试（不重复发起已计费的模型调用）；逐图返回 `status` / `ai_background` / `fallback_reason` / `model` / `retries` / `batch_id`，批次回传 `task_results` 与 `status=ok|partial_success|failed`，失败项不计入合格素材。
+- 【优化】行业适配 / 版位偏好局部调整：`industry_profiles.py` 新增 `PLACEMENT_PREFERENCES`，8 个画像各自登记建议版位 id（如电商 feed/stories/in_feed、App 游戏 uac/rewarded、B2B display_mrec），经 `GET /api/industry-profiles` 与 `/api/media-rules` 下发；「素材创作」版位卡片标注「行业建议」，只做提示不自动勾选、不写死电商版位，任务矩阵与规则主干对所有行业一致。
+- 【优化】素材历史 / F08 导出标记：每张图片把 `ad_product` / `asset_role` / `spec_version` / `batch_id` 写入历史元数据；`copy.txt` 增加「适用广告产品与规则版本」段落，历史导出 `生成信息.json` 增加产品、资产角色、规则版本与批次列表，一键打包下载的 `清单.json` 也标注规则版本与核验说明。
+- 【优化】前端与菜单 / 逐图状态可见：Step 3 图片卡片显示「AI 底图 / 模板兜底」、概念编号与适用规则；未生成任务按「失败 / needs_revision」分别以 error 与 warning 展示并说明「仅重试失败项、不重复计费或归档」；任务浮窗结束日志写明成功数、AI 数、兜底数、失败数与规则版本。Step 1 展示规则版本、来源、核验日期与单批上限。
+- 【优化】发版流程 / 新版通知当前版本：沿用 V4.39 建立的单一数据源，`**改造期次**：第 2 期（F07 / F08 / F11）` 使「新版通知」顶部当前版本自动切换为 V4.40 并展示主要更新内容，改造进度由 3/12 自动更新为 6/12；无需在页面或路线图里手工维护完成状态。`main.py` 版本号升至 4.40.0，README 与追踪表同步。
+- 【优化】改造追踪 / 第 2 期验证记录：`docs/REMEDIATION_TRACKER.md` 把 F07 / F08 / F11 标为已修复，追加第 2 期验证记录与未验证边界；分期路线图第 2 期状态由已发布版本驱动，不在此表手工改写。
+- 【发布】发版流程 / V4.40：本条按结构化规范整理本次优化和更改的功能与模块，发版前由 `prepare_release.py --check` 校验模块覆盖、字段完整性与「每期 3 个问题 / 版本一致」后再同步 git。
+
+**影响范围**
+- 前端：新增 `taskMatrix.ts`；`MediaAdStudio.tsx` 的任务矩阵、概念预览、控制量与逐图状态全面替换旧的 `buildSlots` 与取模轮换；`creationSession.ts` 增加 4 个控制量并让 `buildCopyVariants` 委托概念构造；`api.ts` 增加 `MediaRules` / `mediaRules()`、图片状态与规则字段、结构化错误展开；`styles.css` 增加矩阵表格、规则说明与状态标签样式。
+- 后端：新增 `batch_workspace.py`；`media_platforms.py` 升级为版本化规则目录与校验入口；`media_ad.py` 重构出图批次、并发与逐图结果；`routers.py` 增加 `/api/media-rules` 与模型调用前校验；`schemas.py` 扩展任务行与请求字段；`creation_history.py` 导出标注；`industry_profiles.py` 增加版位偏好；`main.py` 版本 4.40.0。
+- 数据：无数据库迁移。素材历史 `images_json` 与 `copy_json` 新增可选元数据键，旧记录按空值展示，不回填、不重新生成；`model_configs`、`users`、`prompt_configs` 不受影响。
+- 兼容性：`/api/media-campaign/images` 不传 `copy_variants` / `concept_index` / `spec_version` 时保持旧行为；`style_opts.strict_text=false` 应急开关保留。行为变化：未知平台、不在允许清单的尺寸、超任务数 / 超像素与规则版本不一致现在返回 422 而不是静默出图；前端默认预算改为完整版位任务数（Facebook 由 3 变 4）。
+- 权限：`/api/media-rules` 与 `/api/industry-profiles` 对所有登录角色可读；生成类接口仍仅 admin / manager / editor 可用；新版通知仍对所有登录角色开放。
+- 部署：可通过 `AD_MAX_IMAGE_CONCURRENCY`、`AD_IMAGE_TASK_TIMEOUT`、`AD_BATCH_STALE_TTL` 调整供应商并发、任务超时与遗留目录回收窗口，无需改代码。
+
+**验证**
+- 后端全量 `compileall` 通过，`import main` 正常，版本号 4.40.0，注册路由 49 条。
+- T09（F07）前端纯函数回归 40 项断言全通过：Facebook 默认 4 任务含 Stories、Google UAC 不被截断、Unity 1080x1920 重复任务被合并且可显式保留、概念标题与证据同源、平台正文不入图、预算 3 时仍保留 4 任务且明确提示、full_cover 模式 2×4=8、边界空清单。
+- T10（F08）服务端规则回归：未知平台、异常尺寸、非法格式、尺寸不在清单、任务数超限、累计像素超限、`concept_index` 越界、规则版本不一致、文案接口未知平台全部在调用模型前返回 422 并给出可读原因；合法任务矩阵解析出广告产品 / 资产角色 / 规则版本，行业版位偏好随规则接口下发。
+- T15（F11）批次隔离回归：批次 A 清理后 B 的临时文件仍在、超时遗留目录被回收而运行中批次不被误清；混合批次 3 个任务逐项得到 ok / fallback / failed，`status=partial_success`、`task_results` 3 条、AI 与模板回退分别标注且不按整批成功计；两批并发用屏障交错执行，双方临时底图均未被对方删除，结束后无临时目录残留。
+- HTTP 端到端（DB 副本 + TestClient）85 项断言全通过：7 个平台目录、规则接口、异常请求 422、合法 4 任务出图且 PNG 真实落盘、概念按矩阵分配、旧调用兼容、Google UAC 独立 schema、新版通知 / 行业画像 / 素材历史 / 大模型配置接口未受影响；历史导出与打包清单的规则版本标记通过 ZIP 内容断言。
+- 会话中枢 Node 回归 19 项断言全通过：新增控制量默认值、概念组合同源与平台正文隔离、刷新恢复归零与数值边界清洗、账号隔离。
+- 前端 `tsc --noEmit` 通过；`vite build` 44 模块，263.40 kB JS / 54.41 kB CSS；`docs/REMEDIATION_TRACKER.md` 记录第 2 期验证明细。
+- 所有回归在数据库副本、临时 uploads 目录与模拟供应商上执行，测试 PNG 与临时库已清理；未修改生产数据、未读取或输出任何密钥。
+
+**说明 / 默认约定**
+- 媒体尺寸与政策是**内部整理**，`SPEC_VERIFIED_ON` 为空表示尚未按各平台官方文档核验；正式投放前须复核并更新 `SPEC_VERSION` 与核验日期，导出只标注内部规则版本，不宣称符合平台审核规范。Moloco 等未入库平台需先核实实际业务与官方规则再新增，不静默回退。
+- 未运行真实付费文生图 / 文本模型调用，未做真实样本逐图人工抽检，未测量投放效果，不承诺 ROAS / CPA 提升；供应商并发与超时为默认保护值，需按实际供应商配额调整。
+- 服务端持久任务队列、幂等 `job_id`、真实商品图参考编辑、CreativeConcept / VisualBrief 完整结构与效果反馈链路仍属第 3–4 期（F03–F06、F09、F12），本版不宣称已完成。
+- 下发改动时先 `git pull` 再重启后端；前端重新构建即可。刷新页面会重新拉取媒体规则，浏览器缓存旧 `spec_version` 时会收到明确的「规则版本不一致」提示而非静默降级。

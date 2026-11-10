@@ -8,6 +8,11 @@
    风格/样式/颜色选项」为依据，调用文生图大模型产出背景，再叠加文案合成为可投放 PNG；
    无模型时用 Pillow 模板兜底，并如实标注图片实际调用的模型（或回退）。
    V4.38：文案组合按版位顺序轮换，每张图片回传所用组合，未勾选的文案不会出现在图片上。
+   V4.40 / F07：任务矩阵可逐行指定 concept_index，同一概念的主标题、证据与 CTA 一起出图，
+     不再由后端按版位取模机械配对；旧调用（不带 concept_index）仍按序轮换。
+   V4.40 / F11：每批独立临时目录 + 供应商并发 / 超时限制 + 逐图状态（成功 / 回退 / 失败），
+     批次可为 partial_success / failed，失败与回退都不计入「全部 AI 成功」。
+   V4.40 / F08：每张图与导出元数据标记 ad_product / asset_role / os / spec_version。
 
 复用既有能力：
 - providers.get_llm_with_info / finalize_invocation / get_image / parse_json / UPLOAD_DIR / _active_config
@@ -19,6 +24,7 @@
 import os
 import asyncio
 import json
+import time
 import uuid
 import urllib.request
 import urllib.parse
@@ -35,7 +41,24 @@ from imaging import render_ad_png, text_budget, TextOverflowError
 from text_utils import fit_text, clip_report
 from industry_profiles import (resolve_profile, is_complete_sentence, missing_protected,
                                protected_fragments)
-from media_platforms import get_media_platform
+from media_platforms import get_media_platform, SPEC_VERSION
+from batch_workspace import BatchWorkspace
+
+# V4.40 / F11：供应商级并发上限、单任务超时与本地渲染重试（不重试已计费的模型调用）。
+MAX_CONCURRENT_IMAGE_TASKS = int(os.getenv("AD_MAX_IMAGE_CONCURRENCY", "4"))
+IMAGE_TASK_TIMEOUT_SECONDS = int(os.getenv("AD_IMAGE_TASK_TIMEOUT", "200"))
+MAX_RENDER_RETRIES = 1
+_SUPPLIER_SEMS: dict[int, asyncio.Semaphore] = {}
+
+
+def _supplier_semaphore() -> asyncio.Semaphore:
+    """按事件循环维护全局信号量，限制跨批次的供应商并发（供应商限流）。"""
+    key = id(asyncio.get_running_loop())
+    sem = _SUPPLIER_SEMS.get(key)
+    if sem is None:
+        sem = asyncio.Semaphore(MAX_CONCURRENT_IMAGE_TASKS)
+        _SUPPLIER_SEMS[key] = sem
+    return sem
 
 
 # ----------------------------- 文案字段结构（含 TikTok） -----------------------------
@@ -77,6 +100,25 @@ MEDIA_COPY_SCHEMA = {
         {"key": "cta", "label": "CTA", "max": 20, "count": 1},
     ],
 }
+
+# V4.40 / F08：同一平台不同广告产品的文案字段不同。
+# 说明书指出「Google 文案使用 RSA 字段，图片却混合展示横幅和应用广告位」：
+# 这里允许按 ad_product 显式选择 schema，避免把 RSA 长描述当作 UAC 图片素材文案。
+MEDIA_COPY_SCHEMA_BY_PRODUCT = {
+    ("Google", "Google App Campaign (UAC)"): [
+        {"key": "headline", "label": "UAC 标题", "max": 30, "count": 2},
+        {"key": "description", "label": "UAC 描述", "max": 90, "count": 2},
+    ],
+}
+
+
+def copy_schema_for(platform: str, ad_product: str = "") -> list:
+    """按平台（+ 可选广告产品）取文案 schema；未知 ad_product 不影响旧行为。"""
+    schema = MEDIA_COPY_SCHEMA_BY_PRODUCT.get((platform, ad_product))
+    if schema:
+        return schema
+    return MEDIA_COPY_SCHEMA.get(platform) or MEDIA_COPY_SCHEMA["AppLovin"]
+
 
 # FB CTA 枚举 → 人读文案（模型若返回枚举则还原）
 FB_CTA_HUMAN = {
@@ -344,8 +386,9 @@ def _char_table(fields: dict, schema) -> list:
     return rows
 
 
-async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en") -> dict:
-    """基于落地页分析结论 + 选中平台，生成可编辑广告文案（V4.39 / F01 + F10）。
+async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en",
+                              ad_product: str = "") -> dict:
+    """基于落地页分析结论 + 选中平台，生成可编辑广告文案（V4.39 / F01 + F10，V4.40 / F08）。
 
     - 保留原始模型输出与每次裁剪的状态；
     - 超长文案请求有限次「语义压缩」，必须保留否定 / 价格条件 / 订阅限制；
@@ -355,7 +398,7 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
     platform = platform or "Facebook"
     analysis = _as_dict(analysis)
     profile = resolve_profile(analysis, key=analysis.get("industry_profile") or "")
-    schema = MEDIA_COPY_SCHEMA.get(platform) or MEDIA_COPY_SCHEMA["AppLovin"]
+    schema = copy_schema_for(platform, ad_product)
     spec = get_media_platform(platform) or {}
     lim = spec.get("copy_limits", {})
     labels = {f["key"]: f["label"] for f in schema}
@@ -435,6 +478,7 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
     char_rows = _char_table(fields, schema)
     return {
         "platform": platform,
+        "ad_product": ad_product or "",
         "lang": lang,
         "fields": fields,
         "schema": schema,
@@ -548,29 +592,21 @@ def _media_image_prompt(analysis: dict, platform: str, directives: dict, design:
 
 
 def _cleanup_ai_bgs():
-    try:
-        import glob
-        for f in glob.glob(os.path.join(UPLOAD_DIR, "_mabg_*.png")):
-            try:
-                os.remove(f)
-            except Exception:
-                pass
-        for f in glob.glob(os.path.join(UPLOAD_DIR, "_mlogo_*.png")):
-            try:
-                os.remove(f)
-            except Exception:
-                pass
-    except Exception:
-        pass
+    """兼容旧调用名：只回收**超时遗留**的批次目录，不再按通配符删除其它批次的文件。
+
+    正常批次由 `BatchWorkspace.cleanup()` 在 finally 中清理自身文件（F11）。
+    """
+    return BatchWorkspace.cleanup_stale(UPLOAD_DIR)
 
 
 _LOGO_EXT = {".png": ".png", ".jpg": ".jpg", ".jpeg": ".jpg", ".webp": ".webp"}
 
 
-def _resolve_logo_local(logo_url: str):
-    """把前端传来的 logo（已上传的 /files/... 或远程抓取到的 http(s) URL）解析为本地文件路径。
+def _resolve_logo_local(logo_url: str, workspace: BatchWorkspace | None = None):
+    """把前端传来的 logo（已上传的 /files/... 或远程 URL）解析为本地文件路径。
 
-    远程 URL 会下载到 UPLOAD_DIR 并缓存为 _mlogo_*.xxx；无法解析/下载则返回 None（不走 logo）。
+    V4.40 / F11：远程下载的 Logo 写入**本批次目录**并登记到本批次文件清单；
+    用户上传的 /files/... 是持久资产，不登记、不随批次清理。
     """
     if not logo_url:
         return None
@@ -579,17 +615,20 @@ def _resolve_logo_local(logo_url: str):
         local = os.path.join(UPLOAD_DIR, name)
         return local if os.path.exists(local) else None
     if logo_url.startswith("http://") or logo_url.startswith("https://"):
+        if workspace is None:
+            return None
         try:
             ext = os.path.splitext(urllib.parse.urlparse(logo_url).path)[1].lower()
             ext = _LOGO_EXT.get(ext, ".png")
-            fn = f"_mlogo_{uuid.uuid4().hex}{ext}"
-            dst = os.path.join(UPLOAD_DIR, fn)
+            rel = workspace.temp_name("mlogo", ext)
+            dst = os.path.join(UPLOAD_DIR, rel)
             req = urllib.request.Request(
-                logo_url, headers={"User-Agent": "Mozilla/5.0 (compatible; AdFactory/3.2)"})
+                logo_url, headers={"User-Agent": "Mozilla/5.0 (compatible; AdFactory/4.40)"})
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = resp.read()
             with open(dst, "wb") as f:
                 f.write(data)
+            workspace.register(dst)
             return dst
         except Exception:
             return None
@@ -599,22 +638,20 @@ def _resolve_logo_local(logo_url: str):
 
 async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                                 copy_fields: dict, style_opts: dict, slots: list,
-                                logo: str = "", copy_variants: list | None = None) -> dict:
-    """基于「勾选的创意文案组合 + 落地页分析结论 + 风格/样式/颜色」生成推广图片素材。
+                                logo: str = "", copy_variants: list | None = None,
+                                rules_meta: dict | None = None) -> dict:
+    """基于「任务矩阵 + 创意文案组合 + 落地页分析结论 + 风格」生成推广图片素材。
 
-    V4.38：copy_variants 为前端按勾选文案拼出的组合列表，按版位顺序轮换叠加；
-    每张图片回传 variant / copy 说明「这张图用了哪组文案」。不传时兼容旧行为
-    （每个字段取第 1 条，所有图片用同一组文案）。
-
-    - 文生图大模型已配置 → 按创意方向/风格/配色生成 AI 背景，再叠加文案合成 PNG；
-    - 未配置 → Pillow 品牌渐变模板兜底，并如实标注回退。
-    V4.39 / F01：图内文字与平台正文分离，按版位像素预算检查；放不下的版位
-    记为 needs_revision 并阻止导出，不再用硬截断或省略号删掉必要说明。
-    返回：images / image_model / note / count / status / issues / skipped。
+    V4.38：copy_variants 为前端按勾选文案拼出的组合；不传时兼容旧行为。
+    V4.40 / F07：slots 每行可指定 concept_index，同一概念的标题 / 证据 / CTA 一起出图。
+    V4.40 / F08：每行带服务端解析的 ad_product / asset_role / os / spec_version，随图与导出标注。
+    V4.40 / F11：批次独立临时目录、供应商并发 / 超时限制、逐图状态与失败隔离。
+    返回：images / image_model / note / count / status / issues / skipped / task_results / rules。
     """
     platform = platform or "Facebook"
     analysis = _as_dict(analysis)
     style_opts = style_opts or {}
+    rules_meta = dict(rules_meta or {})
     profile = resolve_profile(analysis, key=analysis.get("industry_profile") or "")
     # 上线保留开关：strict_text=False 可临时回到旧的宽松排版（默认严格）
     strict_text = style_opts.get("strict_text", True) is not False
@@ -649,130 +686,269 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         cta = str(v.get("cta") or "").strip()[:120]
         if cta.upper() in FB_CTA_HUMAN:
             cta = FB_CTA_HUMAN[cta.upper()]
-        # V4.39：不再把文案硬截到 200 字（那本身就是残句来源），
-        # 只做异常长度防御，真正能否上版由 build_overlay_text 的像素预算决定。
         variants.append({
             "headline": str(v.get("headline") or "").strip()[:1000],
             "sub": str(v.get("sub") or "").strip()[:1000],
             "cta": cta,
             "label": str(v.get("label") or "").strip()[:40],
+            "concept_id": str(v.get("concept_id") or "").strip()[:40],
         })
 
-    # 把 logo（上传的 /files/... 或远程抓取 URL）解析为本地可合成路径
-    logo_path = await asyncio.to_thread(_resolve_logo_local, logo or "")
+    # V4.40 / F11：先回收上次超时遗留的批次目录，再为本批建独立工作区。
+    stale = BatchWorkspace.cleanup_stale(UPLOAD_DIR)
+    workspace = BatchWorkspace(UPLOAD_DIR)
+    batch_id = workspace.batch_id
+    batch_request_id = uuid.uuid4().hex[:12]
+    started = time.monotonic()
+
+    # 远程 Logo 下载进本批目录；用户上传的 /files/... 是持久资产，不随批次清理。
+    logo_path = await asyncio.to_thread(_resolve_logo_local, logo or "", workspace)
 
     img = get_image(db)
     img_cfg = _active_config(db, "image")
-    ai_used = False
+    provider_name = (img_cfg.provider if img_cfg else "template")
+    model_name = ((img_cfg.model if img_cfg else "") or "Pillow 品牌渐变模板")
     image_model = {
-        "provider": (img_cfg.provider if img_cfg else "template"),
-        "model": (img_cfg.model if img_cfg else "Pillow 品牌渐变模板"),
-        "fallback": (True if not img_cfg else False),
+        "provider": provider_name,
+        "model": model_name,
+        "role": "image",
+        "fallback": True,
+        "config_id": (img_cfg.id if img_cfg else None),
+        "request_id": batch_request_id,
+        "source": "local",
+        "error_type": "",
+        "retries": 0,
     }
 
-    # 版位任务：每个版位取一组「被勾选的创意文案」，未勾选的文案不会落到图片上
-    tasks = []
-    skipped: list[dict] = []
-    for idx, slot in enumerate(slots or []):
-        size = slot.get("size") or spec_sizes[0]
-        placement = slot.get("placement") or ""
-        w, h = _size_wh(size)
-        bg_prompt = _media_image_prompt(analysis, platform, directives, design, db)
-        if variants:
-            v = variants[idx % len(variants)]
-            headline, sub, cta, vlabel = v["headline"], v["sub"], v["cta"], v["label"]
-        else:
-            headline, sub, cta, vlabel = base_headline, base_sub, base_cta, ""
-        # V4.39 / F01：出图前先按该版位的像素预算核对，超预算直接标记并跳过
-        overlay = build_overlay_text(headline, sub, cta, w, h, profile)
-        if strict_text and not overlay["ok"]:
-            skipped.append({
-                "size": size, "placement": placement, "variant": vlabel,
-                "status": "needs_revision",
-                "reason": "图内文案超出该版位可排版预算，已阻止生成；请缩短文案后重试",
-                "overflow": overlay["overflow"], "budget": overlay["budget"],
-            })
-            continue
-        # V4.36：文件名带随机后缀。此前同名文案会生成完全相同的文件名，用户点「重新生成」
-        # 会直接覆盖上一次的 PNG，导致「素材历史」里旧会话的图片被无声替换、无法再下载。
-        ptag = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in platform)[:20]
-        fn = (f"media_{ptag}_{size}_{uuid.uuid4().hex[:10]}_"
-              f"{abs(hash((placement, size, headline, sub))) % 100000:05d}.png")
-        out = os.path.join(UPLOAD_DIR, fn)
-        tasks.append((out, w, h, bg_prompt, fn, size, placement, logo_path,
-                      headline, sub, cta, vlabel))
+    try:
 
-    async def _render_one(out, w, h, bg_prompt, fn, size, placement, logo_path,
-                          headline, sub, cta, vlabel):
-        nonlocal ai_used
-        bg_path = None
-        if img is not None:
-            try:
-                bg = await img.generate(bg_prompt, w, h, f"_mabg_{fn}")
-                if bg:
-                    bg_path = bg
-                    ai_used = True
-            except Exception:
-                bg_path = None
-        try:
-            await asyncio.to_thread(
-                render_ad_png, out, w, h,
-                headline, sub, cta, (brand or "")[:40],
-                bg_path or None, logo_path or None, None, strict_text,
-            )
-        except TextOverflowError as e:
-            return {"__skipped__": {
-                "size": size, "placement": placement, "variant": vlabel,
-                "status": "needs_revision", "reason": f"图内文案无法完整排版：{e}",
-                "budget": text_budget(w, h),
+        # V4.40 / F07：任务矩阵逐行决定概念；后端不再按 idx % len 机械配对不同字段的文案。
+        tasks: list[dict] = []
+        skipped: list[dict] = []
+        for idx, raw_slot in enumerate(slots or []):
+            slot = raw_slot if isinstance(raw_slot, dict) else {}
+            size = slot.get("size") or spec_sizes[0]
+            placement = slot.get("placement") or ""
+            w, h = slot.get("w"), slot.get("h")
+            if not w or not h:
+                w, h = _size_wh(size)
+            bg_prompt = _media_image_prompt(analysis, platform, directives, design, db)
+
+            ci = slot.get("concept_index")
+            if variants:
+                use_idx = ci if isinstance(ci, int) and 0 <= ci < len(variants) else idx % len(variants)
+                v = variants[use_idx]
+                headline, sub, cta = v["headline"], v["sub"], v["cta"]
+                vlabel = v["label"] or f"组合 {use_idx + 1}"
+                concept_id = v.get("concept_id") or f"C{use_idx + 1}"
+            else:
+                use_idx = None
+                headline, sub, cta = base_headline, base_sub, base_cta
+                vlabel, concept_id = "", ""
+            meta = {
+                "ad_product": slot.get("ad_product") or "未标注广告产品",
+                "asset_role": slot.get("asset_role") or "unspecified",
+                "os": slot.get("os") or "unknown",
+                "placement_id": slot.get("placement_id") or "",
+                "spec_version": slot.get("spec_version") or SPEC_VERSION,
+                "concept_index": use_idx,
+                "concept_id": concept_id,
+            }
+            # V4.39 / F01：出图前先按该版位的像素预算核对，超预算直接标记并跳过
+            overlay = build_overlay_text(headline, sub, cta, w, h, profile)
+            if strict_text and not overlay["ok"]:
+                skipped.append({
+                    "size": size, "placement": placement, "variant": vlabel,
+                    "concept_id": concept_id, "status": "needs_revision",
+                    "reason": "图内文案超出该版位可排版预算，已阻止生成；请缩短文案后重试",
+                    "overflow": overlay["overflow"], "budget": overlay["budget"],
+                    "batch_id": batch_id, **meta,
+                })
+                continue
+            # V4.36：文件名带随机后缀，避免「重新生成」覆盖历史图片。
+            ptag = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in platform)[:20]
+            fn = (f"media_{ptag}_{size}_{uuid.uuid4().hex[:10]}_"
+                  f"{abs(hash((placement, size, headline, sub))) % 100000:05d}.png")
+            out = os.path.join(UPLOAD_DIR, fn)
+            tasks.append({"out": out, "w": w, "h": h, "bg_prompt": bg_prompt,
+                          "fn": fn, "size": size, "placement": placement,
+                          "logo_path": logo_path, "headline": headline, "sub": sub,
+                          "cta": cta, "vlabel": vlabel, "meta": meta, "idx": idx})
+
+        sem = _supplier_semaphore()
+
+        async def _render_one(t: dict) -> dict:
+            """一张图一个独立状态：成功 / 模板回退 / 失败，异常不外溢到整批。"""
+            meta = t["meta"]
+            common = {"size": t["size"], "placement": t["placement"],
+                      "variant": t["vlabel"], "concept_id": meta["concept_id"],
+                      "batch_id": batch_id, **meta}
+            bg_path = None
+            ai_ok = False
+            provider_error = ""
+            retries = 0
+            request_id = uuid.uuid4().hex[:12]
+            if img is not None:
+                # 临时底图写进本批次目录，不与其他批次共享文件名空间。
+                rel = workspace.temp_name("mabg")
+                try:
+                    async with sem:      # F11：供应商并发 / 速率限制
+                        bg = await asyncio.wait_for(
+                            img.generate(t["bg_prompt"], t["w"], t["h"], rel),
+                            timeout=IMAGE_TASK_TIMEOUT_SECONDS)
+                    if bg and os.path.isfile(bg):
+                        bg_path, ai_ok = bg, True
+                    else:
+                        provider_error = "文生图供应商未返回可用底图"
+                except asyncio.TimeoutError:
+                    provider_error = f"文生图请求超时（>{IMAGE_TASK_TIMEOUT_SECONDS}s）"
+                except Exception as e:
+                    provider_error = f"文生图失败：{type(e).__name__}"
+            else:
+                provider_error = "未配置 image 用途的文生图模型"
+            if not ai_ok and not provider_error:
+                provider_error = "未获得 AI 底图"
+
+            for attempt in range(MAX_RENDER_RETRIES + 1):
+                try:
+                    await asyncio.to_thread(
+                        render_ad_png, t["out"], t["w"], t["h"],
+                        t["headline"], t["sub"], t["cta"], (brand or "")[:40],
+                        bg_path or None, t["logo_path"] or None, None, strict_text)
+                    break
+                except TextOverflowError as e:
+                    return {"__skipped__": {
+                        **common, "status": "needs_revision",
+                        "reason": f"图内文案无法完整排版：{e}",
+                        "budget": text_budget(t["w"], t["h"]),
+                    }}
+                except Exception as e:
+                    if attempt >= MAX_RENDER_RETRIES:
+                        return {"__failed__": {
+                            **common, "status": "failed",
+                            "reason": f"本地渲染失败：{type(e).__name__}: {str(e)[:120]}",
+                            "retries": retries, "request_id": request_id,
+                        }}
+                    # 只重试本地渲染；已成功计费的模型调用绝不重复发起。
+                    retries += 1
+                    await asyncio.sleep(0)
+
+            return {"__image__": {
+                "url": t["out"], "file": t["fn"], "size": t["size"],
+                "w": t["w"], "h": t["h"], "placement": t["placement"],
+                "variant": t["vlabel"],
+                "copy": {"headline": t["headline"], "sub": t["sub"], "cta": t["cta"]},
+                "status": "ok" if ai_ok else "fallback",
+                "ai_background": ai_ok,
+                "fallback": not ai_ok,
+                "fallback_reason": "" if ai_ok else provider_error,
+                "model": {"provider": provider_name if ai_ok else "template",
+                          "model": model_name if ai_ok else "Pillow 品牌渐变模板",
+                          "config_id": (img_cfg.id if img_cfg and ai_ok else None),
+                          "request_id": request_id},
+                "retries": retries,
+                "batch_id": batch_id,
+                **meta,
             }}
-        return {"url": out, "file": fn, "size": size, "w": w, "h": h,
-                "placement": placement, "variant": vlabel,
-                "copy": {"headline": headline, "sub": sub, "cta": cta}}
 
-    images = []
-    if tasks:
-        results = await asyncio.gather(*[_render_one(*t) for t in tasks], return_exceptions=True)
-        for r in results:
-            if isinstance(r, Exception):
-                skipped.append({"status": "failed", "reason": f"渲染异常：{type(r).__name__}"})
-                continue
-            if isinstance(r, dict) and "__skipped__" in r:
-                skipped.append(r["__skipped__"])
-                continue
-            images.append(r)
+        images: list[dict] = []
+        if tasks:
+            results = await asyncio.gather(*[_render_one(t) for t in tasks],
+                                           return_exceptions=True)
+            for t, r in zip(tasks, results):
+                if isinstance(r, Exception):
+                    skipped.append({
+                        "size": t["size"], "placement": t["placement"],
+                        "variant": t["vlabel"], "concept_id": t["meta"]["concept_id"],
+                        "batch_id": batch_id, **t["meta"],
+                        "status": "failed",
+                        "reason": f"任务异常：{type(r).__name__}: {str(r)[:120]}",
+                    })
+                elif isinstance(r, dict) and "__skipped__" in r:
+                    skipped.append(r["__skipped__"])
+                elif isinstance(r, dict) and "__failed__" in r:
+                    skipped.append(r["__failed__"])
+                elif isinstance(r, dict) and "__image__" in r:
+                    images.append(r["__image__"])
+                else:
+                    skipped.append({"size": t["size"], "placement": t["placement"],
+                                    "status": "failed", "reason": "任务返回了无法识别的结果",
+                                    "batch_id": batch_id, **t["meta"]})
 
-    if img is not None and not ai_used:
-        image_model["fallback"] = True
-        image_model["provider"] = img_cfg.provider if img_cfg else "template"
-        image_model["model"] = (img_cfg.model if img_cfg else "") or "Pillow 品牌渐变模板"
+        ai_count = sum(1 for x in images if x["ai_background"])
+        fallback_count = len(images) - ai_count
+        failed_count = sum(1 for x in skipped if x.get("status") == "failed")
+        revision_count = sum(1 for x in skipped if x.get("status") == "needs_revision")
+        status = "ok" if not skipped else ("partial_success" if images else "failed")
+        image_model.update({
+            "fallback": fallback_count > 0 or not images,
+            "source": ("llm" if ai_count and not fallback_count else
+                       "mock" if not ai_count else "mixed"),
+            "mixed": ai_count > 0 and fallback_count > 0,
+            "ai_success_count": ai_count,
+            "template_fallback_count": fallback_count,
+            "failed_count": failed_count,
+            "needs_revision_count": revision_count,
+            "batch_id": batch_id,
+        })
 
-    note = ""
-    if image_model["fallback"]:
-        note = ("未检测到可用文生图模型（或未配置 image 用途的 Key），已使用 Pillow 品牌渐变模板兜底生成图片；"
-                "在「设置」中配置 image 用途的大模型后即可生成 AI 背景图。")
-    else:
-        note = f"图片背景由文生图大模型生成：{image_model['provider']} / {image_model['model']}。"
-    if variants:
-        note += f" 本批共选用 {len(variants)} 组创意文案，按版位顺序轮换叠加到图片上。"
-    if skipped:
-        note += (f" 另有 {len(skipped)} 个版位因图内文案超出版位预算未生成（needs_revision），"
-                 "请缩短标题 / 副标 / CTA 后重试；未输出省略号残图。")
+        note_bits = [f"本批 {len(images)} 张成功（AI 底图 {ai_count} / 模板兜底 {fallback_count}）"]
+        if variants:
+            note_bits.append(f"共 {len(variants)} 组创意文案，按任务矩阵指定的概念叠加，同一概念的标题与证据保持一致")
+        if image_model["mixed"]:
+            note_bits.append("同批存在模板回退，已逐张标注，不按整批 AI 成功计")
+        if failed_count:
+            note_bits.append(f"{failed_count} 个任务失败，未计入合格素材；可仅重试失败项")
+        if revision_count:
+            note_bits.append(f"{revision_count} 个版位因图内文案超预算被阻止生成（needs_revision），未输出省略号残图")
+        if status == "failed":
+            note_bits.append("整批无可用素材，请检查文案与版位设置后重试")
+        note = "；".join(note_bits) + "。"
 
-    _cleanup_ai_bgs()
+        issues = [{
+            "level": "error" if s.get("status") == "failed" else "warning",
+            "status": s.get("status", ""),
+            "size": s.get("size", ""), "placement": s.get("placement", ""),
+            "concept_id": s.get("concept_id", ""),
+            "ad_product": s.get("ad_product", ""),
+            "message": s.get("reason", ""),
+        } for s in skipped]
+        task_results = [{
+            "status": s.get("status", "failed"), "size": s.get("size", ""),
+            "placement": s.get("placement", ""), "concept_id": s.get("concept_id", ""),
+            "ad_product": s.get("ad_product", ""), "spec_version": s.get("spec_version", SPEC_VERSION),
+            "file": "", "ai_background": False, "fallback": True,
+            "error": s.get("reason", ""), "retries": s.get("retries", 0),
+            "batch_id": batch_id,
+        } for s in skipped] + [{
+            "status": x["status"], "size": x["size"], "placement": x["placement"],
+            "concept_id": x["concept_id"], "ad_product": x["ad_product"],
+            "spec_version": x["spec_version"], "file": x["file"],
+            "ai_background": x["ai_background"], "fallback": x["fallback"],
+            "error": x["fallback_reason"], "retries": x["retries"],
+            "batch_id": batch_id,
+        } for x in images]
 
-    issues = [{"level": "error" if not images else "warning",
-               "size": s.get("size", ""), "placement": s.get("placement", ""),
-               "message": s.get("reason", "")} for s in skipped]
-    return {
-        "platform": platform,
-        "images": images,
-        "image_model": image_model,
-        "note": note,
-        "count": len(images),
-        "copy_variant_count": len(variants),
-        "status": "partial_success" if skipped else "ok",
-        "strict_text": strict_text,
-        "issues": issues,
-        "skipped": skipped,
-    }
+        return {
+            "platform": platform,
+            "images": images,
+            "image_model": image_model,
+            "note": note,
+            "count": len(images),
+            "copy_variant_count": len(variants),
+            "status": status,
+            "strict_text": strict_text,
+            "issues": issues,
+            "skipped": skipped,
+            "task_results": task_results,
+            "batch_id": batch_id,
+            "spec_version": SPEC_VERSION,
+            "rules": {**rules_meta,
+                      "stale_cleanup": stale,
+                      "supplier_concurrency": MAX_CONCURRENT_IMAGE_TASKS,
+                      "task_timeout_seconds": IMAGE_TASK_TIMEOUT_SECONDS,
+                      "elapsed_ms": int((time.monotonic() - started) * 1000)},
+        }
+    finally:
+        # 只删本批次目录；其它并发批次的临时文件不受影响（说明书 T15）。
+        workspace.cleanup()

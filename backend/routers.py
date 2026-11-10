@@ -17,8 +17,11 @@ from presets import creative_presets_payload
 from prompt_catalog import (library_dimensions, library_entries,
                             get_practice, target_key_for_kind, KINDS, FUNC_TYPES,
                             USAGE_TYPES, BEST_PRACTICES)
-from media_platforms import list_media_platforms
+from media_platforms import (list_media_platforms, validate_platform,
+                             validate_task_matrix, media_rules_payload,
+                             MediaRuleError, SPEC_VERSION, MEDIA_RULES)
 from media_ad import generate_media_copy, generate_media_images
+from industry_profiles import resolve_profile
 from auth import (current_user, require_roles, verify_password, hash_password, create_token,
                   user_dict, ROLE_LABELS, CAN_EDIT, CAN_REVIEW, ROLES, decode_token)
 from creation_history import (
@@ -44,8 +47,27 @@ async def landing_analysis(req: LandingAnalysisRequest, db: Session = Depends(ge
 # ----------------------------- 素材创作：营销推广的媒体平台设置 -----------------------------
 @router.get("/media-platforms")
 async def api_media_platforms(_: User = Depends(require_roles(*CAN_EDIT))):
-    """营销推广媒体平台规格：数量 / 规格 / 尺寸 / 常规方案 / 字数红线。供前端展示与预选。"""
+    """营销推广媒体平台规格：数量 / 规格 / 尺寸 / 常规方案 / 字数红线。
+
+    V4.40 / F08：每个版位额外返回 `ad_product` / `asset_role` / `os`，平台返回
+    `spec_version` / `spec_source` / `spec_verified_on` / `rules`，供任务矩阵与导出标注。
+    """
     return list_media_platforms()
+
+
+@router.get("/media-rules")
+async def api_media_rules(_: User = Depends(require_roles(*ROLES))):
+    """V4.40 / F08：版本化媒体规则（强制 / 政策 / 建议）、限制与各平台允许尺寸。"""
+    return media_rules_payload()
+
+
+def _rule_error(exc: MediaRuleError) -> HTTPException:
+    """把规则拒绝整理成接口可读的明确错误（不吞掉任何一条原因）。"""
+    return HTTPException(422, detail={
+        "message": "媒体规则校验未通过，已在调用模型前拦截",
+        "errors": exc.errors,
+        "spec_version": SPEC_VERSION,
+    })
 
 
 @router.get("/industry-profiles")
@@ -69,22 +91,46 @@ async def api_media_campaign_copy(req: MediaCopyRequest, db: Session = Depends(g
 
     文案必须结合落地页分析结论（行业/类型/优势/竞品/受众/推广途径），生成后立即返回，前端展示并允许编辑。
     """
-    result = await generate_media_copy(db, req.analysis.model_dump(), req.platform, req.lang)
+    # V4.40 / F08：未知平台显式拒绝，不静默套用其它平台 schema
+    try:
+        platform = validate_platform(req.platform)
+    except MediaRuleError as e:
+        raise _rule_error(e)
+    result = await generate_media_copy(db, req.analysis.model_dump(), platform, req.lang,
+                                       ad_product=req.ad_product)
     return result
 
 @router.post("/media-campaign/images")
 async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depends(get_db),
                                     user: User = Depends(require_roles(*CAN_EDIT))):
-    """基于「勾选的创意文案组合」+ 落地页分析结论 + 风格/样式/颜色，生成推广图片素材。
+    """基于「任务矩阵 + 勾选的创意文案组合」生成推广图片素材。
 
-    V4.38：copy_variants 由前端按用户勾选的文案拼出，后端按版位顺序轮换叠加；
-    未传时兼容旧行为。每张图片会标注所用文案组合，未配置文生图模型时自动用模板兜底。
+    V4.38：copy_variants 按用户勾选文案拼出，未传时兼容旧行为。
+    V4.40 / F07 + F08：slots 为前端确认过的任务矩阵；服务端在调用模型前按版本化规则
+    重新解析尺寸、限制任务数与总像素、标注广告产品，并回传逐张状态（F11）。
     """
     slots = [s.model_dump() for s in req.slots]
     variants = [v.model_dump() for v in req.copy_variants]
-    result = await generate_media_images(db, req.analysis.model_dump(), req.platform, req.lang,
-                                         req.copy_fields, req.style_opts, slots, req.logo or "",
-                                         copy_variants=variants)
+    analysis = req.analysis.model_dump()
+    profile = resolve_profile(analysis, key=analysis.get("industry_profile") or "")
+    try:
+        checked = validate_task_matrix(req.platform, slots,
+                                       total_pixels=req.total_pixels,
+                                       variant_count=len(variants),
+                                       profile=profile)
+    except MediaRuleError as e:
+        raise _rule_error(e)
+    if req.spec_version and req.spec_version != SPEC_VERSION:
+        # 不静默升级/降级规则：客户端规则过期时明确提示刷新页面
+        raise HTTPException(422, detail={
+            "message": "媒体规则版本不一致，请刷新页面后重新生成",
+            "errors": [f"客户端 {req.spec_version}，服务端 {SPEC_VERSION}"],
+            "spec_version": SPEC_VERSION,
+        })
+    result = await generate_media_images(db, analysis, checked["meta"]["platform"], req.lang,
+                                         req.copy_fields, req.style_opts, checked["slots"],
+                                         req.logo or "", copy_variants=variants,
+                                         rules_meta=checked["meta"])
     return result
 
 
