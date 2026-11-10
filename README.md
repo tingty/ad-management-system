@@ -1,9 +1,9 @@
-# 广告管理系统（在线营销素材管理平台 V4.42）
+# 广告管理系统（在线营销素材管理平台 V4.43）
 
 对应方案文档：《在线营销素材管理平台方案.docx》；开发节奏见《在线营销素材管理平台-版本开发规划.docx》。
-**当前版本：V4.42（2026-11-10）**。每次优化与更改的完整版本内容见 [CHANGELOG.md](CHANGELOG.md)，
-系统内「系统设置 → 新版通知」顶部显示当前更新版本号与主要更新内容，并统一展示各期改造进度
-（**12 / 12 全部完成**，支持按涉及模块 / 变更类型筛选、查看影响范围与验证结果）。
+**当前版本：V4.43（2026-11-10）**。完整发版归档见 [CHANGELOG.md](CHANGELOG.md)；
+系统内「系统设置 → 新版通知」**按系统运行版本自动同步**，从最新版本开始只展示「版本号 + 总结式更新要点」，
+不再展示功能细节、前因后果、改造进度、影响范围与验证结果（AI 改造 **12 / 12** 已收官，进度见追踪表）。
 
 **AI 改造分期**：依据《广告素材平台问题诊断与AI改造实施说明书》，12 个问题按「每期 3 个、
 独立提交、独立版本通知」分 4 期推进，问题核对与验收用例见 [docs/REMEDIATION_TRACKER.md](docs/REMEDIATION_TRACKER.md)。
@@ -14,6 +14,13 @@
 服务端持久任务与不可变资产），四期收官。
 改造主干对全部行业一致，电商购买与订阅转化只是 `backend/industry_profiles.py` 中的两个画像；
 其它行业通过局部调整价值维度、语义保护、证据类型、视觉主体与版位偏好输出素材，不改通用链路。
+
+**V4.43 版本通知改造**：`backend/version.py` 的 `APP_VERSION` 是系统运行版本的唯一来源，
+`main.py`、`backend/release_notes.py` 与 `scripts/prepare_release.py` 共用；版本通知以该版本为锚点，
+CHANGELOG 尚未写入该版本时自动生成标注 `auto_generated` 的兜底通知，**系统升级后通知不会停留在旧版本**。
+`prepare_release.py --sync` 可按当前版本自动生成总结式通知，`--check` 强制「系统版本 == CHANGELOG 最新版本」
+且最新版本必须含 `**更新要点**` 章节。接口只下发精简字段并禁用缓存，前端进入页面 / 窗口聚焦 / 定时轮询
+都会重新拉取。`size_verified_on` 为空仍表示供应商尺寸能力尚未核验。
 
 **V4.42 新增能力速览**：`backend/image_capabilities.py` 用 `PROVIDER_CAPABILITIES` 声明供应商尺寸候选、
 核验日期与参考图能力，`plan_generation_size()` 把宽高作为一个比例整体选候选（不再分别吸附成方形），
@@ -48,7 +55,7 @@
 | 素材创作平台 | 素材历史 | 已分析网站 / 文案 / 图片归档、放大查阅、再下载、批量删除、复用分析、全量资产分页读取（V4.42） | admin / manager / editor |
 | 系统设置 | 大模型配置 | 按协议直配、连通性测试、每日自动测试、测试成功优先选配 | admin |
 | 系统设置 | 账号 / 日志 | 账号与角色、审计日志 | admin |
-| 系统设置 | 新版通知 | 当前版本号 + 主要更新内容、分期改造进度、结构化版本发布内容、模块 / 类型筛选、未读红点 | 所有登录角色（含 viewer） |
+| 系统设置 | 新版通知 | 按系统版本自动同步；显示版本号、日期、一句话总结与更新要点，最新版本在最前、更早版本折叠；未读红点 | 所有登录角色（含 viewer） |
 
 > **V4.37 下线说明**：整体删除「素材管理」的**创作工作台 / 批量生成 / 素材库 / 规格库**四个子模块，
 > 以及系统设置中的**提示词管理**；对应的前端页面、后端接口、业务代码、ORM 表定义与失效提示词均已清理。
@@ -61,31 +68,39 @@
 系统「新版通知」由 `backend/release_notes.py` 解析后经 `/api/system/release-notes` 展示。
 
 ```bash
-# 1. 开发完成后，从本次 git 改动自动归纳「涉及模块」并生成版本通知骨架
-python3 scripts/prepare_release.py --draft
+# 1. 升级 backend/version.py 的 APP_VERSION（系统版本唯一来源）
 
-# 2. 把骨架追加到 CHANGELOG.md，补全摘要 / 改动明细 / 影响范围 / 验证
-python3 scripts/prepare_release.py --write --version V4.38 --title "版本主题"
+# 2. 按当前系统版本自动生成总结式版本通知（推荐；也可手工撰写）
+python3 scripts/prepare_release.py --sync --title "版本主题" \
+  --summary "一句话总结" --points "要点一|要点二|要点三"
 
-# 3. 同步 git 前校验：结构化字段完整、无占位文字、CHANGELOG 已随代码更新、模块已总结
+# 3. 同步 git 前校验：系统版本 == CHANGELOG 最新版本、更新要点齐备、
+#    字段完整、无占位文字、模块已总结（pre-push 钩子自动执行）
 python3 scripts/prepare_release.py --check
 
 # 4. 安装一次本机 pre-push 钩子，之后每次 push 自动执行第 3 步
 bash scripts/install_hooks.sh
-git add -A && git commit -m "V4.38 ..." && git push
+git add -A && git commit -m "V4.43 ..." && git push
 ```
 
-版本段落模板（缺一不可）：
+> 若 CHANGELOG 漏写新版本，校验直接失败；即使跳过校验，运行时版本通知接口也会按
+> `APP_VERSION` 自动生成一条标注「自动同步」的兜底通知，不会出现「系统已更新、通知仍是旧版本」。
+
+版本段落模板（缺一不可；`**更新要点**` 是页面唯一展示的更新内容）：
 
 ```markdown
-## V4.38 版本主题
+## V4.43 版本主题
 **发布日期**：YYYY-MM-DD
 **变更类型**：新增 / 优化 / 修复 / 删除
 **涉及模块**：模块A、模块B
 **变更摘要**：一句话说明本版做了什么
 
+**更新要点**
+- 模块A：一句总结（不写前因后果与实现细节）
+- 模块B：一句总结
+
 **本次优化与更改的功能 / 模块**
-- 【优化】模块A / 功能名：具体改动说明
+- 【优化】模块A / 功能名：具体改动说明（完整归档，不在页面展示）
 
 **影响范围**
 - 前端 / 后端 / 数据 / 兼容性 / 权限
@@ -238,7 +253,7 @@ npm run dev          # http://localhost:5173
 6. **规格库**：7 平台尺寸/视频/字数红线/关键词逻辑；管理员与经理可在线编辑，改动即时影响生成与校验。
 7. **设置（管理员）**：按用途配置模型（analysis/copy/image/video）+ 连通性测试 + 用户与角色 + 审计日志。
 
-## 关键 API（V4.42 当前有效接口，共 42 条路径）
+## 关键 API（V4.43 当前有效接口，共 42 条路径）
 
 | 分组 | 接口 |
 |---|---|
@@ -252,7 +267,7 @@ npm run dev          # http://localhost:5173
 | 素材历史 / 资产 | `GET/POST /api/creation-history`、`GET/PUT/DELETE /api/creation-history/{hid}`、`GET .../copy.txt`、`GET .../export.zip`、`GET /api/creation-history/export`、`GET /api/creative-assets?history_id=&offset=`（V4.42 全量分页） |
 | 大模型配置 | `GET/POST /api/settings/models`、`PUT/DELETE /api/settings/models/{mid}`、`/test`、`/test-all`、`/{mid}/test`、`/health`、`/presets` |
 | 提示词与预设 | `GET /api/settings/prompts`、`PUT /api/settings/prompts/{key}`、`/{key}/reset`、`/prompt-taxonomy`、`/prompt-library`、`/prompt-defaults` |
-| 新版通知 | `GET /api/system/release-notes`（`current` 当前版本 + `highlights` + `roadmap` 改造进度） |
+| 新版通知 | `GET /api/system/release-notes`（`app_version` / `latest` / `notes[]`：版本号 + `summary` + `points`，最新在前；响应 `Cache-Control: no-store`） |
 
 V4.37 已下线的 `/api/analyze`、`/api/generate`、`/api/campaigns/*`、`/api/materials/*`、`/api/batch/*`、`/api/platform-specs`、`/api/export/*` 等旧接口均返回 404；下方历史章节用于版本追溯，不作为当前接口清单。
 除 `/api/auth/login`、`/api/health`、`/api/auth/roles` 外，所有 `/api/*` 需要 `Authorization: Bearer <token>`；浏览器直链下载支持 `?token=`。
@@ -316,3 +331,5 @@ campaign_<id>_selected.zip        # 定稿：仅导出已选变体（未定稿�
   `size_verified_on` 表示比例差过大且尚未按官方文档核验。媒体规则 `SPEC_VERIFIED_ON` 同样为空，投放前须复核。
 - V4.42：落地页证据「已验证」只表示页面原文可引用，不构成价格、优惠或合规性的真实性背书；动态渲染页面
   仍未升级浏览器抓取，本期只做分区与预算采样。效果反馈闭环（关联广告 ID / 订单 / 订阅表现）属后续规划。
+- V4.43：自动生成的兜底通知只陈述本次改动的模块、文件数与提交信息，不编造功能说明；正式发版仍应补写
+  「更新要点」。版本通知页默认展示最近 8 个版本，更早版本需点击展开；改造进度不再在该页展示。

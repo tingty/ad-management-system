@@ -53,7 +53,7 @@ const GROUP_SYSTEM: NavGroup = {
     { key: 'logs', label: '日志', icon: 'filetext',
       desc: '审计日志：登录、配置变更、账号操作、提示词修改等关键动作可追溯' },
     { key: 'releasenotes', label: '新版通知', icon: 'bell',
-      desc: '每次优化与变更按版本汇总：涉及模块、变更类型、功能说明、影响范围与验证结果；发版前整理并发布，存在未读新版本时菜单项显示红点提示' },
+      desc: '每次系统更新后自动同步：显示版本号与总结式更新要点，按版本从新到旧查阅；存在未读新版本时菜单项显示红点提示' },
   ],
 }
 
@@ -138,10 +138,24 @@ export default function App() {
     api.me().then(setUser).catch(() => setUser(null)).finally(() => setBooting(false))
   }, [])
 
-  // 拉取最新版本号，用于「新版通知」红点提示
+  // 拉取最新版本号，用于「新版通知」红点提示。
+  // V4.43：系统更新后即使不刷新页面，窗口聚焦 / 可见 / 定时轮询也会同步最新版本。
   useEffect(() => {
     if (!user) return
-    api.releaseNotes().then((d) => setReleaseLatest(d.latest)).catch(() => {})
+    let alive = true
+    const load = () => api.releaseNotes()
+      .then((d) => { if (alive) setReleaseLatest(d.latest) }).catch(() => {})
+    load()
+    const onVisible = () => { if (document.visibilityState === 'visible') load() }
+    window.addEventListener('focus', load)
+    document.addEventListener('visibilitychange', onVisible)
+    const timer = window.setInterval(load, 60_000)
+    return () => {
+      alive = false
+      window.removeEventListener('focus', load)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.clearInterval(timer)
+    }
   }, [user])
 
   // ReleaseNotes 页打开即视为已读，触发红点重算
@@ -311,7 +325,7 @@ export default function App() {
             </div>
           </header>
 
-          {!isEditor && (
+          {!isEditor && tab !== 'releasenotes' && (
             <div className="card">
               <div className="muted">只读账号：可查阅「新版通知」与版本更新内容；素材创作与系统设置需相应权限。</div>
             </div>

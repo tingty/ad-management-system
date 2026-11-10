@@ -19,88 +19,26 @@ const qs = (o: object) => {
   return s ? '?' + s : ''
 }
 
-/** V4.37 结构化版本通知：按「涉及模块 / 变更类型」可筛选，含影响范围与验证结果 */
-export interface ReleaseNoteChange {
-  type: string        // 新增 / 优化 / 修复 / 删除 / 重构 / 发布 …
-  module: string      // 涉及模块
-  title: string       // 功能 / 子模块
-  detail: string      // 具体改动说明
-}
-/** V4.39：当前版本「主要更新内容」要点 */
-export interface ReleaseHighlight {
-  type: string
-  module: string
-  title: string
-  detail: string
-}
+/** V4.43：版本通知只保留版本号与「总结式」更新要点，最新在前 */
 export interface ReleaseNote {
   version: string
   title: string
   date: string | null
-  body: string                    // 完整发版记录（原始 Markdown）
-  summary: string                 // 变更摘要
-  modules: string[]               // 涉及模块
-  change_types: string[]          // 变更类型
-  changes: ReleaseNoteChange[]    // 本次优化与更改的功能 / 模块
-  impact: string[]                // 影响范围
-  verification: string[]          // 验证结果
-  has_structured: boolean         // 是否为 V4.37 起的结构化版本
-  phase_text?: string             // 改造期次，如「第 1 期（F01 / F02 / F10）」
-  phase_index?: number | null
-  issue_ids?: string[]
-  highlights?: ReleaseHighlight[]
-}
-/** V4.39：AI 改造分期进度（每期 3 个问题，状态由 CHANGELOG 发版记录驱动） */
-export interface RoadmapIssue {
-  id: string
-  title: string
-  cases: string[]
-  status: 'done' | 'planned'
-  released_version: string | null
-  released_date: string | null
-}
-export interface RoadmapPhase {
-  index: number
-  version: string
-  title: string
-  goal: string
-  industry_scope: string
-  issues: RoadmapIssue[]
-  done_count: number
-  status: 'done' | 'in_progress' | 'planned'
-  released_version: string | null
-}
-export interface ReleaseRoadmap {
-  baseline_commit: string
-  source_doc: string
-  tracker_doc: string
-  phases: RoadmapPhase[]
-  total: number
-  done_count: number
-  industry_note: string
-}
-export interface ReleaseCurrent {
-  version: string
-  title: string
-  date: string | null
-  summary: string
-  modules: string[]
+  summary: string                 // 一句话总结
+  points: string[]                // 总结式更新要点（不含功能细节 / 前因后果）
   change_types: string[]
-  phase_text: string
-  phase_index: number | null
-  issue_ids: string[]
-  highlights: ReleaseHighlight[]
-  changes: ReleaseNoteChange[]
+  modules: string[]
+  auto_generated: boolean         // true = CHANGELOG 漏写时按系统版本自动补齐
 }
 export interface ReleaseNotesResponse {
   latest: string | null
+  app_version: string             // 当前系统版本对应的发布号，如 V4.43
+  version: string                 // 运行版本，如 4.43.0
   notes: ReleaseNote[]
-  modules: string[]
-  change_types: string[]
+  current: ReleaseNote | null
   total: number
-  structured_count: number
-  current: ReleaseCurrent | null
-  roadmap: ReleaseRoadmap
+  auto_generated: boolean
+  synced_at: string
 }
 
 export interface ModelConfig {
@@ -859,8 +797,9 @@ export const api = {
   deleteCreationHistory: (ids: number[]) =>
     req<{ ok: boolean; deleted: number; deleted_files: number }>('/api/creation-history',
       { method: 'DELETE', body: JSON.stringify({ ids }) }),
-  // 版本发布公告（新版通知）
-  releaseNotes: () => req<ReleaseNotesResponse>('/api/system/release-notes'),
+  // 版本发布公告（V4.43）：禁缓存 + 时间戳，系统更新后重新拉取即为最新内容
+  releaseNotes: () => req<ReleaseNotesResponse>(
+    `/api/system/release-notes?_t=${Date.now()}`, { cache: 'no-store' }),
   uploadAsset: async (file: File) => {
     const fd = new FormData()
     fd.append('file', file)

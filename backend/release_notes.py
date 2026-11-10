@@ -1,38 +1,48 @@
 """
-版本发布公告：单一数据源 = 仓库根目录的 CHANGELOG.md。
+版本通知：以「系统运行版本」为锚点，自动同步每次版本更新的总结内容（V4.43）。
 
-V4.37 起，每个版本都按统一结构发布，用户在「新版通知」里能按「涉及模块 / 变更类型」
-筛选，并直接看到本次优化与更改的功能、影响范围与验证结果：
+单一完整归档仍是仓库根目录 `CHANGELOG.md`；本模块负责：
+1. 解析每个版本段落，抽取「更新要点」等总结式内容，产出精简的展示结构；
+2. 以 `version.APP_VERSION` 为权威版本，若 CHANGELOG 尚未写入该版本，
+   **自动生成一条明确标注的兜底通知**，保证系统升级后通知不会停留在旧版本；
+3. 缓存按文件内容签名失效，接口禁用浏览器缓存，前端重新进入页面即可看到新版本。
 
-    ## V4.38 版本标题
+展示结构（前端只消费这些字段，不再下发影响范围 / 验证结果 / 完整发版记录 /
+改造进度等与「版本更新内容」无关的信息）：
+
+    {version, title, date, summary, points[], change_types[], modules[], auto_generated}
+
+CHANGELOG 段落仍按完整结构撰写，便于归档与发版校验：
+
+    ## V4.43 版本标题
     **发布日期**：YYYY-MM-DD
-    **变更类型**：新增 / 优化 / 修复 / 删除
+    **变更类型**：优化
     **涉及模块**：模块A、模块B
-    **变更摘要**：一句话说明本版做了什么
+    **变更摘要**：一句话总结本次更新
+
+    **更新要点**
+    - 模块A：一句总结
+    - 模块B：一句总结
 
     **本次优化与更改的功能 / 模块**
-    - 【优化】模块A / 功能名：具体改动说明
-    - 【删除】模块B：具体改动说明
+    - 【优化】模块A / 功能：具体改动（完整归档用，不下发到通知列表）
 
-    **影响范围**
-    - 前端 / 后端 / 数据 / 兼容性说明
+    **影响范围** ...   **验证** ...
 
-    **验证**
-    - 具体的验证项与结果
-
-历史版本（V1.1–V4.36）仍保留原样：解析不到结构化字段时自动降级为
-「摘要要点 + 完整发版记录」，不会丢失任何内容。
-
-解析规则：
-- 以 `## V<数字>.<数字>(.<数字>)?` 开头的行作为一条版本的起始。
-- 起始行之后直到下一条 `## ` 之前的内容为该版本详情正文（保留原始 Markdown）。
-- `**字段**：值` 提取结构化字段；`**章节**` 下的 `- ` 列表按章节归类。
-- 返回结果按版本号降序（最新在前），带 CHANGELOG.md mtime 缓存。
+历史版本没有「更新要点」时，自动从结构化改动里按模块聚合短句；
+既不丢版本记录，也不展示所有功能细节与前因后果。
 """
+from __future__ import annotations
+
 import os
 import re
+import subprocess
+from datetime import date, datetime
+
+import version as _version
 
 _CHANGELOG = os.path.join(os.path.dirname(__file__), "..", "CHANGELOG.md")
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 _VER_RE = re.compile(r"^##\s+(V\d+\.\d+(?:\.\d+)?)\s*(.*)$")
 _DATE_RE = re.compile(r"发布日期\D*?(\d{4}-\d{2}-\d{2})")
@@ -47,28 +57,14 @@ REQUIRED_FIELDS = ("发布日期", "变更类型", "涉及模块", "变更摘要
 REQUIRED_SECTIONS = ("本次优化与更改的功能 / 模块", "影响范围", "验证")
 TODO_MARKERS = ("TODO", "待补充", "待填写", "占位", "<请", "XXX")
 
-# V4.39：AI 改造按「每期 3 个问题、独立发版」推进。版本通知里的 `**改造期次**`
-# 是进度闭环的唯一证据来源，roadmap.resolve_roadmap 据此标记哪些问题已发布。
+POINT_LIMIT = 6           # 每个版本最多展示的总结要点数
+POINT_CHARS = 120         # 单条要点最大字数
+
+
 def _phase_of(fields: dict) -> dict:
+    """改造期次解析（完整归档字段，供发版期次校验使用，不在通知页展示）。"""
     from roadmap import parse_phase
     return parse_phase(fields.get("改造期次", ""))
-
-
-def _highlights(changes: list, limit: int = 4) -> list[dict]:
-    """当前版本的「主要更新内容」：取前几条结构化改动，供新版通知顶部卡片直接展示。"""
-    out = []
-    for c in changes[:limit]:
-        detail = (c.get("detail") or "").strip()
-        out.append({
-            "type": c.get("type") or "变更",
-            "module": c.get("module") or "",
-            "title": c.get("title") or "",
-            "detail": detail[:150] + ("…" if len(detail) > 150 else ""),
-        })
-    return out
-
-_mtime = -1.0
-_cache = None  # type: ignore
 
 
 def _split_list(value: str) -> list[str]:
@@ -76,19 +72,21 @@ def _split_list(value: str) -> list[str]:
 
 
 def _clean_line(text: str) -> str:
-    """去掉行内 Markdown 标记，用于卡片中的紧凑展示。"""
     text = re.sub(r"`([^`]+)`", r"\1", text or "")
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     return text.strip()
 
 
+def _short(text: str, limit: int = POINT_CHARS) -> str:
+    t = _clean_line(text)
+    return t[:limit] + ("…" if len(t) > limit else "")
+
+
 def _parse_change(text: str) -> dict:
-    """把 `【优化】模块 / 功能：说明` 拆成结构化条目。"""
     m = _CHANGE_RE.match(text)
     if not m:
         return {"type": "变更", "module": "", "title": _clean_line(text), "detail": ""}
     kind, rest = m.group(1).strip(), _clean_line(m.group(2))
-    # 「模块 / 功能：说明」或「模块：说明」
     head, _, detail = rest.partition("：")
     if not detail:
         head, _, detail = rest.partition(":")
@@ -137,21 +135,23 @@ def _parse_body(body: str) -> dict:
     impact = [_clean_line(x) for x in bullets_of("影响范围")]
     verification = [_clean_line(x) for x in bullets_of("验证", "验收证据")]
     if not changes:
-        # 历史版本降级：从正文里取前几条要点，保证卡片不至于空白
         changes = [{"type": "变更", "module": "", "title": _clean_line(x), "detail": ""}
                    for x in all_bullets[:6]]
 
-    date = None
+    # V4.43：优先使用人工整理的「更新要点」；没有则按模块聚合改动标题，丢弃细节说明。
+    key_points = [_short(x) for x in bullets_of("更新要点") if _clean_line(x)]
+
+    date_value = None
     dm = re.search(r"\d{4}-\d{2}-\d{2}", fields.get("发布日期", "")) or _DATE_RE.search(body)
     if dm:
-        date = dm.group(0)
+        date_value = dm.group(0)
 
     modules = _split_list(fields.get("涉及模块", ""))
     change_types = [x for x in _split_list(fields.get("变更类型", "")) if x]
     summary = _clean_line(fields.get("变更摘要", ""))
     phase = _phase_of(fields)
     return {
-        "date": date,
+        "date": date_value,
         "summary": summary,
         "modules": modules,
         "change_types": change_types,
@@ -159,30 +159,41 @@ def _parse_body(body: str) -> dict:
         "impact": impact,
         "verification": verification,
         "has_structured": bool(summary and modules and change_types and structured),
+        "key_points": key_points,
         "phase_text": _clean_line(fields.get("改造期次", "")),
         "phase_index": phase["index"],
         "issue_ids": phase["issues"],
-        "highlights": _highlights(changes),
+        "body": body,
+        "has_placeholder": any(m in body for m in TODO_MARKERS),
     }
 
 
-def _parse(path: str):
+def _vkey(v: str):
+    parts = [int(x) for x in re.findall(r"\d+", v)]
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
+def parse_changelog(path: str | None = None) -> list[dict]:
+    """纯解析 CHANGELOG，不做任何自动补齐（供发版校验使用，避免掩盖漏写）。"""
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path or _CHANGELOG, "r", encoding="utf-8") as f:
             lines = f.read().splitlines()
     except Exception:
-        return [], None
+        return []
 
-    notes = []
+    notes: list[dict] = []
     cur = None
-    buf = []
+    buf: list[str] = []
 
     def flush():
-        if cur is not None:
-            body = "\n".join(buf).strip()
-            item = {"version": cur["version"], "title": cur["title"], "body": body}
-            item.update(_parse_body(body))
-            notes.append(item)
+        if cur is None:
+            return
+        body = "\n".join(buf).strip()
+        item = {"version": cur["version"], "title": cur["title"]}
+        item.update(_parse_body(body))
+        notes.append(item)
 
     for line in lines:
         m = _VER_RE.match(line)
@@ -195,69 +206,167 @@ def _parse(path: str):
             continue
         buf.append(line)
     flush()
-
-    def _vkey(v: str):
-        parts = [int(x) for x in re.findall(r"\d+", v)]
-        while len(parts) < 3:
-            parts.append(0)
-        return tuple(parts[:3])
-
     notes.sort(key=lambda n: _vkey(n["version"]), reverse=True)
-    return notes, (notes[0]["version"] if notes else None)
-
-
-def _aggregate(notes: list) -> dict:
-    modules, types = [], []
-    for n in notes:
-        for m in n["modules"]:
-            if m not in modules:
-                modules.append(m)
-        for t in n["change_types"]:
-            if t not in types:
-                types.append(t)
-    types.sort(key=lambda t: (CHANGE_TYPES.index(t) if t in CHANGE_TYPES else 99, t))
-    return {
-        "modules": modules,
-        "change_types": types,
-        "total": len(notes),
-        "structured_count": sum(1 for n in notes if n["has_structured"]),
-    }
-
-
-def get_release_notes() -> dict:
-    """返回版本通知全量数据（带 mtime 缓存）。
-
-    V4.39 新增 `current`（当前版本 + 主要更新内容）与 `roadmap`（分期改造进度），
-    供「新版通知」顶部直接显示当前版本号、主要内容和每期改造状态。
-    """
-    global _mtime, _cache
-    try:
-        st = os.stat(_CHANGELOG)
-    except Exception:
-        from roadmap import resolve_roadmap
-        return {"latest": None, "notes": [], "modules": [], "change_types": [],
-                "total": 0, "structured_count": 0, "current": None,
-                "roadmap": resolve_roadmap([])}
-    if _cache is None or st.st_mtime != _mtime:
-        from roadmap import resolve_roadmap
-        notes, latest = _parse(_CHANGELOG)
-        top = notes[0] if notes else None
-        current = None
-        if top:
-            current = {k: top[k] for k in (
-                "version", "title", "date", "summary", "modules", "change_types",
-                "phase_text", "phase_index", "issue_ids", "highlights", "changes")}
-        _cache = {
-            "latest": latest, "notes": notes, **_aggregate(notes),
-            "current": current, "roadmap": resolve_roadmap(notes),
-        }
-        _mtime = st.st_mtime
-    return _cache
+    return notes
 
 
 def latest_note() -> dict | None:
-    """供发版前校验脚本使用：返回最新一条版本记录。"""
-    return (get_release_notes()["notes"] or [None])[0]
+    """发版校验使用：CHANGELOG 里最新一条（不含自动兜底条目）。"""
+    notes = parse_changelog()
+    return notes[0] if notes else None
+
+
+# ---------------------------------------------------------------------------
+# 自动同步：系统版本升级但 CHANGELOG 漏写时，仍然生成对应版本的通知
+# ---------------------------------------------------------------------------
+_AUTO_MODULE_RULES = (
+    ("frontend/src/pages/ReleaseNotes.tsx", "新版通知"),
+    ("backend/release_notes.py", "新版通知"),
+    ("backend/version.py", "系统版本"),
+    ("frontend/src/pages/", "前端页面"),
+    ("frontend/src/", "前端"),
+    ("backend/", "后端"),
+    ("scripts/", "发版流程"),
+    ("docs/", "文档"),
+)
+
+
+def _auto_modules(files: list[str]) -> list[str]:
+    mods: list[str] = []
+    for f in files:
+        for prefix, label in _AUTO_MODULE_RULES:
+            if f.startswith(prefix):
+                if label not in mods:
+                    mods.append(label)
+                break
+    return mods[:6]
+
+
+def _git(args: list[str], timeout: float = 1.2) -> str:
+    try:
+        return subprocess.run(["git", "-C", _ROOT] + args, capture_output=True,
+                              text=True, check=False, timeout=timeout).stdout.strip()
+    except Exception:
+        return ""
+
+
+def auto_note(tag: str | None = None) -> dict:
+    """按当前系统版本生成兜底通知；只陈述可核对的事实，不编造功能细节。"""
+    tag = tag or _version.release_tag()
+    subject = _git(["log", "-1", "--pretty=%s"])
+    files = [x for x in _git(["show", "--pretty=format:", "--name-only", "HEAD"]).splitlines() if x]
+    mods = _auto_modules(files)
+    points = []
+    if mods:
+        points.append(f"本次改动涉及 {('、'.join(mods))} 等 {len(mods)} 个模块，共 {len(files)} 个文件。")
+    if subject:
+        points.append(f"最近一次提交：{_short(subject, 80)}")
+    points.append("该条通知由系统按当前运行版本自动生成，请补写 CHANGELOG 的「更新要点」以完善说明。")
+    return {
+        "version": tag,
+        "title": "版本更新",
+        "date": date.today().isoformat(),
+        "summary": f"系统已更新至 {tag}，版本通知按运行版本自动同步。",
+        "modules": mods or ["系统版本"],
+        "change_types": ["发布"],
+        "changes": [],
+        "impact": [],
+        "verification": [],
+        "has_structured": False,
+        "key_points": points,
+        "phase_text": "",
+        "phase_index": None,
+        "issue_ids": [],
+        "body": "",
+        "has_placeholder": False,
+        "auto_generated": True,
+    }
+
+
+def _fallback_points(n: dict) -> list[str]:
+    """历史版本无「更新要点」时，按模块聚合改动标题，不展示 detail / 前因后果。"""
+    groups: dict[str, list[str]] = {}
+    for c in n.get("changes") or []:
+        title = (c.get("title") or "").strip()
+        if not title:
+            continue
+        mod = (c.get("module") or "本次更新").strip()
+        bucket = groups.setdefault(mod, [])
+        if title not in bucket:
+            bucket.append(title)
+    points = []
+    for mod, titles in groups.items():
+        text = "、".join(titles[:3]) + ("等" if len(titles) > 3 else "")
+        points.append(_short(f"{mod}：{text}"))
+        if len(points) >= POINT_LIMIT:
+            break
+    if not points and n.get("summary"):
+        points = [_short(n["summary"])]
+    return points
+
+
+def public_note(n: dict) -> dict:
+    """精简为「版本号 + 总结式更新内容」，不下发完整记录与无关模块。"""
+    points = n.get("key_points") or _fallback_points(n)
+    return {
+        "version": n.get("version") or "",
+        "title": n.get("title") or "",
+        "date": n.get("date"),
+        "summary": _short(n.get("summary") or "", 180),
+        "points": [p for p in points if p][:POINT_LIMIT],
+        "change_types": n.get("change_types") or [],
+        "modules": n.get("modules") or [],
+        "auto_generated": bool(n.get("auto_generated")),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 缓存：按 (mtime_ns, size, inode) 失效；也提供显式失效入口
+# ---------------------------------------------------------------------------
+_sig = None
+_cache = None
+
+
+def _file_sig():
+    try:
+        st = os.stat(_CHANGELOG)
+        return (st.st_mtime_ns, st.st_size, st.st_ino)
+    except Exception:
+        return None
+
+
+def invalidate_cache() -> None:
+    global _cache, _sig
+    _cache, _sig = None, None
+
+
+def get_release_notes() -> dict:
+    """返回「最新在前」的版本通知；保证包含当前系统版本对应的通知。"""
+    global _cache, _sig
+    sig = _file_sig()
+    if _cache is not None and sig == _sig:
+        return _cache
+
+    parsed = parse_changelog()
+    tag = _version.release_tag()
+    auto_generated = not any(n["version"] == tag for n in parsed)
+    if auto_generated:
+        parsed = [auto_note(tag)] + parsed
+        parsed.sort(key=lambda n: _vkey(n["version"]), reverse=True)
+
+    notes = [public_note(n) for n in parsed]
+    _cache = {
+        "latest": notes[0]["version"] if notes else None,
+        "app_version": tag,
+        "version": _version.APP_VERSION,
+        "notes": notes,
+        "current": notes[0] if notes else None,
+        "total": len(notes),
+        "auto_generated": auto_generated,
+        "synced_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    _sig = sig
+    return _cache
 
 
 if __name__ == "__main__":
@@ -265,4 +374,5 @@ if __name__ == "__main__":
     data = get_release_notes()
     print(json.dumps({k: v for k, v in data.items() if k != "notes"},
                      ensure_ascii=False, indent=2))
-    print(json.dumps(data["notes"][0], ensure_ascii=False, indent=2)[:2200])
+    for n in data["notes"][:3]:
+        print(json.dumps(n, ensure_ascii=False, indent=2))

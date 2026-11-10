@@ -9,8 +9,9 @@ from migrations import ensure_schema
 from routers import router
 from auth import decode_token, hash_password, verify_password
 from services import PROMPT_REGISTRY, sync_prompt_defaults, REMOVED_PROMPT_KEYS
+from version import APP_VERSION
 
-app = FastAPI(title="广告管理系统", version="4.42.0")
+app = FastAPI(title="广告管理系统", version=APP_VERSION)
 
 app.add_middleware(
     CORSMiddleware,

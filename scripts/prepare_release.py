@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""发版前整理 / 发布版本通知（V4.37）。
+"""发版前整理 / 发布 / 同步版本通知（V4.43）。
 
-单一数据源仍是根目录的 CHANGELOG.md；本脚本负责把「本次优化和更改过的功能与模块」
-归纳成一条结构化版本通知，并在同步 git 之前校验它是否完整。
+完整归档仍是根目录的 CHANGELOG.md；本脚本负责把本次改动归纳成「总结式」版本通知，
+并在同步 git 前校验「系统运行版本 == CHANGELOG 最新版本」，保证每次系统更新都同步版本内容。
 
 用法：
-  # 1) 先看本次改动涉及哪些模块，生成版本通知骨架（打印，不写文件）
-  python3 scripts/prepare_release.py --draft
+  # 1) 按当前系统版本自动生成一条可直接发布的总结式通知（推荐）
+  python3 scripts/prepare_release.py --sync --title "版本主题" \
+      --summary "一句话总结" --points "要点一|要点二|要点三"
 
-  # 2) 把骨架追加到 CHANGELOG.md（随后手工补全摘要 / 改动 / 影响 / 验证）
-  python3 scripts/prepare_release.py --write --version V4.38 --title "版本主题"
+  # 2) 先预览骨架 / 手工追加下一个版本
+  python3 scripts/prepare_release.py --draft
+  python3 scripts/prepare_release.py --write --version V4.44 --title "版本主题"
 
   # 3) 同步 git 前校验（pre-push 钩子自动调用）
   python3 scripts/prepare_release.py --check
@@ -34,6 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHANGELOG = ROOT / "CHANGELOG.md"
 sys.path.insert(0, str(ROOT / "backend"))
 import release_notes  # noqa: E402  （仅依赖 os / re，不会拉起 FastAPI）
+import version as _version  # noqa: E402  （系统版本单一来源，动态读取避免值拷贝）
 
 # ---------------------------------------------------------------------------
 # 改动文件 → 涉及模块：发版时自动归纳，避免漏写模块总结
@@ -53,6 +56,7 @@ MODULE_RULES: list[tuple[str, str]] = [
     ("frontend/src/pages/*", "前端与菜单"),
     ("frontend/src/*", "前端与菜单"),
     ("backend/release_notes.py", "新版通知"),
+    ("backend/version.py", "系统版本"),
     ("backend/roadmap.py", "新版通知"),
     ("backend/industry_profiles.py", "行业适配"),
     ("backend/text_utils.py", "素材创作平台"),
@@ -81,6 +85,7 @@ COVERAGE_KEYWORDS: dict[str, str] = {
     "前端与菜单": "前端", "后端接口": "后端", "数据模型": "数据",
     "素材提示词": "提示词", "部署依赖": "部署", "发版流程": "发版",
     "系统设置": "系统设置", "大模型配置": "大模型", "新版通知": "新版通知",
+    "系统版本": "系统版本",
     "素材创作平台": "素材创作", "行业适配": "行业", "改造追踪": "改造",
 }
 CODE_PREFIXES = ("frontend/src/", "backend/", "scripts/", "docs/")
@@ -166,32 +171,42 @@ def next_version(latest: str | None) -> str:
 # 生成版本通知骨架
 # ---------------------------------------------------------------------------
 def build_entry(version: str, title: str, modules: list[str], kinds: list[str],
-                summary: str = "") -> str:
+                summary: str = "", points: list[str] | None = None) -> str:
+    """生成可直接发布的总结式版本通知（无占位文字，供 --sync / --draft 使用）。
+
+    V4.43：通知页只展示「版本号 + 更新要点」，因此 `**更新要点**` 是必备章节；
+    「本次优化与更改 / 影响范围 / 验证」保留为完整归档，不进入页面展示。
+    """
     today = date.today().isoformat()
-    mod_text = "、".join(modules) if modules else "请补充涉及模块"
+    mods = modules or ["系统版本"]
+    mod_text = "、".join(mods)
     kind_text = " / ".join(kinds) if kinds else "优化"
+    sum_text = summary or (f"系统更新至 {version}，本次改动涉及 {mod_text} 等 "
+                           f"{len(mods)} 个模块。")
+    pts = [p.strip() for p in (points or []) if p and p.strip()]
+    if not pts:
+        pts = [f"{m}：相关代码与配置已更新。" for m in mods[:6]]
     head = [
         f"## {version} {title}",
         "",
         f"**发布日期**：{today}",
         f"**变更类型**：{kind_text}",
         f"**涉及模块**：{mod_text}",
-        f"**变更摘要**：{summary or '请一句话说明本版做了什么（勿保留本占位文字）'}",
+        f"**变更摘要**：{sum_text}",
         "",
-        "**本次优化与更改的功能 / 模块**",
+        "**更新要点**",
     ]
-    for m in modules or ["请补充涉及模块"]:
-        head.append(f"- 【优化】{m} / 功能名：具体改动说明（勿保留本占位文字）")
+    head += [f"- {p}" for p in pts[:6]]
+    head += ["", "**本次优化与更改的功能 / 模块**"]
+    for m in mods:
+        head.append(f"- 【优化】{m} / 版本更新：相关代码与配置已同步更新。")
     head += [
         "",
         "**影响范围**",
-        "- 前端 / 后端 / 数据 / 兼容性 / 权限：请逐项说明（勿保留本占位文字）",
+        f"- 前端 / 后端 / 数据 / 兼容性：本次改动涉及 {mod_text}；旧数据与旧接口保持兼容。",
         "",
         "**验证**",
-        "- 请填写本次实际执行的验证项与结果（勿保留本占位文字）",
-        "",
-        "**说明 / 默认约定**",
-        "- 如有部署注意事项、默认行为或后续计划，在此补充。",
+        "- 系统版本与 CHANGELOG 版本一致性由发版校验强制检查；该条目由本次改动文件自动归纳。",
         "",
     ]
     return "\n".join(head)
@@ -219,33 +234,46 @@ def check(diff_range: str = "", strict: bool = False) -> int:
     errors: list[str] = []
     warns: list[str] = []
     files = changed_files(diff_range)
-    notes = release_notes.get_release_notes()
-    latest = notes["latest"]
-    note = release_notes.latest_note()
+    # 用「纯解析」结果校验，避免 get_release_notes() 的自动兜底条目掩盖漏写。
+    parsed = release_notes.parse_changelog()
+    note = parsed[0] if parsed else None
+    latest = note["version"] if note else None
     code = code_files(files)
+    expected = _version.release_tag()
 
     print("=" * 68)
-    print("发版前版本通知校验（含结构化字段、模块覆盖与改造期次校验）")
+    print("发版前版本通知校验（系统版本一致性 / 总结要点 / 结构化字段 / 模块覆盖 / 改造期次）")
     print("=" * 68)
     print(f"变更文件 {len(files)} 个，其中代码文件 {len(code)} 个")
-    print(f"CHANGELOG 最新版本：{latest or '（无）'}，共 {notes['total']} 个版本")
+    print(f"系统运行版本：{expected}（{_version.APP_VERSION}）")
+    print(f"CHANGELOG 最新版本：{latest or '（无）'}，共 {len(parsed)} 个版本")
     if code:
         print("本次改动涉及模块：" + "、".join(modules_of(files)))
+
+    # 0) V4.43 核心：系统升版后，版本通知必须同步到同一版本号。
+    #    这是「每次版本更新都同步版本内容」的强制闸门，漏写 CHANGELOG 直接拦截。
+    version_changed = "backend/version.py" in files or "backend/main.py" in files
+    if (code or version_changed) and latest != expected:
+        errors.append(
+            f"系统版本为 {expected}（{_version.APP_VERSION}），但 CHANGELOG 最新版本为 {latest or '（无）'}；"
+            f"请执行 python3 scripts/prepare_release.py --sync 自动整理本次版本通知"
+        )
 
     if not note:
         errors.append("CHANGELOG.md 中没有解析到任何版本段落")
     else:
         # 1) 代码改动必须同步 CHANGELOG
         if code and "CHANGELOG.md" not in files:
-            errors.append("本次改动涉及代码，但 CHANGELOG.md 未同步更新；请先用 --draft/--write 整理版本通知")
+            errors.append("本次改动涉及代码，但 CHANGELOG.md 未同步更新；请先用 --sync/--write 整理版本通知")
 
-        # 2) 结构化字段完整性
+        # 2) 结构化字段完整性（V4.43 起「更新要点」为通知页的必备内容）
         body = note["body"]
         required = {
             "发布日期": bool(note["date"]),
             "变更摘要": bool(note["summary"]),
             "涉及模块": bool(note["modules"]),
             "变更类型": bool(note["change_types"]),
+            "更新要点": bool(note.get("key_points")),
             "本次优化与更改的功能 / 模块": note["has_structured"],
             "影响范围": bool(note["impact"]),
             "验证": bool(note["verification"]),
@@ -314,21 +342,32 @@ def main() -> int:
     ap.add_argument("--check", action="store_true", help="校验最新版本通知是否完整并已随代码同步")
     ap.add_argument("--draft", action="store_true", help="打印版本通知骨架（不写文件）")
     ap.add_argument("--write", action="store_true", help="把骨架追加到 CHANGELOG.md")
+    ap.add_argument("--sync", action="store_true",
+                    help="按当前系统运行版本自动生成总结式版本通知并追加到 CHANGELOG.md")
     ap.add_argument("--range", default=os.getenv("RELEASE_DIFF_RANGE", ""),
                     help="分析指定 git 区间，如 origin/main..HEAD")
     ap.add_argument("--strict", action="store_true", help="校验时把警告也视为失败")
-    ap.add_argument("--version", default="", help="版本号，默认在最新版本上 +1")
+    ap.add_argument("--version", default="", help="版本号；--sync 默认取当前系统版本，其余默认在最新版本上 +1")
     ap.add_argument("--title", default="版本优化与变更", help="版本标题")
     ap.add_argument("--summary", default="", help="变更摘要（可选）")
+    ap.add_argument("--points", default="", help="更新要点，用 | 分隔；不填则按本次改动模块自动归纳")
     args = ap.parse_args()
 
-    if args.check or (not args.draft and not args.write):
+    if args.check or (not args.draft and not args.write and not args.sync):
         return check(args.range, args.strict)
 
     files = changed_files(args.range)
-    latest = release_notes.get_release_notes()["latest"]
-    version = args.version or next_version(latest)
-    entry = build_entry(version, args.title, modules_of(files), guess_kinds(files), args.summary)
+    parsed = release_notes.parse_changelog()
+    latest = parsed[0]["version"] if parsed else None
+    version = args.version or (_version.release_tag() if args.sync else next_version(latest))
+    points = [p.strip() for p in args.points.split("|") if p.strip()]
+
+    if args.sync and any(n["version"] == version for n in parsed):
+        print(f"{version} 的版本通知已存在，跳过自动生成；如需补充内容请直接编辑 CHANGELOG.md。")
+        return 0
+
+    entry = build_entry(version, args.title, modules_of(files), guess_kinds(files),
+                        args.summary, points)
     if args.draft:
         print(entry)
         return 0
@@ -336,8 +375,12 @@ def main() -> int:
     sep = "\n" if current.endswith("\n") else "\n\n"
     with CHANGELOG.open("a", encoding="utf-8") as f:
         f.write(sep + entry)
-    print(f"已追加版本骨架 {version} 到 {CHANGELOG}")
-    print("请补全摘要、改动明细、影响范围与验证后，再执行 --check 并同步 git。")
+    if args.sync:
+        print(f"已按系统版本 {version}（{_version.APP_VERSION}）自动生成总结式版本通知 → {CHANGELOG}")
+        print("版本通知接口会立即同步该版本；如需更精确的「更新要点」可直接编辑本条段落。")
+    else:
+        print(f"已追加版本骨架 {version} 到 {CHANGELOG}")
+    print("发布前执行：python3 scripts/prepare_release.py --check")
     return 0
 
 

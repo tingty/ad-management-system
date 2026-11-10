@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -504,8 +504,12 @@ def creative_presets():
 # 版本发布公告（新版通知）：单一数据源为仓库根目录 CHANGELOG.md
 # ---------------------------------------------------------------------------
 @router.get("/system/release-notes")
-def release_notes(_: User = Depends(require_roles(*ROLES))):
-    """返回版本发布更新内容，供前端「新版通知」展示。"""
+def release_notes(response: Response, _: User = Depends(require_roles(*ROLES))):
+    """返回按系统版本自动同步的「总结式」版本更新内容（V4.43）。
+
+    禁用缓存：系统更新后用户重新进入页面即可看到最新版本，不依赖整页刷新。
+    """
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     from release_notes import get_release_notes
     return get_release_notes()
 
