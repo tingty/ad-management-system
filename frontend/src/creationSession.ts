@@ -11,7 +11,7 @@
 import { useSyncExternalStore } from 'react'
 import type {
   LandingAnalysis, MediaCopyResult, MediaImageItem, MediaImageIssue,
-  ModelInfo, CopyVariant,
+  ModelInfo, CopyVariant, WorkspaceDefaults, CreationRecommendation,
 } from './api'
 import { buildConcepts, toCopyVariants } from './taskMatrix'
 export type { CopyVariant } from './api'
@@ -88,10 +88,30 @@ export interface CreationSession {
   viewer: number | null
   checked: string[]
   savedNote: string
+  /* V4.45 / D3：默认自动创作 + 可选定制创作；旧会话固定迁移为 custom */
+  mode: 'auto' | 'custom'
+  showAdvanced: boolean
+  /** 用户点击「确认媒体并生成」后置位，工作台据此自动串联文案 → 出图（不隐式触发） */
+  autoContinue: boolean
+  /** 自动链路的阶段，写入会话以便刷新后继续，不依赖组件内存 */
+  autoStage: 'idle' | 'await_images'
+  workspaceDefaults: WorkspaceDefaults
+  recommendation: CreationRecommendation | null
 }
 
+/** localStorage key 保持不变：旧会话必须能被读到并迁移，不能靠换 key 丢弃历史。 */
 const STORAGE_PREFIX = 'admb:creationSession:v2:'
 const MAX_LOGS = 40
+/** v2 = V4.38–V4.44 定制会话；v3 = V4.45 起新增 mode / 策划结果。 */
+const SESSION_VERSION = 3
+
+/** V4.45 / D3：工作区默认值，不从页面语言推断投放国家、不从域名推断授权或库存。 */
+export function defaultWorkspace(): WorkspaceDefaults {
+  return {
+    country: 'US', language: 'en', os: 'iOS/Android',
+    goal: 'conversion', budget_cap: 0, concept_count: 1,
+  }
+}
 
 export function studioDefaults(): Partial<CreationSession> {
   return {
@@ -126,7 +146,7 @@ export function studioDefaults(): Partial<CreationSession> {
 
 function defaults(): CreationSession {
   return {
-    version: 2,
+    version: SESSION_VERSION,
     urlInput: '', textInput: '', showText: false,
     analysis: null, historyId: null,
     logoMode: 'auto', uploadedLogo: '', error: '', studioError: '',
@@ -134,14 +154,51 @@ function defaults(): CreationSession {
     taskLabel: '', taskDetail: '',
     taskStartedAt: null, taskUpdatedAt: null, taskLogs: [],
     ...studioDefaults(),
+    /* V4.45：模式与工作区默认值属于「会话级」而非「工作台级」设置。
+       重新分析只清工作台结果，不把用户已选的定制模式重置回自动。 */
+    mode: 'auto',
+    showAdvanced: false,
+    autoContinue: false,
+    autoStage: 'idle',
+    workspaceDefaults: defaultWorkspace(),
+    recommendation: null,
   } as CreationSession
 }
 
-/** 恢复时清洗：页面刷新后没有存活的 fetch，不能把 running 永久卡住。 */
+/**
+ * 恢复时清洗：页面刷新后没有存活的 fetch，不能把 running 永久卡住。
+ * V4.45 / A02：v2 旧会话固定迁移为 custom，输入、分析、文案、图片与历史 ID 全部保留，
+ * 且不会隐式发起任何新的收费任务；localStorage key 不变，避免读不到历史会话。
+ */
 function sanitize(raw: any): CreationSession {
   const d = defaults()
-  if (!raw || typeof raw !== 'object' || raw.version !== 2) return d
-  const merged: CreationSession = { ...d, ...raw }
+  if (!raw || typeof raw !== 'object' || (raw.version !== 2 && raw.version !== SESSION_VERSION)) return d
+  const legacy = raw.version === 2
+  const merged: CreationSession = {
+    ...d, ...raw,
+    version: SESSION_VERSION,
+    ...(legacy ? {
+      mode: 'custom' as const, showAdvanced: true, autoContinue: false,
+      recommendation: null, workspaceDefaults: defaultWorkspace(),
+    } : {}),
+  }
+  merged.mode = merged.mode === 'custom' ? 'custom' : 'auto'
+  merged.showAdvanced = Boolean(merged.showAdvanced)
+  merged.autoContinue = Boolean(merged.autoContinue)
+  merged.autoStage = merged.autoStage === 'await_images' ? 'await_images' : 'idle'
+  // V4.45：只接受完整策划契约的会话快照；开发期 / 旧的半成品推荐一律丢弃并重新计算，
+  // 避免 undefined 的 structured_concepts / quality_gate 让自动面板渲染失败。
+  const rec = merged.recommendation
+  merged.recommendation = rec && typeof rec === 'object'
+    && typeof rec.recommended_visual_summary === 'string'
+    && Array.isArray(rec.structured_concepts)
+    && rec.quality_gate && Array.isArray(rec.quality_gate.checks)
+    && rec.pricing_gate && typeof rec.plan_version === 'string'
+    ? rec : null
+  merged.workspaceDefaults = {
+    ...defaultWorkspace(),
+    ...(raw.workspaceDefaults && typeof raw.workspaceDefaults === 'object' ? raw.workspaceDefaults : {}),
+  }
   merged.analysis = raw.analysis && typeof raw.analysis === 'object' ? raw.analysis : null
   merged.copy = raw.copy && typeof raw.copy === 'object' ? raw.copy : null
   merged.images = Array.isArray(raw.images) ? raw.images : []
@@ -210,6 +267,9 @@ export function bindSessionUser(userId: number | null) {
     try {
       const raw = localStorage.getItem(key)
       state = raw ? sanitize(JSON.parse(raw)) : defaults()
+      // V4.45 / A02：旧会话的迁移结果立即落盘。否则用户打开旧会话后直接关页，
+      // 下次进来又要迁移一次、重复追加「任务中断」日志，且 custom 未真正固定。
+      if (raw) persist()
     } catch { state = defaults() }
   }
   notify()
@@ -355,4 +415,62 @@ export function buildCopyVariants(s: CreationSession): CopyVariant[] {
 export function selectedCount(s: CreationSession): { selected: number; total: number } {
   const items = copyItems(s)
   return { selected: items.filter(x => x.selected).length, total: items.length }
+}
+
+/* ----------------------------- V4.45 / D3 自动创作与定制创作 ----------------------------- */
+
+/**
+ * 计划版本：由「会影响策划结果」的输入共同决定。
+ * 修改产品事实 / 国家 / 概念数 / 定制参数时版本必然变化，下游推荐、覆盖摘要与确认
+ * 令牌随之失效（A13）；但分析原文、上传素材与用户输入始终保留，不清空、不重新收费。
+ */
+export function planVersion(s: CreationSession): string {
+  const parts = [
+    s.mode,
+    s.analysis?.evidence_snapshot_id || s.analysis?.final_url || s.analysis?.url || '',
+    s.platform, (s.selectedPlacements || []).join(','),
+    s.workspaceDefaults.country, s.workspaceDefaults.language,
+    s.workspaceDefaults.os, s.workspaceDefaults.goal,
+    String(s.workspaceDefaults.budget_cap), String(s.workspaceDefaults.concept_count),
+    s.recommendation?.plan_hash || '',
+    s.showAdvanced ? [s.direction, s.styleName, s.colorName, s.assignment,
+                      s.conceptCount, s.variantsPerConcept, s.count].join('|') : '',
+  ]
+  let h = 2166136261
+  const text = parts.join('~')
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return `pv${(h >>> 0).toString(36)}`
+}
+
+/**
+ * 切换创作模式。返回自动模式时只重置「展开 / 自动继续」等视图状态，
+ * 不清空用户输入、不删除已生成的素材、不触发任何隐式收费任务（文档 D3）。
+ */
+export function setCreationMode(mode: 'auto' | 'custom', reason = '') {
+  updateSession(s => {
+    if (s.mode === mode) return {}
+    const text = mode === 'custom'
+      ? '已切换到定制创作：保留产品证据与原始素材，可调整概念、文案、版式、版位与预算'
+      : '已返回自动创作：保留已输入内容与既有素材，变更项在确认区对比展示；未发起新任务'
+    return {
+      mode,
+      showAdvanced: mode === 'custom',
+      autoContinue: false,
+      autoStage: 'idle',
+      taskLogs: pushLog(s.taskLogs, reason || text, 'info'),
+    }
+  })
+}
+
+/** 关键默认值变化：使推荐结果与覆盖摘要失效，等待重新确认，不自动重新生成。 */
+export function updateWorkspaceDefaults(patch: Partial<WorkspaceDefaults>) {
+  updateSession(s => ({
+    workspaceDefaults: { ...s.workspaceDefaults, ...patch },
+    recommendation: null,
+    autoContinue: false,
+    taskLogs: pushLog(s.taskLogs, '工作区默认值已修改，原推荐与覆盖摘要已失效，请重新确认', 'info'),
+  }))
 }

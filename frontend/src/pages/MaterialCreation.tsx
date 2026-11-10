@@ -2,9 +2,10 @@ import { useEffect, useState, ChangeEvent } from 'react'
 import { api, LandingAnalysis, LandingChannel, ModelInfo, IndustryProfile } from '../api'
 import {
   useCreationSession, updateSession, studioDefaults, clearSession, getSession,
-  beginTask, endTask, failTask, logTask,
+  beginTask, endTask, failTask, logTask, setCreationMode,
 } from '../creationSession'
 import MediaAdStudio from './MediaAdStudio'
+import AutoCreationPanel from './AutoCreationPanel'
 
 /** 「素材历史 → 复用分析继续创作」的跨页面握手（sessionStorage + 自定义事件） */
 export const REUSE_HISTORY_KEY = 'admb:reuseHistory'
@@ -54,6 +55,7 @@ export default function MaterialCreation() {
           textInput: '',
           logoMode: 'auto', uploadedLogo: '', error: '',
           stage: 'analyzed', running: false,
+          recommendation: null, autoContinue: false, autoStage: 'idle',
           taskLabel: '已复用「素材历史」分析结论',
           taskDetail: '跳过重复抓站与大模型推理，可直接进行营销推广设置。',
           taskLogs: [{ at: Date.now(), text: '复用历史分析结论，新建创作会话', kind: 'ok' }],
@@ -71,7 +73,12 @@ export default function MaterialCreation() {
     const url = s.urlInput.trim(), text = s.textInput.trim()
     if (!url && !text) { updateSession({ error: '请填写落地页链接或正文' }); return }
     if (s.running) return
-    updateSession({ error: '', analysis: null, historyId: null, ...studioDefaults(), logoMode: 'auto', uploadedLogo: '' })
+    updateSession({
+      error: '', analysis: null, historyId: null, ...studioDefaults(),
+      logoMode: 'auto', uploadedLogo: '',
+      // 重新分析只清结果，不重置用户已选的创作模式（文档 D3 迁移与失效规则）
+      recommendation: null, autoContinue: false, autoStage: 'idle',
+    })
     beginTask('analyzing', '正在分析落地页', '抓取页面并调用已配置的大模型推理 8 项关键结论…')
     try {
       const res = await api.landingAnalysis({ url: url || undefined, text: text || undefined })
@@ -94,6 +101,26 @@ export default function MaterialCreation() {
 
   return (
     <div>
+      {/* V4.45 / D3：自动创作为默认；定制创作保留为次级入口，切换不清空输入 / 不触发收费 */}
+      <div className="card ac-mode">
+        <div className="ac-mode-tabs">
+          <button className={`ac-mode-tab ${s.mode === 'auto' ? 'on' : ''}`}
+            onClick={() => setCreationMode('auto')}>
+            自动创作 <em>推荐</em>
+          </button>
+          <button className={`ac-mode-tab ${s.mode === 'custom' ? 'on' : ''}`}
+            onClick={() => setCreationMode('custom')}>
+            定制创作
+          </button>
+        </div>
+        <div className="muted ac-mode-hint">
+          {s.mode === 'auto'
+            ? '输入链接后自动识别产品并给出推荐画面，确认媒体即可生成；可随时展开「调整创作方案」。'
+            : '保留原有三步工作台：概念、文案、版式、颜色、参考图、版位与预算均可逐项调整。'}
+          {s.mode === 'auto' && <span className="ac-mode-mark">当前会话为自动创作</span>}
+        </div>
+      </div>
+
       <div className="card step">
         <div className="step-head">
           <div className="step-title-wrap">
@@ -160,14 +187,32 @@ export default function MaterialCreation() {
 
       {s.analysis && (
         <>
-          <ResultView
-            data={s.analysis}
-            historyId={s.historyId}
-            logoMode={s.logoMode}
-            uploadedLogo={s.uploadedLogo}
-            onLogoMode={m => updateSession({ logoMode: m })}
-            onUpload={(e) => onUploadLogo(e)}
-          />
+          {s.mode === 'auto' ? (
+            <>
+              <AutoCreationPanel />
+              {/* 产品界面优先展示推荐结果；完整 8 字段分析结论折叠保留，便于核对事实 */}
+              <details className="ac-analysis-fold">
+                <summary>查看完整分析结论（8 字段、模型归因与证据链）</summary>
+                <ResultView
+                  data={s.analysis}
+                  historyId={s.historyId}
+                  logoMode={s.logoMode}
+                  uploadedLogo={s.uploadedLogo}
+                  onLogoMode={m => updateSession({ logoMode: m })}
+                  onUpload={(e) => onUploadLogo(e)}
+                />
+              </details>
+            </>
+          ) : (
+            <ResultView
+              data={s.analysis}
+              historyId={s.historyId}
+              logoMode={s.logoMode}
+              uploadedLogo={s.uploadedLogo}
+              onLogoMode={m => updateSession({ logoMode: m })}
+              onUpload={(e) => onUploadLogo(e)}
+            />
+          )}
           <div id="media-studio" className="media-studio-section">
             <MediaAdStudio />
           </div>

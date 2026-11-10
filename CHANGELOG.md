@@ -1623,3 +1623,49 @@
 - 「已验证事实」仍只表示页面原文可引用，不构成价格真实性、效果或合规背书；限制条件保护为规则级拦截，不替代人工审核。
 - 四种状态分开记录：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。
 
+
+## V4.45 默认自动化素材创作（D1–D3）：策划层、结构化概念与交付门
+
+**发布日期**：2026-11-10
+**变更类型**：新增 / 优化 / 修复 / 发布
+**涉及模块**：素材创作平台、前端与菜单、后端接口、行业适配、系统版本、系统设置、数据模型、发版流程、改造追踪、工程文档
+**变更摘要**：按《素材创作平台新版验收与自动化创作改造实施方案》v2.0 完成 D1–D3：新增「自动创作」并设为新建会话默认，保留「定制创作」；新增不调用新模型的确定性策划层，输出产品对象、结构化概念、VisualBrief、推荐视觉描述、覆盖摘要与交付门，并把 A01–A08 验收路径落成可运行回归。
+
+**更新要点**
+- 素材创作默认「自动创作」：分析完成后先给推荐画面与覆盖摘要，确认媒体即可一次点击生成；定制创作保留为次级入口。
+- 旧会话固定迁移为定制模式，输入、分析、文案、图片与历史 ID 全部保留；不重置进行中任务、不隐式发起收费调用。
+- 新增确定性策划服务：产品对象、证据快照、结构化概念、VisualBrief 与推荐描述同源生成，规则负责事实边界，模型只做既有落地页理解。
+- 行业策略版本化，电商 / 软件 / 旅游 / B2B 主体与场景各自匹配；未知平台在策划阶段拒绝，不静默套用其它平台规则。
+- 草案与可投放分开：缺官方商品图 / 真实 UI、规则未官方核验、逐图质检未上线时一律记为草案，等级与计划版本随任务快照归档。
+- 量化承诺、源文限定与地区报价受控：未在原文定位的量化表达自动移除，价格条款不进推荐描述，投放国家只取工作区默认值。
+
+**本次优化与更改的功能 / 模块**
+- 【新增】素材创作 / 自动创作面板：`frontend/src/pages/AutoCreationPanel.tsx` 展示推荐视觉描述、不超过三条的推荐理由、产品概要、覆盖摘要、结构化概念、交付门、工作区默认值与确认媒体入口；完整策划数据折叠保留，不铺开实现细节。
+- 【新增】素材创作 / 模式切换与旧会话迁移：`frontend/src/creationSession.ts` 新增 `mode` / `showAdvanced` / `autoContinue` / `autoStage` / `workspaceDefaults` / `recommendation`，会话版本升为 v3 但 localStorage key 不变；v2 旧会话固定迁移为 `custom` 且迁移结果立即落盘，避免重复追加中断日志。新增 `planVersion()` 与 `updateWorkspaceDefaults()`，关键默认值变化使推荐和确认失效。
+- 【新增】后端 / 确定性策划层：`backend/creation_planner.py` 提供 `build_recommendation()` / `build_visual_brief_seed()` / `render_visual_summary()` / `build_structured_concepts()` / `_quality_gate()`；输出 `product_profile`、`visual_brief`、`recommended_visual_summary`、`structured_concepts`、`coverage_summary`、`pricing_gate`、`quality_gate`、`plan_id` / `plan_version`。推荐描述限 60–120 字、按槽位独立限长，保证产品 / 场景 / 价值 / 构图 / 文字区 / 版位六项不因截断丢失。
+- 【新增】后端接口：`POST /api/creation-recommendation` 接收既有落地页分析结果、媒体与工作区默认值，返回策划结果；未知平台由 `validate_platform()` 在调用模型前返回 422，不静默降级。
+- 【优化】行业适配 / 版本化策略：`backend/industry_profiles.py` 新增 `PROFILE_SCHEMA_VERSION`，每个画像带 `profile_id` / `version` 并纳入计划版本计算；`list_profiles()` 同步下发版本，新增或改动画像会使旧推荐失效。
+- 【修复】推荐描述 / 量化与价格承诺（A05 / A07）：源文含 `up to` / 护理模式 / 实验室条件 / 计费周期时，推荐描述改用非量化表达，限定词随结构化概念下发给文案链路；价格与试用条款整段不进描述，地区报价一律不生成。
+- 【修复】交付门 / 草案与合格素材分离（N03 / A08 / A15）：`quality_gate` 分别检查产品素材、证据快照、官方规格核验与逐图质检；V4.45 全部自动产出标记 `delivery_grade=draft` 且 `deliverable=false`，草案等级、`plan_id`、`plan_version` 随生成任务 `archive` 快照落库。
+- 【优化】自动链路 / 不另造生成系统：`MediaAdStudio.tsx` 在自动模式隐藏复杂配置、改为阶段进度条，用户显式确认后按「文案 → 出图」串联，复用既有 `mediaCopy` / `generation-jobs` / 素材历史链路；失败时清掉待出图标记，避免后续被隐式带出收费任务。
+- 【新增】回归测试：`tests/test_auto_creation.py`（24 项断言）覆盖 A01–A08、A10 / A13 / A15 与 N03；`tests/frontend/auto_creation_session.mjs` 通过本地 esbuild 打包并真实执行 `creationSession.ts`，验证默认 auto、旧会话迁移、模式切换与计划版本失效。
+- 【优化】前端类型与样式：`api.ts` 新增 `WorkspaceDefaults` / `StructuredConcept` / `CreationRecommendation` 及归档草案字段；`styles.css` 增加模式切换、推荐面板、结构化概念、交付门与进度条样式。
+
+**影响范围**
+- 前端：素材创作页新增模式切换与自动面板；定制创作三步工作台保持可用。自动模式只影响新建会话，发布时不重置进行中的定制任务；旧会话一律迁移为 custom。
+- 后端：新增 `creation_planner.py` 与 1 条 `/api` 路径（有效 `/api` 路径由 42 条增至 43 条）；`industry_profiles.py` / `routers.py` / `version.py` 有改动。策划层不调用新模型、不改数据库表、不写历史数据。
+- 数据：草案等级与计划版本写入生成任务的 `archive` 快照（JSON），不新增列、不改写历史图片、不重新生成或收费。
+- 验收口径：本版完成 D1–D3 的**工程路径**，不宣称素材视觉合格或投放效果提升；D4–D6（媒体全覆盖计划、PromptBundle、多阶段持久任务、逐图质检、A09–A20 验收记录）仍为后续期次；官方媒体规格 `SPEC_VERIFIED_ON` 与供应商 `size_verified_on` 仍为空，真实模型与真实投放验证均未执行。
+- 权限与部署：沿用既有登录角色与编辑权限；无需数据库迁移、无需管理员轮换口令；回滚只需关闭自动创作入口，资产、计划与任务记录保留。
+
+**验证**
+- `python3 tests/run_all.py`：**96 项断言全部通过**（V4.44 既有 72 项 + 本版 24 项），其中前端会话用例由本地 esbuild 打包后以 node 真实执行。
+- 后端 `compileall -q backend scripts tests` 通过；`import main` 通过，运行版本 `4.45.0`、有效 `/api` 路径 43 条。
+- 前端 `tsc --noEmit` 通过；`vite build` 45 模块 / 279.39 kB JS / 57.21 kB CSS。
+- 版本通知锚点：`APP_VERSION=4.45.0` → `release_tag()` = `V4.45`，`get_release_notes()` 首条为本版要点；`prepare_release.py --check` 通过。
+- 所有回归在临时 SQLite、临时文件副本与纯函数上执行，强制清空 `DEFAULT_LLM_API_KEY`；未修改生产数据、未产生真实付费模型调用。
+
+**说明 / 默认约定**
+- 「可定位原文」仍不等于「商业真实性已审核」；`delivery_grade=draft` 不等于素材质量不合格，但明确不得作为可投放商品广告交付。
+- 自动创作的分析、文案、出图复用现有链路与同一证据 / 规格检查；本版不宣称已完成 PromptBundle、多阶段编排、官方规格核验或逐图质检。
+- 四种状态分开记录：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。

@@ -1063,3 +1063,32 @@ def audit_logs(limit: int = 50, db: Session = Depends(get_db),
     rows = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(limit).all()
     return [{"id": r.id, "username": r.username, "action": r.action, "target": r.target,
              "detail": r.detail, "created_at": r.created_at} for r in rows]
+
+
+@router.post("/creation-recommendation")
+def creation_recommendation(body: dict,
+                            _: User = Depends(require_roles(*ROLES))):
+    """V4.45 / D2：默认自动创作的策划结果（确定性，不调用新模型）。
+
+    输入是既有 `POST /api/landing-analysis` 的分析结果 + 已选媒体 + 工作区默认值；
+    输出「推荐怎么拍 / 怎么画」的直观描述、理由、缺口与覆盖摘要。
+    推荐描述与 `visual_brief` 来自同一对象，避免两次生成互相矛盾。
+    """
+    from media_platforms import validate_platform, MediaRuleError
+    from creation_planner import build_recommendation
+    analysis = body.get("analysis") if isinstance(body.get("analysis"), dict) else {}
+    plats = body.get("platforms") if isinstance(body.get("platforms"), list) else []
+    if not plats and body.get("platform"):
+        plats = [str(body.get("platform"))]
+    plats = [str(x).strip() for x in plats if str(x or "").strip()][:8]
+    # V4.45 / N04 / A10：未知平台在策划阶段就拒绝，不静默套用其它平台规则。
+    try:
+        for p in plats:
+            validate_platform(p)
+    except MediaRuleError as e:
+        raise HTTPException(422, detail={"message": "媒体平台目录校验未通过",
+                                        "errors": e.errors})
+    defaults = body.get("workspace_defaults") if isinstance(body.get("workspace_defaults"), dict) else {}
+    return build_recommendation(analysis, plats,
+                                workspace_defaults=defaults,
+                                mode=str(body.get("mode") or "auto"))

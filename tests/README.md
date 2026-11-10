@@ -24,6 +24,10 @@ python3 -m unittest discover -s tests -p test_claims.py -v
 | `test_placement_rules.py` | N04 / A10 / A11 | 版位 + 尺寸 + 角色完整主键、未知版位拒绝、Moloco 目录、未核验标记 |
 | `test_jobs.py` | N05 / A16 / A18 / A19 | 子任务预登记、幂等作用域隔离、同键异内容冲突、重启分类恢复、分项重试 |
 | `test_security.py` | N06 | 源码无固定口令与自愈重置、引导文件被忽略、显式轮换入口存在 |
+| `test_auto_creation.py` | V4.45 / A01–A08 / A10 / A13 / A15 / N03 | 确定性策划契约、60–120 字推荐描述、跨行业主体场景、阻断项、限定词与价格门、草案交付门、计划版本失效 |
+| `frontend/auto_creation_session.mjs` | V4.45 / A01 / A02 / A13 / D3 | 经 esbuild 打包后由 node 真实执行 `creationSession.ts`：默认 auto、旧 v2 会话迁移 custom、storage key 稳定、模式切换不丢数据、计划版本失效 |
+
+前端会话用例需要本机 `node` 与已安装的本地 esbuild；缺失时该用例自动跳过，不影响其余纯 Python 回归。
 
 ## 四种状态必须分开写
 

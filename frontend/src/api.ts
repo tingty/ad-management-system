@@ -308,6 +308,81 @@ export interface EvidenceCoverage {
   tags: string[]
 }
 
+/** V4.45 / D1–D3：自动创作的工作区默认值（不从页面语言推断投放国家） */
+export interface WorkspaceDefaults {
+  country: string
+  language: string
+  os: string
+  goal: string
+  budget_cap: number
+  concept_count: number
+}
+/** V4.45 / D2：结构化概念，购买理由不同才算不同概念 */
+export interface StructuredConcept {
+  concept_id: string
+  axis: string
+  audience: string
+  situation: string
+  purchase_reason: string
+  promise: string
+  claim_ids: string[]
+  claim_status: 'locatable_not_reviewed' | 'unsupported' | 'no_claim'
+  claim_audit: { ok: boolean; ids: string[]; invalid_ids: string[]; reason: string }
+  qualifiers: Record<string, string[]>
+  must_preserve_qualifiers: string[]
+  format: string
+  forbidden_inferences: string[]
+  distinct_reason: string
+}
+/** V4.45 / D2：确定性策划结果，推荐描述与 VisualBrief 来自同一对象 */
+export interface CreationRecommendation {
+  schema_version: string
+  mode: string
+  status: 'ready' | 'draft_only' | 'needs_input'
+  recommended_visual_summary: string
+  rationale: string[]
+  missing_inputs: string[]
+  blocking_reasons: string[]
+  product_profile: {
+    entity_type: string; brand: string; brand_status: string; sku_or_plan: string
+    business_model: string; assets: string[]; source: string
+    multi_product_page: boolean; uncertainty: string
+  }
+  visual_brief: {
+    version: string; entity_type: string; subject: string; subject_asset: string; scene: string
+    scene_types: string[]; value: string; product_facts: string[]
+    composition: string; layout: string; detail: string; copy_zone: string
+    short_copy: string; asset_roles: string[]; required_tasks: number
+    forbidden_inferences: string[]; asset_requirement: string
+  }
+  industry_profile: string
+  industry_profile_label: string
+  industry_profile_version: string
+  structured_concepts: StructuredConcept[]
+  workspace_defaults: WorkspaceDefaults
+  evidence: { snapshot_id: string; count: number; review_status: string }
+  coverage_summary: {
+    platforms: string[]; asset_roles: string[]; required_tasks: number
+    spec_verified: boolean; spec_version: string; estimate_note: string
+  }
+  /** N03 / A15：V4.45 自动流程一律草案，不计作可投放商品广告 */
+  quality_gate: {
+    delivery_grade: 'draft' | 'standard'; deliverable: boolean
+    checks: { key: string; passed: boolean; note: string }[]
+    note: string
+  }
+  delivery_grade: 'draft' | 'standard'
+  pricing_gate: {
+    has_price_terms: boolean; region_source: string; region_confirmed: boolean
+    price_statement_allowed: boolean; note: string
+  }
+  claim_audit: { checked: number; unsupported: string[]; must_preserve_qualifiers: string[] }
+  plan_id: string
+  plan_version: string
+  plan_hash: string
+  note: string
+}
+
 /** V4.39：行业 / 品类画像（用于「素材创作」局部调整） */
 export interface IndustryProfile {
   key: string
@@ -777,6 +852,13 @@ export const api = {
   // V4.39：行业 / 品类画像（通用主干 + 局部调整）
   industryProfiles: () =>
     req<IndustryProfilesResponse>('/api/industry-profiles'),
+  // V4.45 / D2：默认自动创作的策划结果（确定性，不触发新模型调用）
+  creationRecommendation: (payload: {
+    analysis: LandingAnalysis; platforms?: string[]; platform?: string
+    workspace_defaults?: Partial<WorkspaceDefaults>; mode?: 'auto' | 'custom'
+  }) =>
+    req<CreationRecommendation>('/api/creation-recommendation',
+      { method: 'POST', body: JSON.stringify(payload) }),
   // 基于落地页分析结论 + 选中平台，调用大模型生成可编辑广告文案
   mediaCopy: (payload: { analysis: LandingAnalysis; platform: string; lang?: string
     /** V4.41 / F04：编辑过的方向 / 风格 / 配色预设参与文案生成 */
@@ -789,7 +871,10 @@ export const api = {
   createGenerationJob: (payload: {
     images_request: MediaImagePayload
     archive?: { history_id?: number | null; platform?: string; lang?: string
-                copy?: any; style_opts?: Record<string, any> }
+                copy?: any; style_opts?: Record<string, any>
+                /** V4.45 / N03：草案标记随任务快照持久化，避免事后被当作合格商品广告 */
+                delivery_grade?: 'draft' | 'standard'
+                plan_id?: string; plan_version?: string }
     idempotency_key?: string
   }) =>
     req<GenerationJob>('/api/generation-jobs', { method: 'POST', body: JSON.stringify(payload) }),

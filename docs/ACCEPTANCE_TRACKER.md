@@ -31,7 +31,7 @@
 | --- | --- | --- | --- |
 | N01 | 证据链没有贯穿到广告承诺；`[E###]` 与 `EV_S###` 双命名空间；短句丢限定 | `evidence.py`（统一快照）、`claims.py`（新增）、`services.py`、`media_ad.py` | V4.44 |
 | N02 | 关键词 + 哈希动作池代替产品策划 | `industry_profiles.py`（场景策略）、`creative_config.py` | V4.44 |
-| N03 | 商品素材缺口未阻止可投放交付 | 产品/资产快照与素材门 | V4.45 |
+| N03 | 商品素材缺口未阻止可投放交付 | `creation_planner.py`（产品对象 + `quality_gate`）、`MediaAdStudio.tsx`（草案等级归档） | V4.45（工程路径；逐图质检 D5 未上线） |
 | N04 | 版位级规则校验不完整；未知版位被接受；目录缺 Moloco | `media_platforms.py` | V4.44 |
 | N05 | 任务重启与幂等边界未闭环 | `job_service.py`、`models.py`、`routers.py` | V4.44 |
 | N06 | 无可运行回归目录；源码含固定默认管理员凭据与自愈逻辑 | `tests/`（新增）、`main.py` | V4.44 |
@@ -41,8 +41,8 @@
 | 期次 | 文档任务 | 交付范围 | 状态 |
 | --- | --- | --- | --- |
 | V4.44 | D0 | N01 / N02 / N04 / N05 / N06 修复 + 可运行回归目录 | 已完成（工程修复，非素材/效果验收通过） |
-| V4.45 | D1 / D2 / D3 | 产品与资产快照、版本化行业策略、结构化概念、`recommended_visual_summary`、默认 auto + 可选 custom + 旧会话迁移 | 规划中 |
-| V4.46 | D4 / D5 / D6 | 媒体全覆盖计划、PromptBundle、多阶段持久任务、质检与归档、A01–A20 验收记录 | 规划中 |
+| V4.45 | D1 / D2 / D3 | 产品与资产对象、版本化行业策略、结构化概念、`recommended_visual_summary`、覆盖摘要、草案交付门、默认 auto + 可选 custom + 旧会话迁移 | 已完成（工程路径 + 模拟回归，非素材 / 效果验收通过） |
+| V4.46 | D4 / D5 / D6 | 媒体全覆盖计划、PromptBundle、多阶段持久任务、逐图质检与归档、A09–A20 验收记录 | 规划中 |
 
 ## 四、验收用例（文档 A01–A20）
 
@@ -51,8 +51,10 @@ A01–A08 属 D1–D3 界面与策划路径；A09–A20 属 D4–D6 规则、编
 
 | 用例 | 覆盖期次 | 状态 |
 | --- | --- | --- |
-| A01–A08 | V4.45 | 未验证 |
+| A01–A08 | V4.45 | 模拟回归通过（`tests/test_auto_creation.py`）；真实模型 / 真实投放 / 人工视觉核验未验证 |
 | A09–A20 | V4.46 | 未验证 |
+
+A01–A08 逐项回归落点：A01 默认 auto 与推荐语（后端契约 + 前端会话）；A02 旧会话迁移 custom 且输入 / 历史不变（前端真实执行）；A03 四类行业主体与场景；A04 多商品页 `needs_input`；A05 价格条款与投放国家不推断；A06 无效 / 不可定位证据阻断并移除量化承诺；A07 硬限定词随概念下发、描述改非量化；A08 缺产品资产仅草案。另附 A10 未知平台拒绝、A13 计划版本失效、A15 草案不计可投放。
 
 ## 五、文档明确要求保留的边界
 
@@ -76,6 +78,19 @@ A01–A08 属 D1–D3 界面与策划路径；A09–A20 属 D4–D6 规则、编
 | 发版闸门 | `prepare_release.py --check` 通过（系统版本 == CHANGELOG 最新版本且含「更新要点」） |
 | 真实模型验证 / 真实投放验证 | **均未验证**；供应商 `size_verified_on` 与 `SPEC_VERIFIED_ON` 仍为空 |
 
-未完成项（转后续期次）：N03 商品素材缺口与质量裁决、默认自动创作（D1–D3）、
-媒体全覆盖计划 / PromptBundle / 多阶段编排（D4–D5）、A01–A20 用例与灰度验收（D6）、
+### V4.45 / D1–D3（2026-11-10，提交后补写哈希）
+
+| 项目 | 实测结果 |
+| --- | --- |
+| `python3 tests/run_all.py` | 96 项断言全部通过（V4.44 既有 72 项 + 本版 24 项） |
+| 前端会话真实执行 | `tests/frontend/auto_creation_session.mjs` 经本地 esbuild 打包 `creationSession.ts` 后由 node 运行，6 组断言通过（默认 auto、旧 v2 迁移 custom、storage key 稳定、模式切换不丢数据、计划版本失效、不隐式收费） |
+| 编译与构建 | `compileall -q backend scripts tests`、`import main` = 4.45.0 / 43 条 API；`tsc --noEmit` 通过；`vite build` 45 模块、279.39 kB JS / 57.21 kB CSS |
+| 版本通知锚点 | `APP_VERSION=4.45.0` → `get_release_notes()` 首条 `V4.45`、6 条总结式更新要点 |
+| 发版闸门 | `prepare_release.py --check` 通过（系统版本 == CHANGELOG 最新版本且含「更新要点」） |
+| 交付门 | 全部自动产出 `delivery_grade=draft` / `deliverable=false`；`plan_id` / `plan_version` / 草案等级随 `archive` 快照落库 |
+| 真实模型验证 / 真实投放验证 | **均未验证**；`SPEC_VERIFIED_ON` 与供应商 `size_verified_on` 仍为空 |
+
+未完成项（转后续期次）：媒体全覆盖计划 / PromptBundle / 多阶段编排与逐图质检（D4–D5）、
+A09–A20 用例与灰度验收（D6）、`CreationPlan` / `ProductSnapshot` 持久化表、
 官方媒体规格逐项核验、真实模型与视觉人工抽检、受控投放实验。
+V4.45 的草案门只做到「不宣称可投放并随任务归档」，尚不能替代逐图商品外观比对与 OCR 质检（A15 的完整判定）。

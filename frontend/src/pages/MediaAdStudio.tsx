@@ -3,12 +3,36 @@ import { api, MediaPlatform, MediaRules, CreativePresets, ModelInfo } from '../a
 import type { MediaImagePayload, MediaImageResult, GenerationJob } from '../api'
 import {
   useCreationSession, updateSession, beginTask, endTask, failTask,
-  allSelectedCopy, selectedCount,
+  allSelectedCopy, selectedCount, setCreationMode, getSession,
 } from '../creationSession'
 import type { StudioStep } from '../creationSession'
 import {
   buildConcepts, buildAdaptations, buildTaskMatrix, toCopyVariants, toSlots,
 } from '../taskMatrix'
+
+/** V4.45 / D3：自动模式下替代复杂配置卡片，只展示阶段进度与最近日志。 */
+function AutoProgress({ label, detail, logs, running, stage }: {
+  label: string; detail: string; running: boolean; stage: string
+  logs: { at: number; text: string; kind: string }[]
+}) {
+  return (
+    <div className="card ac-progress">
+      <div className="ac-progress-head">
+        <b>{running ? '自动创作进行中' : (stage === 'error' ? '自动创作已中断' : '自动创作')}</b>
+        <button className="linkbtn" onClick={() => setCreationMode('custom')}>调整创作方案 →</button>
+      </div>
+      <div className="ac-progress-label">{label || '准备中…'}</div>
+      <div className="muted ac-progress-detail">{detail || '确认媒体后将依次生成广告文案与推广图片，并在服务端归档。'}</div>
+      {logs.length > 0 && (
+        <ul className="ac-progress-logs">
+          {logs.slice(-5).reverse().map((l, i) => (
+            <li key={`${l.at}-${i}`} className={l.kind}>{l.text}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
 
 function ModelBadge({ info, fallbackText }: { info: ModelInfo; fallbackText?: string }) {
   if (!info) return null
@@ -141,6 +165,8 @@ export default function MediaAdStudio() {
         }).then(() => updateSession({ savedNote: '文案已存入「素材历史」' })).catch(() => {})
       }
     } catch (e: any) {
+      // 自动链路失败时清掉待出图标记，避免之后手动生成文案被隐式带出收费任务
+      if (getSession().mode === 'auto') updateSession({ autoStage: 'idle' })
       failTask(e?.message || '文案生成失败')
     }
   }
@@ -305,6 +331,13 @@ export default function MediaAdStudio() {
           style_opts: {
             creative_direction: s.direction, content_style: s.styleName, color_scheme: s.colorName,
           },
+          // V4.45 / N03：自动流程的草案等级与计划版本随任务快照落库，
+          // 事后查阅时仍能看出「这是草案，不计作可投放商品广告」。
+          ...(s.mode === 'auto' && s.recommendation ? {
+            delivery_grade: s.recommendation.delivery_grade,
+            plan_id: s.recommendation.plan_id,
+            plan_version: s.recommendation.plan_version,
+          } : {}),
         },
         // 同批次重复提交复用同一幂等键；主动重新生成递增 seq，不误用旧任务
         idempotency_key: `hist-${s.historyId ?? 'none'}-p-${s.platform}-seq-${seq}`,
@@ -313,9 +346,31 @@ export default function MediaAdStudio() {
                       taskDetail: `服务端任务 ${job.job_id} 已创建（${job.status}）；生成与归档不依赖浏览器连接` })
       await pollJob(job.job_id)
     } catch (e: any) {
+      if (getSession().mode === 'auto') updateSession({ autoStage: 'idle' })
       failTask(e?.message || '图片生成任务提交失败')
     }
   }
+
+  /**
+   * V4.45 / D3：自动创作的显式执行链路。
+   * 只有用户在自动面板点击「确认媒体并生成」后 autoContinue 才会置位；
+   * 阶段写入会话（autoStage），刷新后仍可接续，不依赖组件内存，也不会隐式收费。
+   */
+  useEffect(() => {
+    if (s.mode !== 'auto' || !s.autoContinue || s.running) return
+    if (!s.analysis || !s.platform || s.step !== 1) return
+    updateSession({ autoContinue: false, autoStage: 'await_images' })
+    void genCopy()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.mode, s.autoContinue, s.running, s.step, s.platform])
+
+  useEffect(() => {
+    if (s.mode !== 'auto' || s.autoStage !== 'await_images' || s.running) return
+    if (s.step !== 2 || !s.copy || s.stage !== 'copy_ready') return
+    updateSession({ autoStage: 'idle' })
+    void genImages()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.mode, s.autoStage, s.step, s.copy, s.running, s.stage])
 
   async function cancelJob() {
     if (!s.jobId) return
@@ -387,6 +442,21 @@ export default function MediaAdStudio() {
         <div className="ma-summary">{analysisSummary || '（分析结论为空，请回到「素材创作」重新分析）'}</div>
       </div>
 
+      {/* V4.45 / D3：自动模式保留同一生成链路，只隐藏复杂配置；可随时展开定制 */}
+      {s.mode === 'auto' && (
+        <div className="card ac-studio-bar">
+          <div className="ac-studio-bar-main">
+            <b>自动创作已启用</b>
+            <span className="muted">
+              {s.recommendation
+                ? s.recommendation.recommended_visual_summary
+                : '推荐画面将在分析完成后自动生成；确认媒体即可一次点击生成。'}
+            </span>
+          </div>
+          <button className="btn" onClick={() => setCreationMode('custom')}>调整创作方案</button>
+        </div>
+      )}
+
       {/* 步骤条 */}
       <div className="stepper">
         {STEPS.map(st => (
@@ -405,8 +475,8 @@ export default function MediaAdStudio() {
       {s.studioError && <div className="alert err">{s.studioError}</div>}
       {s.stage === 'error' && s.taskDetail && <div className="alert err">任务失败：{s.taskDetail}</div>}
 
-      {/* Step 1：设置媒体平台 */}
-      {s.step === 1 && (
+      {/* Step 1：设置媒体平台（定制模式逐项配置；自动模式只展示进度） */}
+      {s.step === 1 && s.mode === 'custom' && (
         <div className="card">
           <h3>① 选择媒体推广平台（默认单平台）</h3>
           <p className="muted">只能选择一个平台；选中后展示该平台支持的图片素材数量、规格与尺寸，并可按常规方案调整。</p>
@@ -516,8 +586,13 @@ export default function MediaAdStudio() {
         </div>
       )}
 
+      {s.step === 1 && s.mode === 'auto' && (
+        <AutoProgress label={s.taskLabel} detail={s.taskDetail} logs={s.taskLogs}
+                      running={s.running} stage={s.stage} />
+      )}
+
       {/* Step 2：展示文案 + V4.38 创意文案选用 + 风格设置 */}
-      {s.step === 2 && s.copy && (
+      {s.step === 2 && s.mode === 'custom' && s.copy && (
         <div className="card">
           <h3>② 广告文案（已结合落地页分析结论生成，可编辑并勾选用于出图）</h3>
           <ModelBadge info={s.copy.model_info} fallbackText="文案未走大模型" />
@@ -739,7 +814,12 @@ export default function MediaAdStudio() {
         </div>
       )}
 
-      {/* Step 3：生成推广图片（放大查阅 / 单张下载 / 勾选打包 / 一键打包） */}
+      {s.step === 2 && s.mode === 'auto' && (
+        <AutoProgress label={s.taskLabel} detail={s.taskDetail} logs={s.taskLogs}
+                      running={s.running} stage={s.stage} />
+      )}
+
+      {/* Step 3：推广图片结果（放大查阅 / 单张下载 / 勾选打包 / 一键打包） */}
       {s.step === 3 && (
         <div className="card">
           <h3>③ 推广图片素材</h3>

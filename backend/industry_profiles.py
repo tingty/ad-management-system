@@ -18,6 +18,11 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
+# V4.45 / D2：行业策略是声明式配置，必须带版本号。计划版本把该版本纳入输入，
+# 新增画像或修改策略后，旧的推荐 / 覆盖摘要 / 确认令牌随即失效（文档 A13）。
+# 修改任一画像字段时同步提升此版本号，不要用关键词命中直接放行新动作。
+PROFILE_SCHEMA_VERSION = "1.0"
+
 # ---------------------------------------------------------------------------
 # 通用语义保护：任何行业都不能在「压缩 / 裁剪」中丢失
 # ---------------------------------------------------------------------------
@@ -107,6 +112,8 @@ def _profile(key: str, label: str, aliases: list[str], value_axes: list[str],
     """
     return {
         "key": key, "label": label, "aliases": aliases,
+        # V4.45 / D2：profile_id + version 供策划计划版本引用
+        "profile_id": key, "version": PROFILE_SCHEMA_VERSION,
         "value_axes": value_axes, "evidence_types": evidence_types,
         "visual_subject": visual_subject, "must_preserve": must_preserve,
         "copy_focus": copy_focus, "protected_extra": protected_extra or [],
@@ -404,7 +411,8 @@ def resolve_profile(analysis: dict | None = None, text: str = "",
 
 def list_profiles() -> list[dict]:
     """供前端「行业 / 品类」局部调整选择器使用（不暴露正则实现）。"""
-    return [{k: p[k] for k in ("key", "label", "value_axes", "evidence_types",
+    return [{k: p[k] for k in ("key", "profile_id", "version", "label",
+                               "value_axes", "evidence_types",
                                "visual_subject", "must_preserve", "copy_focus",
                                "placement_preferences", "scene_policy")}
             for p in INDUSTRY_PROFILES.values()]
