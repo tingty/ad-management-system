@@ -1329,6 +1329,7 @@
 **本次优化与更改的功能 / 模块**
 - 【新增】改造追踪 / 问题追踪表与分期路线图：新增 `docs/REMEDIATION_TRACKER.md`，逐项记录 F01–F12 的说明书状态、当前代码核对结果、触发输入、修改文件、验收用例与实施状态；12 个问题按「每期 3 个、独立提交、独立版本通知」拆成 4 期，并标明每期的行业适配落点。说明书中的 Product / Offer / Evidence / Concept / VisualBrief / SpecProfile / GenerationJob / CreativeAsset 归为新增设计需求，不占用问题配额。
 - 【新增】行业适配 / 通用主干 + 局部配置：新增 `backend/industry_profiles.py`，提供电商零售、订阅 / SaaS、App / 游戏、B2B、旅游 / 本地生活、教育、金融合规与通用共 8 个画像；每个画像只定义价值维度、必须保留的语义、需核验的事实类型、视觉主体与文案重点。主干链路对所有行业一致，未命中关键词时回落 `general`，不猜产品事实、不编造价格或功效。新增 `GET /api/industry-profiles` 供前端局部调整。
+- 【优化】行业适配 / 局部调整真实生效：行业画像进入文案生成依据（价值维度与文案重点）与文生图背景提示词（主视觉 + 「不得虚构商品外观、标签、价格、评价与效果数据」约束）；切换电商 / 旅游等画像后，同一通用链路产出不同的表达重点与主视觉，无需改代码。完整的 CreativeConcept / VisualBrief 与商品参考图入口仍属第 3 期 F03，本版不宣称已完成。
 - 【修复】广告文案 / F01 残句判定：`_build_fields_checked` 保留原始模型输出与逐条裁剪状态；超长文案改为有限次「语义压缩」（单字段最多 2 次、单次生成最多 6 次调用），必须保留否定词、价格 / 折扣、期限、试用 / 续费 / 退款 / 取消限制，且输出完整短句。压缩仍失败则返回 `needs_revision`（`valid=false`），字段保留完整原文并明确阻断，不再出现 "Book in minutes." 被裁成 "Book in" 却判合格的情况。
 - 【修复】推广图片 / F01 图内文字预算：平台正文与图内文字分离，新增 `build_overlay_text` + `imaging.text_budget`，按版位尺寸估算标题 / 副标 / CTA 可容纳字符；`render_ad_png` 增加 `strict_text`，放不下时抛 `TextOverflowError` 而不是追加省略号。超预算版位标记 `needs_revision` 并阻止生成，返回 `status=partial_success` / `issues` / `skipped`；前端 Step 2、Step 3 分别展示待修改文案与未生成版位。保留 `style_opts.strict_text=false` 作为上线应急开关。
 - 【修复】落地页分析 / F02 品牌与最终地址：`_brand_of` 不再用 host 倒数第二段推导品牌（`convert.ctypy.com` → Ctypy、`shop.example.co.uk` → Co）；品牌只来自结构化数据、官方页面资料（JSON-LD Organization / og:site_name）或用户明确确认，无法确认时标为 `needs_input` / `unverified` 并给出候选与原因。`fetch_page` 分别保存 `input_url` / `final_url` / `redirect_chain` / `status` / `content_type` / `fetch_quality`，所有相对链接与 Logo 以最终地址解析；`og:image` 不再被无条件当作 Logo，自动来源一律标注「待核验」。
@@ -1349,5 +1350,6 @@
 - 后端全量 `compileall` 通过，`import main` 正常，版本号 4.39.0。
 - DB 副本确定性回归 33 项断言全通过，覆盖 T01 / T02 / T03 / T04 / T13 / T14：残句阻断与语义压缩成功 / 失败两条路径、否定与价格及订阅限制保留、追踪域名与多级后缀品牌、跳转后相对 Logo 与 og:image 待核验、停用配置不可选、超时回退归因与 Mock 不误标 llm。
 - DB 副本 TestClient 端到端 22 项断言全通过：新版通知 `current`（V4.39 + 主要更新内容）与 `roadmap`（3/12 已完成）、行业画像接口、落地页分析证据字段、文案调用快照、短文案 4 版位 PNG 真实落盘、超预算版位 `partial_success` 且不出残图、旧调用兼容、`strict_text=false` 应急开关、素材历史与 viewer 权限。
+- 行业局部调整纯函数断言：8 个画像共用主干，电商与旅游画像的背景提示词 / 文案依据分别包含各自视觉主体与价值维度且互不相同，事实边界约束存在。
 - 前端 `tsc --noEmit` 与 `vite build` 通过（43 模块，253.88 kB JS / 52.51 kB CSS）；`prepare_release.py --check` 通过且无警告（含改造期次 3 问题 / 版本一致性校验）。详细命令与结果见 `docs/REMEDIATION_TRACKER.md` 第 1 期验证记录。
 - 未验证 / 未实施：F03–F09、F11、F12 属第 2–4 期，本次未改动；未运行真实付费模型调用、未测量投放效果，不承诺任何 ROAS / CPA 提升；新增媒体规格、真实商品图与效果反馈链路均留待对应期次并附官方来源与核验日期。

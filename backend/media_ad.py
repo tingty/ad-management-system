@@ -171,6 +171,10 @@ def _analysis_context(analysis: dict, platform: str, lang: str, db=None) -> str:
                     recs.append(f"- {p}: {r}")
         if recs:
             lines.append("推广途径建议（来自落地页分析）:\n" + "\n".join(recs))
+    # V4.39：行业画像参与文案生成，其它行业只改配置即可调整表达重点
+    profile = resolve_profile(analysis, key=(analysis.get("industry_profile") or ""))
+    lines.append(f"行业画像: {profile['label']}；价值维度: {'；'.join(profile['value_axes'])}；"
+                 f"文案重点: {profile['copy_focus']}")
     facts = "\n".join(lines)
     if db is None:
         return (facts + f"\n请基于以上真实分析结论，为媒体平台【{platform}】"
@@ -533,7 +537,14 @@ def _media_image_prompt(analysis: dict, platform: str, directives: dict, design:
                           + " | ".join(ctx_bits) + ".") if ctx_bits else "",
     }
     template = get_prompt(db, "media_image_sys") if db is not None else MEDIA_IMAGE_SYS
-    return compose_image_prompt(template, variables)
+    base = compose_image_prompt(template, variables)
+    # V4.39：行业 / 品类局部调整真正进入画面约束。主干（分析 → 文案 → 背景 → 合成）
+    # 对所有行业一致，这里只替换主视觉与表达重点；电商与订阅并非系统前提。
+    profile = resolve_profile(analysis, key=(analysis.get("industry_profile") or ""))
+    subject = (f"行业视觉约束（局部调整）: {profile['visual_subject']}。"
+               f"表达重点: {'; '.join(profile['value_axes'])}。"
+               "不得虚构商品外观、标签、价格、评价与效果数据。")
+    return f"{base}\n{subject}"
 
 
 def _cleanup_ai_bgs():
