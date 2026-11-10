@@ -1,4 +1,5 @@
 import os
+import secrets
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -7,7 +8,7 @@ from database import engine, Base, SessionLocal
 from models import User, ModelConfig, PromptConfig
 from migrations import ensure_schema
 from routers import router
-from auth import decode_token, hash_password, verify_password
+from auth import decode_token, hash_password
 from services import PROMPT_REGISTRY, sync_prompt_defaults, REMOVED_PROMPT_KEYS
 from version import APP_VERSION
 
@@ -99,26 +100,61 @@ def seed_default_model():
         db.close()
 
 
+# V4.44 / N06：源码不再包含任何固定默认口令（含管理员）。
+# 首次初始化时口令来自 `INITIAL_PASSWORD_<USERNAME>` 环境变量；未配置则用 CSPRNG 随机生成，
+# 只写入 0600 权限的本地引导文件，绝不打印到日志或提交进仓库。
+BOOTSTRAP_FILE = os.path.join(os.path.dirname(__file__), ".bootstrap_credentials")
 DEFAULT_USERS = [
-    ("leson", "Tingty@123.com", "系统管理员", "admin", "leson@recomob.com"),
-    ("manager", "Manager@123", "投放经理", "manager", None),
-    ("editor", "Editor@123", "投放执行", "editor", None),
-    ("viewer", "Viewer@123", "只读账号", "viewer", None),
+    ("leson", "系统管理员", "admin", "leson@recomob.com"),
+    ("manager", "投放经理", "manager", None),
+    ("editor", "投放执行", "editor", None),
+    ("viewer", "只读账号", "viewer", None),
 ]
+
+
+def _initial_password(username: str) -> str:
+    configured = os.getenv(f"INITIAL_PASSWORD_{username.upper()}", "").strip()
+    return configured or secrets.token_urlsafe(18)
+
+
+def _persist_bootstrap(rows: list[tuple[str, str, str]]) -> str:
+    """把一次性初始口令写入本地引导文件（0600）；已存在则追加，不覆盖。"""
+    import json
+    from datetime import datetime, timezone
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "accounts": [{"username": u, "email": e, "initial_password": p}
+                     for u, e, p in rows],
+        "note": "仅用于首次登录；登录后请立即用 scripts/rotate_admin.py 轮换并删除本文件",
+    }
+    with open(BOOTSTRAP_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    try:
+        os.chmod(BOOTSTRAP_FILE, 0o600)
+    except OSError:
+        pass
+    return BOOTSTRAP_FILE
+
 
 def seed_users():
     db = SessionLocal()
     try:
-        if db.query(User).count() == 0:
-            for username, pwd, name, role, email in DEFAULT_USERS:
-                h, s = hash_password(pwd)
-                u = User(username=username, display_name=name, role=role,
-                         password_hash=h, salt=s, active=True)
-                if email:
-                    u.email = email
-                db.add(u)
-            db.commit()
-            print("[seed] 默认账号已创建：leson(admin) / manager / editor / viewer")
+        if db.query(User).count() > 0:
+            return                      # 已有账号：绝不改写口令 / 重置任何字段
+        rows = []
+        for username, name, role, email in DEFAULT_USERS:
+            pwd = _initial_password(username)
+            h, s = hash_password(pwd)
+            u = User(username=username, display_name=name, role=role,
+                     password_hash=h, salt=s, active=True)
+            if email:
+                u.email = email
+            db.add(u)
+            rows.append((username, email or "", pwd))
+        db.commit()
+        path = _persist_bootstrap(rows)
+        print(f"[seed] 已创建初始账号；随机初始口令仅保存在 {path}（0600），"
+              "请首次登录后立即轮换并删除该文件")
     finally:
         db.close()
 
@@ -141,53 +177,30 @@ def backfill_user_emails():
         db.close()
 
 
-# 历史默认密码（早期版本/部署产生的默认口令）。命中这些值的账号视为“仍处于默认状态”，
-# 启动时会重置为当前统一默认管理员口令，从而保证重新部署后默认 admin 一定能登录。
-LEGACY_DEFAULT_PASSWORDS = {
-    "Admin@123", "admin123", "Admin@123.com", "123456",
-    "Tingty@123", "Tingty@123.com",
-}
-
-
 def ensure_default_admin():
-    """保证默认管理员账号始终可用（幂等）。
+    """V4.44 / N06：安全初始化，不再有「命中历史默认口令就重置」的自愈逻辑。
 
-    无论历史库里 admin 是什么状态（早期 admin/Admin@123、被兜底成 <user>@example.com、
-    或首启后从未登录），重新部署后都能用统一凭据登录：
-        邮箱：leson@recomob.com   密码：Tingty@123.com
-    仅当账号仍处于“默认/未初始化”状态时才重置密码；若管理员已改成自定义密码，则保留不动。
-    该账号为引导用默认管理员，首次登录后请尽快修改密码。
+    - 已存在任何启用的 admin：一律不改动用户名 / 邮箱 / 口令 / 角色；
+    - 完全没有 admin 时才补建，口令同样来自环境变量或 CSPRNG 随机值；
+    - 需要轮换时由管理员显式执行 `scripts/rotate_admin.py`（同时轮换 AUTH_SECRET，
+      使既有会话全部失效），源码里不再保存任何固定口令。
     """
     email = os.getenv("DEFAULT_ADMIN_EMAIL", "leson@recomob.com")
     username = os.getenv("DEFAULT_ADMIN_USERNAME", "leson")
-    password = os.getenv("DEFAULT_ADMIN_PASSWORD", "Tingty@123.com")
     db = SessionLocal()
     try:
-        u = db.query(User).filter(User.email == email).first()
-        if not u:
-            u = db.query(User).filter(User.username == username).first()
-        if not u:
-            u = User(username=username)
-            db.add(u)
-        # 是否仍处于默认/未初始化状态？
-        is_legacy = (
-            u.password_hash is None
-            or (u.email or "").endswith("@example.com")
-            or any(verify_password(p, u.password_hash, u.salt) for p in LEGACY_DEFAULT_PASSWORDS)
-        )
-        u.username = username
-        u.email = email
-        u.display_name = "系统管理员"
-        u.role = "admin"
-        u.active = True
-        if is_legacy:
-            h, s = hash_password(password)
-            u.password_hash = h
-            u.salt = s
-            print(f"[ensure_admin] 默认管理员已重置为：{email}")
-        else:
-            print(f"[ensure_admin] 默认管理员已存在且非默认密码，保留当前口令：{email}")
+        existing = db.query(User).filter(User.role == "admin",
+                                        User.active.is_(True)).first()
+        if existing:
+            print(f"[ensure_admin] 已存在管理员，保留当前凭据不做重置：{existing.email or existing.username}")
+            return
+        pwd = os.getenv("DEFAULT_ADMIN_PASSWORD", "").strip() or secrets.token_urlsafe(18)
+        h, s = hash_password(pwd)
+        db.add(User(username=username, email=email, display_name="系统管理员",
+                    role="admin", password_hash=h, salt=s, active=True))
         db.commit()
+        path = _persist_bootstrap([(username, email, pwd)])
+        print(f"[ensure_admin] 已补建管理员；初始口令见 {path}（0600），请立即轮换")
     finally:
         db.close()
 

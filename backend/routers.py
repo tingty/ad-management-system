@@ -176,6 +176,15 @@ async def create_generation_job(body: dict, db: Session = Depends(get_db),
             "errors": [f"{'.'.join(str(x) for x in er.get('loc', []))}: {er.get('msg')}"
                        for er in e.errors()[:8]],
         })
+    except job_service.IdempotencyConflict as e:
+        # V4.44 / N05 / A16：同一幂等键换了请求内容，必须 409，不能返回旧任务
+        raise HTTPException(409, detail={
+            "message": str(e),
+            "job_id": e.job_id,
+            "expected_payload_hash": e.expected,
+            "actual_payload_hash": e.actual,
+            "hint": "请更换 idempotency_key，或先查询原任务结果；系统不会串用其它请求的任务。",
+        })
     except Exception as e:
         raise HTTPException(422, detail={"message": "生成任务创建失败",
                                         "errors": [f"{type(e).__name__}: {str(e)[:180]}"]})

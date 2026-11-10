@@ -35,6 +35,8 @@ from providers import (get_llm_with_info, finalize_invocation,
 from presets import style_visual, palette_prompt, DIRECTION_MOOD
 # V4.35：广告推广文案 / 推广图片的提示词改由「素材提示词」统一管理，保存即生效
 from services import get_prompt
+# V4.44 / N01：证据→承诺强引用与生成后限定校验
+from claims import EvidenceSnapshot, claim_contract, audit_copy_fields
 from prompt_catalog import (render_prompt, compose_copy_prompt, compose_image_prompt,
                             load_preset_overrides, MEDIA_IMAGE_SYS)
 from imaging import render_ad_png, text_budget, TextOverflowError
@@ -105,6 +107,12 @@ MEDIA_COPY_SCHEMA = {
     "TikTok": [
         {"key": "headline", "label": "标题", "max": 40, "count": 1},
         {"key": "body", "label": "文案", "max": 100, "count": 1},
+        {"key": "cta", "label": "CTA", "max": 20, "count": 1},
+    ],
+    # V4.44 / N04：Moloco 图片 / 原生角色的文案字段（内部整理，待官方复核）
+    "Moloco": [
+        {"key": "headline", "label": "标题", "max": 40, "count": 1},
+        {"key": "body", "label": "正文", "max": 90, "count": 1},
         {"key": "cta", "label": "CTA", "max": 20, "count": 1},
     ],
 }
@@ -184,6 +192,43 @@ def _brand_of(analysis: dict) -> str:
 
 
 # ----------------------------- 文案生成 -----------------------------
+def _evidence_context(analysis: dict) -> str:
+    """V4.44 / N01：把 facts / evidence_chain / 限定契约真正送进文案模型。
+
+    V4.43 的 `_analysis_context` 只传 8 字段摘要，证据字段停留在接口结果里，
+    模型看不到「哪条承诺该引用哪个编号」，短句因此丢掉 `up to / 最多 / 护理模式`。
+    """
+    a = analysis if isinstance(analysis, dict) else {}
+    snap = EvidenceSnapshot.from_analysis(a)
+    if not snap.available:
+        return ("【证据状态】本次没有可定位的原文证据快照（旧历史 / 抓取失败）。"
+                "禁止输出任何含数字、价格、效果、试用、退货或订阅条件的承诺；"
+                "只写页面已明示的中性描述，缺资料须标注为未确认。")
+    bits = [f"【不可变证据快照】{snap.snapshot_id}，可引用编号 "
+            + "、".join(sorted(snap.valid_ids)[:24])]
+    for label, key in (("已验证事实 facts", "facts"), ("营销假设 assumptions", "assumptions"),
+                       ("资料缺口 gaps", "gaps")):
+        rows = [str(x).strip() for x in (a.get(key) or []) if str(x or "").strip()][:12]
+        if rows:
+            bits.append(f"{label}：" + "；".join(rows))
+    chain = []
+    for row in (a.get("evidence_chain") or [])[:16]:
+        if isinstance(row, dict):
+            claim = str(row.get("claim") or "").strip()[:160]
+            ids = "、".join(str(x) for x in (row.get("evidence_ids") or []) if x)
+            if claim:
+                chain.append(f"- {claim}｜引用 {ids or '（无）'}"
+                             + ("｜已剔除无效引用" if row.get("rejected") else ""))
+    if chain:
+        bits.append("【事实 → 证据映射（只允许引用下列已存在编号）】\n" + "\n".join(chain))
+    invalid = [str(x) for x in (a.get("evidence_invalid_ids") or []) if x]
+    if invalid:
+        bits.append("【已被拒绝的证据编号】" + "、".join(invalid[:24])
+                    + "；这些编号不存在或无法定位原文，禁止在文案里沿用其承诺。")
+    bits.append(claim_contract(snap))
+    return "\n".join(bits)
+
+
 def _analysis_context(analysis: dict, platform: str, lang: str, db=None) -> str:
     """把落地页 8 字段分析结论拼成「生成依据」提示词（必须作为文案/图片的事实基础）。
 
@@ -225,6 +270,8 @@ def _analysis_context(analysis: dict, platform: str, lang: str, db=None) -> str:
     profile = resolve_profile(analysis, key=(analysis.get("industry_profile") or ""))
     lines.append(f"行业画像: {profile['label']}；价值维度: {'；'.join(profile['value_axes'])}；"
                  f"文案重点: {profile['copy_focus']}")
+    # V4.44 / N01：证据链与限定契约进入文案依据，不再停留在接口返回里
+    lines.append(_evidence_context(analysis))
     facts = "\n".join(lines)
     if db is None:
         return (facts + f"\n请基于以上真实分析结论，为媒体平台【{platform}】"
@@ -488,6 +535,17 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
                               "before": original, "after": original,
                               "attempts": COMPRESS_MAX_ATTEMPTS})
 
+    # V4.44 / N01：生成后统一校验证据引用与限定保护，与文案是否超长、是否压缩无关
+    claim_audit = audit_copy_fields(fields, analysis)
+    for v in (claim_audit.get("violations") or []):
+        needs_revision.append({
+            "field": v.get("field", ""), "label": labels.get(v.get("field", ""), v.get("field", "")),
+            "index": v.get("index") if isinstance(v.get("index"), int) else 0,
+            "original": v.get("text", ""), "limit": 0,
+            "protected": v.get("missing") or v.get("invalid_ids") or [],
+            "reason": "证据 / 承诺校验未通过：" + str(v.get("reason") or ""),
+            "type": v.get("type"),
+        })
     validation = _validate(fields, schema, needs_revision)
     char_rows = _char_table(fields, schema)
     return {
@@ -504,6 +562,8 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
         "clips": built["clips"],
         "copy_revisions": revisions,
         "needs_revision": needs_revision,
+        # V4.44 / N01：可追溯的证据→承诺审计（可定位原文 ≠ 商业真实性已审核）
+        "claim_audit": claim_audit,
         "industry_profile": profile["key"],
         "industry_profile_label": profile["label"],
         "compress_calls": compress_calls,

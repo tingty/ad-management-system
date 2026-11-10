@@ -330,6 +330,16 @@ function ResultView({ data, historyId, logoMode, uploadedLogo, onLogoMode, onUpl
             <b>事实证据链 · 送入 {data.evidence_coverage?.length || 0} 段 / 原文 {data.evidence_source_chars || 0} 字
               （未覆盖 {data.evidence_dropped_chars || 0} 字）</b>
             {data.legacy_unverified && <span className="pill off">旧数据：legacy_unverified</span>}
+            {/* V4.44 / N01：唯一 [E###] 命名空间、不可变快照与审核状态分离 */}
+            {data.evidence_snapshot_id && (
+              <span className="pill">证据快照 {data.evidence_snapshot_id} · 可定位原文 / 商业真实性未审核</span>
+            )}
+            {(data.evidence_invalid_ids || []).length > 0 && (
+              <div className="la-ev-warn">
+                已拒绝 {data.evidence_invalid_ids!.length} 个不存在的证据编号：
+                {data.evidence_invalid_ids!.join('、')}；对应承诺不会进入文案依据。
+              </div>
+            )}
             {(data.evidence_expired_offers || []).length > 0 && (
               <div className="la-ev-warn">
                 检测到 {data.evidence_expired_offers!.length} 条过期优惠，
@@ -352,7 +362,10 @@ function ResultView({ data, historyId, logoMode, uploadedLogo, onLogoMode, onUpl
               <details className="la-ev-details">
                 <summary>查看 {data.evidence_chain!.length} 条承诺 → 证据编号映射</summary>
                 <ul>{data.evidence_chain!.map((c, i) => (
-                  <li key={i}>{c.claim} <span className="muted">[{c.kind}] {c.evidence_ids.join(', ') || '未引用'}</span></li>
+                  <li key={i}>
+                    {c.rejected && <span className="pill off">引用无效 · 已拒绝</span>} {c.claim}{' '}
+                    <span className="muted">[{c.kind}] {c.evidence_ids.join(', ') || '未引用'}</span>
+                  </li>
                 ))}</ul>
               </details>
             )}

@@ -236,6 +236,77 @@ def build_evidence_index(text: str, sections: list[dict], source_url: str = "",
     return out
 
 
+def build_canonical_index(src: str, coverage: list[dict], sections: list[dict],
+                          clauses: list[dict], source_url: str = "",
+                          fetched_at: str = "") -> list[dict]:
+    """V4.44 / N01：把 `[E###]` 采样编号与 `EV_S###` 分区记录统一到**单一命名空间**。
+
+    修复文档指出的「两套编号并存且无强映射」：对外可引用的证据 ID 只有 `[E###]`，
+    每条都带原文 quote / 字符区间 / 所属分区 / 条款类型 / 来源与采集时间；
+    分区记录退为内部结构，只通过 `section_ids` 反向挂到采样编号上，不再作为可引用 ID。
+    """
+    clause_positions = {int(c.get("char_start") or 0) for c in (clauses or [])}
+    clause_kinds: dict[int, set[str]] = {}
+    for c in clauses or []:
+        clause_kinds.setdefault(int(c.get("char_start") or 0), set()).add(str(c.get("kind") or ""))
+
+    def _sections_of(a: int, b: int) -> list[str]:
+        out = []
+        for s in sections or []:
+            sa, sb = int(s.get("char_start") or 0), int(s.get("char_end") or 0)
+            if sa < b and sb > a:
+                out.append(str(s.get("section_id") or ""))
+        return [x for x in out if x][:8]
+
+    def _kinds_of(a: int, b: int) -> list[str]:
+        kinds: set[str] = set()
+        for p, ks in clause_kinds.items():
+            if a <= p < b:
+                kinds |= ks
+        return sorted(k for k in kinds if k)
+
+    out: list[dict] = []
+    for c in coverage or []:
+        eid = str(c.get("evidence_id") or "")
+        if not eid:
+            continue
+        a, b = int(c.get("char_start") or 0), int(c.get("char_end") or 0)
+        quote = _clean((src or "")[a:b])[:600]
+        out.append({
+            "evidence_id": eid,
+            "quote": quote,
+            "char_start": a, "char_end": b,
+            "tags": list(c.get("tags") or []),
+            "section_ids": _sections_of(a, b),
+            "source_url": source_url,
+            "fetched_at": fetched_at,
+            "clause_kinds": _kinds_of(a, b),
+            "has_key_clause": any(a <= p < b for p in clause_positions),
+            "verification": "original_text" if quote else "empty",
+            # 可定位原文 ≠ 商业真实性已审核，两者必须分开（文档 N01）
+            "review_status": "locatable_not_reviewed",
+            "legacy_unverified": False,
+            "referenceable": bool(quote),
+        })
+    return out
+
+
+def snapshot_id_of(index: list[dict], final_url: str, fetched_at: str = "") -> str:
+    """不可变证据快照标识：原文片段 + 来源参与哈希。
+
+    采集时间只在记录里保存、不参与哈希：同一页面内容未变时快照 ID 稳定，
+    便于去重与跨次追溯；内容变化才是新快照。
+    """
+    import hashlib
+    import json
+    payload = json.dumps(
+        {"url": final_url,
+         "items": [[x.get("evidence_id"), x.get("char_start"), x.get("char_end"),
+                    x.get("quote")] for x in (index or [])]},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "evs_" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def evidence_gate(page: dict, text: str, *, now: datetime | None = None) -> dict:
     """返回是否允许进入模型。空页 / 抓取失败 / 薄内容 / 过期优惠一律 needs_input。"""
     page = page or {}
@@ -272,7 +343,16 @@ def build_evidence_pack(page: dict, text: str, *, budget: int = DEFAULT_BUDGET,
     gate = evidence_gate(page, src, now=now)
     final_url = page.get("final_url") or page.get("input_url") or ""
     fetched_at = datetime.now(timezone.utc).isoformat()
-    index = build_evidence_index(src, sections, final_url, fetched_at)
+    # V4.44 / N01：分区记录只作内部索引，对外统一用 [E###] 采样编号
+    section_index = build_evidence_index(src, sections, final_url, fetched_at)
+    for s in section_index:
+        a, b = int(s.get("char_start") or 0), int(s.get("char_end") or 0)
+        s["sample_ids"] = [c["evidence_id"] for c in sampled["coverage"]
+                           if int(c["char_start"]) < b and int(c["char_end"]) > a]
+        s["referenceable"] = False
+    canonical = build_canonical_index(
+        src, sampled["coverage"], sections, sampled["clauses"], final_url, fetched_at)
+    ids = [x["evidence_id"] for x in canonical if x["referenceable"]]
     return {
         "gate": gate,
         "budgeted_text": sampled["budgeted_text"],
@@ -282,14 +362,16 @@ def build_evidence_pack(page: dict, text: str, *, budget: int = DEFAULT_BUDGET,
         "source_chars": sampled["source_chars"],
         "clauses": sampled["clauses"],
         "sections": sections[:24],
-        "evidence": index[:24],
-        "evidence_ids": [x["evidence_id"] for x in index[:24]],
+        "evidence": canonical[:24],
+        "sections_index": section_index[:24],
+        "evidence_ids": ids[:24],
+        "evidence_snapshot_id": snapshot_id_of(canonical[:24], final_url, fetched_at),
         "section_count": len(sections),
         "final_url": final_url,
         "fetched_at": fetched_at,
-        "legacy_unverified": not bool(index),
-        "note": "证据来自页面原文；已验证事实 / 营销假设 / 缺口在分析结构中分离，"
-                "竞品须独立研究附来源，不从 URL 猜产品事实",
+        "legacy_unverified": not bool(canonical),
+        "note": "证据来自页面原文；[E###] 为唯一可引用编号，分区记录退为内部索引；"
+                "已验证事实 / 营销假设 / 缺口分离，竞品须独立研究附来源，不从 URL 猜产品事实",
     }
 
 
@@ -297,8 +379,9 @@ def evidence_contract(pack: dict) -> str:
     """写进落地页分析提示词的证据边界条款。"""
     return (
         "证据使用规则（必须遵守）：\n"
-        "1. 只把下方带 [E###] 标记的正文片段当作已验证事实来源；每条价格、优惠、退货、"
-        "订阅、试用或效果承诺都必须在对应字段的 evidence_ids 里引用片段编号。\n"
+        "1. 只把下方带 [E###] 标记的正文片段当作已验证事实来源，且 [E###] 是唯一可引用"
+        "编号（分区号不可引用）；每条价格、优惠、退货、订阅、试用或效果承诺都必须在"
+        "对应字段的 evidence_ids 里引用片段编号，引用不存在的编号会被程序拒绝。\n"
         "2. 把「已验证事实(facts)」「营销假设(assumptions)」「资料缺口(gaps)」分开输出；"
         "缺资料时写进 gaps 并留空相应字段，绝不从域名、URL 或行业常识推断产品事实。\n"
         "3. 竞品只能来自正文里明确出现且有证据编号的名字；不得推断全球排名、市场份额或"

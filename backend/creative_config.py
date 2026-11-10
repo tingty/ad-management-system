@@ -16,6 +16,8 @@ import json
 import re
 
 from presets import build_directives, DIRECTION_TO_TEMPLATE
+from industry_profiles import scene_policy as resolve_scene_policy
+from claims import EvidenceSnapshot
 
 CREATIVE_CONFIG_VERSION = "4.41.1"
 
@@ -52,22 +54,10 @@ LAYOUT_COMPOSITION = {
               "box; no element may overlap another",
 }
 
-# 不同概念即使没有明显关键词，也必须给出不同的主体动作 / 场景，
-# 避免「换文案不换画面」。用概念文本的稳定哈希从池中确定性选取。
-_ACTION_POOL = (
-    "a person actively demonstrating the product with both hands, clear step-by-step motion",
-    "the product in use during a daily commute, candid street-level context and natural movement",
-    "a close-up of the product's key mechanism being operated, tactile detail and material texture",
-    "a calm side-by-side arrangement showing the product next to its everyday context",
-    "a first-person point of view of someone reaching for and using the product",
-)
-_SETTING_POOL = (
-    "bright uncluttered indoor tabletop with soft directional daylight",
-    "real urban transit / street environment with natural depth of field",
-    "neutral studio surface with gentle shadows and a single light source",
-    "authentic home or workspace with believable everyday props",
-    "clean outdoor daylight setting with soft background bokeh",
-)
+# V4.44 / N02：删除「按关键词 + 概念文本哈希从动作 / 场景池随机挑选」的兜底。
+# 验收文档指出：SaaS / B2B / 公益项目未必存在「双手操作、通勤、实体产品特写」，
+# 随机换场景不是产品策划。场景与主体改由 industry_profiles.SCENE_POLICIES 声明式提供，
+# 概念之间的差异由「购买理由 / 已验证承诺 / 版式 / 资产角色」表达，而不是随机动作。
 
 _CLEAN_RE = re.compile(r"clean|wash|stain|demo|demonstrat|before|after|清洗|清洁|去污|演示|对比", re.I)
 _COMMUTE_RE = re.compile(r"commut|travel|on.the.go|portable|outdoor|pocket|通勤|路上|便携|随身", re.I)
@@ -179,11 +169,45 @@ def visual_text_block(config: dict) -> str:
     return "；".join(parts)
 
 
+def _claim_overlap(a: str, b: str) -> float:
+    """轻量词面重叠，用于把文案承诺回连到已引用的事实（不调用模型）。"""
+    def toks(s):
+        en = re.findall(r"[a-z0-9]+", str(s or "").lower())
+        zh = re.findall(r"[\u4e00-\u9fff]", str(s or ""))
+        grams = ["".join(zh[i:i + 2]) for i in range(max(0, len(zh) - 1))]
+        return {x for x in en if len(x) > 1} | set(grams)
+    x, y = toks(a), toks(b)
+    return len(x & y) / max(1, min(len(x), len(y))) if x and y else 0.0
+
+
+def _claim_refs(variant_text: str, analysis: dict) -> tuple[list[dict], list[str]]:
+    """V4.44 / N01：概念的核心承诺必须能回连到 evidence_chain 中已引用的事实。"""
+    a = analysis if isinstance(analysis, dict) else {}
+    snap = EvidenceSnapshot.from_analysis(a)
+    refs, ids = [], []
+    for row in (a.get("evidence_chain") or [])[:16]:
+        if not isinstance(row, dict) or row.get("rejected"):
+            continue
+        claim = _clean(row.get("claim"))
+        if not claim:
+            continue
+        score = _claim_overlap(variant_text, claim)
+        if score < 0.2:
+            continue
+        valid = [x for x in (row.get("evidence_ids") or []) if x in snap.valid_ids]
+        refs.append({"claim": claim[:200], "evidence_ids": valid,
+                     "match_score": round(score, 3),
+                     "verified": bool(valid) and snap.available})
+        ids.extend(valid)
+    return refs[:6], sorted(set(ids))[:12]
+
+
 def build_concept(variant: dict, index: int, analysis: dict, profile: dict) -> dict:
-    """F03：由用户勾选的一条文案组合构造 `CreativeConcept`。
+    """F03 / V4.44 N01：由用户勾选的一条文案组合构造 `CreativeConcept`。
 
     不调用大模型、不编造事实：受众来自落地页分析，购买阻力只从文案里显式出现
-    的限定词推断，缺证据时明确写「未明示」。
+    的限定词推断；`evidence` 只表示文案副标（不是已验证证据），真正的事实引用
+    放在 `claim_refs` / `evidence_ids`，且与证据快照中的 `[E###]` 强绑定。
     """
     v = variant if isinstance(variant, dict) else {}
     headline = _clean(v.get("headline"))
@@ -198,6 +222,7 @@ def build_concept(variant: dict, index: int, analysis: dict, profile: dict) -> d
     friction = ("、".join(sorted({b.lower() for b in barriers}))[:120]
                 if barriers else "文案未明示购买阻力（不虚构）")
     key = _sha("|".join((headline, sub, cta)))
+    refs, evidence_ids = _claim_refs(text, analysis or {})
     return {
         "concept_id": _clean(v.get("concept_id")) or f"C{index + 1}",
         "concept_key": "ck_" + key,
@@ -206,6 +231,11 @@ def build_concept(variant: dict, index: int, analysis: dict, profile: dict) -> d
         "purchase_friction": friction,
         "core_promise": headline or sub or "（用户未选定可用文案）",
         "evidence": sub or "（该概念未提供证据副标）",
+        # 明确区分「文案副标」与「可定位原文证据」
+        "evidence_kind": "copy_subhead_not_verified",
+        "claim_refs": refs,
+        "evidence_ids": evidence_ids,
+        "claim_verified": bool(evidence_ids),
         "cta": cta,
         "industry_profile": _clean((profile or {}).get("key")),
     }
@@ -236,29 +266,33 @@ def choose_layout(concept: dict, config: dict, w: int, h: int) -> str:
     return hint if hint in LAYOUTS else "hero"
 
 
-def _pick(pool: tuple[str, ...], seed: str) -> str:
-    return pool[int(seed, 16) % len(pool)]
-
-
 def build_visual_brief(concept: dict, analysis: dict, profile: dict,
                        config: dict, w: int, h: int,
                        placement: str = "", ad_product: str = "") -> dict:
-    """F03：把创意概念翻译成可被文生图供应商与本地合成共同消费的 `VisualBrief`。"""
-    text = " ".join((_clean(concept.get("core_promise")), _clean(concept.get("evidence"))))
-    seed = _sha(text or concept.get("concept_key") or "generic", 16)
-    # 场景词优先于动作词：「Commute portable cleaning」是通勤场景，
-    # 不能因为含 cleaning 就被判成清洗演示，否则两个概念仍会得到同一画面。
-    if _COMMUTE_RE.search(text):
-        action, setting = _ACTION_POOL[1], _SETTING_POOL[1]
-    elif _CLEAN_RE.search(text):
-        action, setting = _ACTION_POOL[0], _SETTING_POOL[0]
-    elif _DETAIL_RE.search(text):
-        action, setting = _ACTION_POOL[2], _SETTING_POOL[2]
-    else:
-        action, setting = _pick(_ACTION_POOL, seed), _pick(_SETTING_POOL, seed)
+    """F03 / V4.44 N02：把创意概念翻译成 `VisualBrief`，场景由**产品事实**驱动。
 
+    不再按关键词或哈希从通用动作池挑选画面：行业画像只声明允许 / 禁止的场景类型，
+    主体资产类型由 entity_type 决定（软件用真实 UI、实体商品用官方 SKU 图、
+    B2B 用授权交付物、旅游用授权目的地照片），无法匹配时走中性品牌形式。
+    """
+    pol = resolve_scene_policy(profile)
+    a = analysis if isinstance(analysis, dict) else {}
     layout = choose_layout(concept, config, w, h)
     pal = ((config or {}).get("visual") or {}).get("palette") or {}
+    entity = pol["entity_type"]
+    facts = [str(x).strip() for x in (a.get("facts") or []) if str(x or "").strip()][:3]
+    claim_refs = list((concept or {}).get("claim_refs") or [])
+    scene_detail = "；".join(facts + [str(r.get("claim") or "") for r in claim_refs[:2]
+                                     if r.get("claim")]).strip("；")[:400]
+    forbidden = list(pol["forbidden_inferences"])
+    if entity == "software":
+        boundary = ("不得虚构商品外观、标签、规格、价格、评价与效果数据；"
+                    "背景层不得生成文字、字母、数字、Logo、水印或虚构 UI 控件；"
+                    "真实产品界面由本地图层合成，不受 no-UI 背景约束（A09）")
+    else:
+        boundary = ("不得虚构商品外观、标签、规格、价格、评价与效果数据；"
+                    "背景层不得生成文字、字母、数字、Logo、水印、虚构 UI 控件，"
+                    "也不得生成第二个同类商品")
     return {
         "concept_id": concept.get("concept_id", ""),
         "concept_key": concept.get("concept_key", ""),
@@ -267,18 +301,31 @@ def build_visual_brief(concept: dict, analysis: dict, profile: dict,
         "placement": placement,
         "ad_product": ad_product,
         "subject": _clean((profile or {}).get("visual_subject")) or "与页面真实内容一致的中性主视觉",
-        "action": action,
-        "setting": setting,
+        "action": pol["default_action"],
+        "setting": pol["default_setting"],
         "composition": LAYOUT_COMPOSITION[layout],
         "core_promise": concept.get("core_promise", ""),
         "evidence": concept.get("evidence", ""),
+        "evidence_kind": "copy_subhead_not_verified",
         "audience_scenario": concept.get("audience_scenario", ""),
         "purchase_friction": concept.get("purchase_friction", ""),
         "palette": {"accent": pal.get("accent", ""), "bg1": pal.get("bg1", ""),
                     "light": bool(pal.get("light"))},
         "dim_ratio": ((config or {}).get("visual") or {}).get("dim_ratio", 0.28),
-        "facts_boundary": "不得虚构商品外观、标签、规格、价格、评价与效果数据；"
-                          "不得出现任何文字、字母、数字、Logo、水印与 UI 控件",
+        "facts_boundary": boundary + "；" + "；".join(forbidden),
+        # V4.44 / N02：场景策略可追溯，明确「未随机」
+        "scene_source": "declared_profile_policy",
+        "scene_randomized": False,
+        "entity_type": entity,
+        "subject_asset": pol["subject_asset"],
+        "asset_requirement": ("required" if pol["requires_asset"] else "optional"),
+        "allowed_scene_types": list(pol["allowed_scene_types"]),
+        "forbidden_inferences": forbidden,
+        "product_facts": facts,
+        "scene_detail": scene_detail,
+        "claim_refs": claim_refs,
+        "evidence_ids": list((concept or {}).get("evidence_ids") or []),
+        "claim_verified": bool((concept or {}).get("claim_verified")),
         "reference_mode": "none",
         "capability_note": "",
     }
@@ -298,6 +345,9 @@ def brief_prompt_block(brief: dict) -> str:
         "Subject: %s" % b.get("subject", ""),
         "Action: %s" % b.get("action", ""),
         "Setting: %s" % b.get("setting", ""),
+        "Product facts / scene detail: %s" % (b.get("scene_detail") or "（页面未标注，不虚构）"),
+        "Subject asset required: %s (%s)" % (b.get("subject_asset", ""), b.get("asset_requirement", "")),
+        "Claim evidence: %s" % ("、".join(b.get("evidence_ids") or []) or "（该概念未绑定可定位原文）"),
         "Composition: %s" % b.get("composition", ""),
         "Facts boundary: %s" % b.get("facts_boundary", ""),
     ]

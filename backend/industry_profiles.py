@@ -215,6 +215,93 @@ for _key, _prefs in PLACEMENT_PREFERENCES.items():
     if _key in INDUSTRY_PROFILES:
         INDUSTRY_PROFILES[_key]["placement_preferences"] = list(_prefs)
 
+# ---------------------------------------------------------------------------
+# V4.44 / N02：声明式「场景与主体」策略，取代按关键词 + 哈希选动作的兜底
+# ---------------------------------------------------------------------------
+# 文档 N02：SaaS / B2B / 公益项目未必存在「双手操作、通勤、实体产品特写」等动作。
+# 这里只声明候选与禁止条件，不执行任意脚本；场景必须由产品事实与真实资产决定，
+# 不得靠随机更换场景制造多样性。字段与文档「行业策略配置的最低结构」一致。
+SCENE_POLICIES: dict[str, dict] = {
+    "ecommerce": {
+        "entity_type": "physical_good", "subject_asset": "official_sku_image",
+        "requires_asset": True,
+        "allowed_scene_types": ["官方 SKU 主体", "真实使用场景", "包装与配件"],
+        "forbidden_inferences": ["虚构第二个商品", "把文生图重绘的商品当官方 SKU",
+                                 "未出现的颜色 / 型号 / 屏幕内容"],
+        "default_action": "展示官方商品主体，保持外观、颜色与结构与已确认素材一致",
+        "default_setting": "与页面已确认用途一致的真实使用场景，不生成另一件同类商品",
+    },
+    "subscription": {
+        "entity_type": "software", "subject_asset": "real_ui",
+        "requires_asset": True,
+        "allowed_scene_types": ["真实界面完成单一任务", "实际输出物", "订阅权益说明"],
+        "forbidden_inferences": ["虚构功能界面", "虚构上涨曲线 / 客户评价 / 收益数字",
+                                 "装饰性机器人或人物代替产品界面"],
+        "default_action": "用真实产品界面呈现一个已确认的任务及其输出",
+        "default_setting": "简洁工作区，界面占主面积，旁边是一条已验证价值文案",
+    },
+    "app_game": {
+        "entity_type": "software", "subject_asset": "real_ui",
+        "requires_asset": True,
+        "allowed_scene_types": ["真实玩法 / 功能界面", "官方角色与场景素材"],
+        "forbidden_inferences": ["虚构关卡与角色", "虚构商店评分或下载量"],
+        "default_action": "呈现官方界面或已授权角色素材中的明确玩法",
+        "default_setting": "与产品类型一致的中性背景，不叠加虚构 UI 控件",
+    },
+    "b2b_service": {
+        "entity_type": "service", "subject_asset": "authorized_deliverable",
+        "requires_asset": True,
+        "allowed_scene_types": ["服务流程", "授权交付物 / 报表示例", "可衡量合作方式"],
+        "forbidden_inferences": ["虚构客户评价", "虚构收益数字或上涨曲线",
+                                 "双手操作实体产品", "未授权 Logo"],
+        "default_action": "用真实服务流程或授权交付物展示从检查到复盘的交付过程",
+        "default_setting": "克制的可信版面，一条清晰标题 + 可验证依据",
+    },
+    "travel_local": {
+        "entity_type": "travel", "subject_asset": "authorized_destination",
+        "requires_asset": True,
+        "allowed_scene_types": ["已确认目的地授权照片", "真实可售路线或服务价值"],
+        "forbidden_inferences": ["虚构低价与倒计时", "未确认的实时价格",
+                                 "未确认的日期 / 出发地 / 适用条件"],
+        "default_action": "用已确认目的地的授权照片表达出行场景",
+        "default_setting": "目的地实拍氛围；报价仅在日期、出发地与条件完整时出现",
+    },
+    "education": {
+        "entity_type": "service", "subject_asset": "authorized_deliverable",
+        "requires_asset": False,
+        "allowed_scene_types": ["真实课程内容 / 学习界面", "已授权教学场景"],
+        "forbidden_inferences": ["虚构通过率 / 提分数据", "虚构师资与证书"],
+        "default_action": "展示已确认的课程内容或学习界面",
+        "default_setting": "简洁学习环境，不摆放虚构实体教具",
+    },
+    "finance": {
+        "entity_type": "service", "subject_asset": "authorized_deliverable",
+        "requires_asset": False,
+        "allowed_scene_types": ["已授权产品界面", "合规说明版面"],
+        "forbidden_inferences": ["收益率承诺", "虚构监管背书", "虚构上涨曲线"],
+        "default_action": "用已授权界面或合规版面说明产品事实",
+        "default_setting": "中性品牌版式，不出现未核验的数字承诺",
+    },
+    "general": {
+        "entity_type": "general", "subject_asset": "neutral_brand",
+        "requires_asset": False,
+        "allowed_scene_types": ["中性品牌形式", "已确认的抽象价值表达"],
+        "forbidden_inferences": ["随机加入人物", "随机加入实体产品",
+                                 "随机切换通勤 / 家居 / 街拍场景", "从行业名拼通用画面"],
+        "default_action": "保持中性品牌构图，主体仅来自已确认素材",
+        "default_setting": "克制的品牌背景与文字区，不虚构产品或使用场景",
+    },
+}
+for _key, _policy in SCENE_POLICIES.items():
+    if _key in INDUSTRY_PROFILES:
+        INDUSTRY_PROFILES[_key]["scene_policy"] = dict(_policy)
+
+
+def scene_policy(profile: dict | None = None) -> dict:
+    """取画像的场景策略；未登记画像一律回落到保守的 general。"""
+    p = profile if isinstance(profile, dict) else {}
+    return dict(p.get("scene_policy") or SCENE_POLICIES["general"])
+
 # 多级公共后缀：避免 shop.example.co.uk → "Co"、x.com.au → "Com"
 MULTI_SUFFIXES = (
     "co.uk", "org.uk", "ac.uk", "com.au", "net.au", "com.br", "com.cn", "com.hk",
@@ -319,5 +406,5 @@ def list_profiles() -> list[dict]:
     """供前端「行业 / 品类」局部调整选择器使用（不暴露正则实现）。"""
     return [{k: p[k] for k in ("key", "label", "value_axes", "evidence_types",
                                "visual_subject", "must_preserve", "copy_focus",
-                               "placement_preferences")}
+                               "placement_preferences", "scene_policy")}
             for p in INDUSTRY_PROFILES.values()]

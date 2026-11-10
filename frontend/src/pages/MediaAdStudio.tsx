@@ -522,6 +522,28 @@ export default function MediaAdStudio() {
           <h3>② 广告文案（已结合落地页分析结论生成，可编辑并勾选用于出图）</h3>
           <ModelBadge info={s.copy.model_info} fallbackText="文案未走大模型" />
 
+          {/* V4.44 / N01：证据→承诺审计，短句丢限定与无效引用同样阻断 */}
+          {s.copy.claim_audit && s.copy.claim_audit.status !== 'ok' && (
+            <div className={`alert ${s.copy.claim_audit.status === 'needs_revision' ? 'warn' : ''} rev-alert`}>
+              <b>证据 / 承诺校验：{s.copy.claim_audit.status === 'legacy_unverified'
+                ? '无可定位证据快照（旧资料）' : '需修订'}</b>
+              <div className="muted">{s.copy.claim_audit.note}</div>
+              {(s.copy.claim_audit.violations || []).length > 0 && (
+                <ul className="rev-list">
+                  {s.copy.claim_audit.violations!.map((v, i) => (
+                    <li key={i}>
+                      <b>{v.field}</b>：{v.text}
+                      {v.missing?.length ? ` · 缺少限定：${v.missing.join('、')}` : ''}
+                      {v.invalid_ids?.length ? ` · 无效编号：${v.invalid_ids.join('、')}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="muted">证据快照 {s.copy.claim_audit.snapshot?.snapshot_id || '（无）'}；
+                可定位原文不代表价格、效果或合规已被审核。</div>
+            </div>
+          )}
+
           {/* V4.39 / F01：残句不再被判合格，压缩失败必须显式阻断 */}
           {(s.copy.needs_revision?.length || 0) > 0 && (
             <div className="alert warn rev-alert">
@@ -534,7 +556,8 @@ export default function MediaAdStudio() {
                 {s.copy.needs_revision!.map((x, i) => (
                   <li key={i}>
                     <b>{x.label}{x.index > 1 ? ` #${x.index}` : ''}</b>：
-                    {x.original.length} 字 / 预算 {x.limit} 字
+                    {x.limit ? `${x.original.length} 字 / 预算 ${x.limit} 字`
+                      : `${x.original.length} 字 · 证据 / 承诺校验未通过`}
                     {x.protected?.length ? ` · 必须保留：${x.protected.slice(0, 4).join('、')}` : ''}
                   </li>
                 ))}

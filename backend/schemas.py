@@ -143,8 +143,8 @@ class LandingAnalysis(BaseModel):
     facts: List[str] = []                   # 已验证事实（须有 evidence_ids 可引用）
     assumptions: List[str] = []             # 营销假设，不能当已验证事实投放
     gaps: List[str] = []                    # 资料缺口
-    evidence_ids: List[str] = []            # 本次采样片段编号 [E###] / EV_S###
-    evidence_chain: List[Any] = []          # [{claim, evidence_ids, kind}]
+    evidence_ids: List[str] = []            # V4.44：本次快照唯一可用编号 [E###]
+    evidence_chain: List[Any] = []          # [{claim, evidence_ids, kind, rejected}]
     evidence_index: List[Any] = []          # 原文 / 来源 / 区块 / 字符区间 / 核验状态
     evidence_coverage: List[Any] = []       # 实际送入模型的字符区间
     evidence_dropped_chars: int = 0
@@ -155,6 +155,13 @@ class LandingAnalysis(BaseModel):
     gate_status: str = "ok"                 # ok / needs_input（router 据此阻断）
     blocked_reasons: List[str] = []
     legacy_unverified: bool = False         # 旧数据无证据 ID，不自动补成已验证
+    # V4.44 / N01：不可变证据快照与无效引用审计
+    evidence_snapshot_id: str = ""
+    evidence_fetched_at: str = ""
+    evidence_review_status: str = "locatable_not_reviewed"
+    evidence_invalid_ids: List[str] = []
+    evidence_ref_audit: dict = {}
+    sections_index: List[Any] = []
     class Config:
         from_attributes = True
         protected_namespaces = ()   # 允许字段名 model_info 不被 "model_" 保护前缀拦截

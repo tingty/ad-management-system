@@ -100,7 +100,9 @@ class GenerationJob(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     job_id = Column(String(40), unique=True, index=True)
     idempotency_key = Column(String(200), unique=True, index=True, nullable=True)
-    kind = Column(String(24), default="images")       # images（文案仍为同步短请求）
+    # V4.44 / N05：同 key 不同内容必须冲突（409），不能再静默返回旧任务
+    payload_hash = Column(String(64), nullable=True, index=True)
+    kind = Column(String(24), default="images")       # images / auto_creation
     status = Column(String(24), default="queued")     # queued/running/succeeded/partial_success/failed/canceled
     owner_id = Column(Integer, nullable=True, index=True)
     owner_name = Column(String(64), nullable=True)

@@ -23,6 +23,8 @@ backend/uploads/
 .env
 .env.*
 *.local
+backend/.bootstrap_credentials
+.bootstrap_credentials
 
 # ===== 系统 / IDE =====
 .DS_Store

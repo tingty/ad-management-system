@@ -33,7 +33,7 @@ V4.40 / F08：目录从「按平台名 + 尺寸字符串」升级为**版本化�
 # ---------------------------------------------------------------------------
 import re
 
-SPEC_VERSION = "2026-11-10.2"
+SPEC_VERSION = "2026-11-10.3"
 SPEC_SOURCE = "内部整理：media_platforms.py + 《广告素材平台问题诊断与AI改造实施说明书》v1.0 静态审查"
 SPEC_VERIFIED_ON = ""      # 空 = 尚未按各平台官方文档核验；核验后填 YYYY-MM-DD
 SPEC_DISCLAIMER = ("目录中的尺寸、字数与安全区为内部参考，不是官方投放规范的永久标准；"
@@ -61,6 +61,8 @@ MEDIA_RULES = {
         "slots.size 必须为 WxH 且在平台允许尺寸清单内，边长与单张像素数在上限内",
         "slots 数量与累计像素总量不得超过 MEDIA_LIMITS",
         "concept_index 若提供，必须是非负整数且落在本次文案组合范围内",
+        "V4.44 / N04：任务若标注 placement / placement_id，必须能解析到目录版位，"
+        "且尺寸属于该版位的 sizes；未知版位与尺寸错配在调用模型前拒绝",
     ],
     # 业务政策：不阻断生成，但必须在结果 / 导出里显式标注，不允许静默替换
     "policy": [
@@ -114,10 +116,10 @@ PLACEMENT_RULES: dict[str, dict[str, dict]] = {
         "reels": {"ad_product": "Facebook Reels", "asset_role": "reels_vertical", "os": "iOS/Android"},
     },
     "Google": {
-        "display_mrec": {"ad_product": "Google Display (RSA 配图)", "asset_role": "display_banner", "os": "Web"},
-        "display_leader": {"ad_product": "Google Display (RSA 配图)", "asset_role": "display_banner", "os": "Web"},
-        "display_mobile": {"ad_product": "Google Display (RSA 配图)", "asset_role": "display_banner", "os": "Android/iOS Web"},
-        "display_half": {"ad_product": "Google Display (RSA 配图)", "asset_role": "display_banner", "os": "Web"},
+        "display_mrec": {"ad_product": "Google Display (上传式展示图)", "asset_role": "display_banner", "os": "Web"},
+        "display_leader": {"ad_product": "Google Display (上传式展示图)", "asset_role": "display_banner", "os": "Web"},
+        "display_mobile": {"ad_product": "Google Display (上传式展示图)", "asset_role": "display_banner", "os": "Android/iOS Web"},
+        "display_half": {"ad_product": "Google Display (上传式展示图)", "asset_role": "display_banner", "os": "Web"},
         "uac": {"ad_product": "Google App Campaign (UAC)", "asset_role": "app_portrait", "os": "Android/iOS"},
     },
     "Unity": {
@@ -146,6 +148,14 @@ PLACEMENT_RULES: dict[str, dict[str, dict]] = {
         "topview": {"ad_product": "TikTok TopView", "asset_role": "splash_vertical", "os": "Android/iOS"},
         "square": {"ad_product": "TikTok In-Feed Square", "asset_role": "feed_image", "os": "Android/iOS"},
         "horizontal": {"ad_product": "TikTok Horizontal", "asset_role": "horizontal_still", "os": "Android/iOS"},
+    },
+    # V4.44 / N04：目录补齐 Moloco 图片 / 原生角色。规格为内部整理，
+    # SPEC_VERIFIED_ON 为空，正式投放前须按账户广告产品与官方文档复核。
+    "Moloco": {
+        "image_square": {"ad_product": "Moloco Image Creative", "asset_role": "feed_image", "os": "Android/iOS"},
+        "image_vertical": {"ad_product": "Moloco Image Creative", "asset_role": "story_vertical", "os": "Android/iOS"},
+        "image_horizontal": {"ad_product": "Moloco Image Creative", "asset_role": "horizontal_still", "os": "Android/iOS"},
+        "native": {"ad_product": "Moloco Native", "asset_role": "native_image", "os": "Android/iOS"},
     },
 }
 
@@ -280,6 +290,28 @@ MEDIA_PLATFORMS = [
              "desc": "横版素材", "default": False},
         ],
     },
+    # V4.44 / N04：Moloco 图片素材按国家 / 系统 / 角色组织，并保留文件大小限制提示。
+    # 目录为内部整理（SPEC_VERIFIED_ON 为空），不是官方核验结论。
+    {
+        "platform": "Moloco",
+        "image_sizes": ["1080x1080", "1080x1920", "1200x628", "600x600"],
+        "recommended_sizes": ["1080x1080", "1080x1920", "1200x628"],
+        "recommended_count": 3,
+        "copy_limits": {"title_max": 40, "body_max": 90, "cta_max": 20},
+        "usage": "图片 / 原生角色按国家与系统分别组织；官方图片指南强调地区差异与文件大小限制。"
+                 "本目录尺寸为内部整理，正式投放前须按账户广告产品复核。",
+        "cta_options": ["Install Now", "Shop Now", "Learn More", "Book Now"],
+        "placements": [
+            {"id": "image_square", "name": "图片 · 方版", "sizes": ["1080x1080", "600x600"],
+             "desc": "图片创意方版", "default": True},
+            {"id": "image_vertical", "name": "图片 · 竖版", "sizes": ["1080x1920"],
+             "desc": "图片创意竖版", "default": True},
+            {"id": "image_horizontal", "name": "图片 · 横版", "sizes": ["1200x628"],
+             "desc": "图片创意横版", "default": True},
+            {"id": "native", "name": "原生 · 主图", "sizes": ["1200x628", "1080x1080"],
+             "desc": "原生广告主图，与小图标分开交付", "default": False},
+        ],
+    },
 ]
 
 # 平台名 -> 规格 的索引（大小写不敏感的别名便于旧调用兼容）
@@ -306,6 +338,33 @@ def validate_platform(name: str) -> str:
 def placement_rule(platform: str, placement_id: str) -> dict:
     return (PLACEMENT_RULES.get(platform, {}).get(placement_id)
             or dict(_UNKNOWN_ROLE))
+
+
+def resolve_placement(platform: str, placement: str = "",
+                      placement_id: str = "") -> dict:
+    """V4.44 / N04：按完整规则主键解析版位，未知版位不静默降级。
+
+    返回目录中的版位（含 sizes / asset_role / ad_product / os）；找不到抛
+    `MediaRuleError`，错误信息直接指出无效的 id 或名称与该平台可用版位。
+    """
+    key = canonical_platform(platform)
+    spec = MEDIA_PLATFORM_MAP.get(key)
+    if not spec:
+        raise MediaRuleError([f"未知媒体平台：{platform!r}（规则版本 {SPEC_VERSION}）"])
+    pid, pname = str(placement_id or "").strip(), str(placement or "").strip()
+    if not pid and not pname:
+        raise MediaRuleError([f"{key} 任务未标注版位：请提供 placement_id 或 placement；"
+                              "系统不再把未标注版位静默当作 unspecified 放行"])
+    for pl in spec.get("placements", []):
+        if (pid and pl["id"] == pid) or (pname and pl["name"] == pname):
+            rule = PLACEMENT_RULES.get(key, {}).get(pl["id"])
+            if not rule:
+                raise MediaRuleError([f"{key} 版位 {pl['id']} 未登记交付语义（ad_product / "
+                                     "asset_role / os），不能生成可交付图片"])
+            return {**pl, **rule}
+    known = "、".join(f"{pl['id']}({pl['name']})" for pl in spec.get("placements", []))
+    raise MediaRuleError([f"{key} 未知广告版位：id={pid or '（空）'} / name={pname or '（空）'}；"
+                          f"规则版本 {SPEC_VERSION} 支持：{known}"])
 
 
 def _enrich(spec: dict) -> dict:
@@ -393,6 +452,7 @@ def validate_task_matrix(platform: str, slots: list, total_pixels: int | None = 
     seen: set[tuple] = set()
     dropped: list[dict] = []
     products: set[str] = set()
+    placement_warnings: list[str] = []
     for i, raw in enumerate(rows):
         slot = raw if isinstance(raw, dict) else {}
         size = str(slot.get("size") or "").strip()
@@ -416,7 +476,27 @@ def validate_task_matrix(platform: str, slots: list, total_pixels: int | None = 
                 if ci < 0 or (variant_count and ci >= variant_count):
                     errors.append(f"第 {i + 1} 个任务 concept_index={ci} 超出本次文案组合范围"
                                  f"（0..{max(0, variant_count - 1)}）")
-        pl = match_placement(key, slot.get("placement") or "", slot.get("placement_id") or "")
+        # V4.44 / N04：完整规则主键 = platform + placement + ad_product + asset_role + size。
+        # 传了版位就必须能解析，且尺寸必须属于该版位；未知版位不再静默返回 unspecified。
+        has_placement = bool(str(slot.get("placement") or slot.get("placement_id") or "").strip())
+        if has_placement:
+            try:
+                pl = resolve_placement(key, slot.get("placement") or "",
+                                       slot.get("placement_id") or "")
+            except MediaRuleError as e:
+                errors.append(f"第 {i + 1} 个任务：" + "；".join(e.errors))
+                continue
+            pl_sizes = {str(s).lower() for s in (pl.get("sizes") or [])}
+            if size.lower().replace("×", "x") not in pl_sizes:
+                errors.append(
+                    f"第 {i + 1} 个任务尺寸 {size} 与版位 {pl['id']}({pl['name']}) 不匹配；"
+                    f"该版位仅支持 {'、'.join(sorted(pl_sizes)) or '（无）'}")
+                continue
+        else:
+            pl = match_placement(key, "", "") or {}
+            placement_warnings.append(
+                f"第 {i + 1} 个任务未标注版位，按旧调用兼容放行（asset_role=unspecified，"
+                "不可作为已核验的版位交付物）")
         role = pl.get("asset_role") or _UNKNOWN_ROLE["asset_role"]
         product = pl.get("ad_product") or _UNKNOWN_ROLE["ad_product"]
         products.add(product)
@@ -458,6 +538,8 @@ def validate_task_matrix(platform: str, slots: list, total_pixels: int | None = 
         "requested_tasks": len(rows),
         "effective_tasks": len(normalized),
         "dropped_duplicates": dropped,
+        "placement_warnings": placement_warnings,
+        "placement_validation": "strict_primary_key" if not placement_warnings else "mixed_legacy",
         "total_pixels": pixels,
         "ad_products": sorted(products),
         "mixed_ad_products": len(products) > 1,

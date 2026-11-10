@@ -1,7 +1,7 @@
-# 广告管理系统（在线营销素材管理平台 V4.43）
+# 广告管理系统（在线营销素材管理平台 V4.44）
 
 对应方案文档：《在线营销素材管理平台方案.docx》；开发节奏见《在线营销素材管理平台-版本开发规划.docx》。
-**当前版本：V4.43（2026-11-10）**。完整发版归档见 [CHANGELOG.md](CHANGELOG.md)；
+**当前版本：V4.44（2026-11-10）**。完整发版归档见 [CHANGELOG.md](CHANGELOG.md)；
 系统内「系统设置 → 新版通知」**按系统运行版本自动同步**，从最新版本开始只展示「版本号 + 总结式更新要点」，
 不再展示功能细节、前因后果、改造进度、影响范围与验证结果（AI 改造 **12 / 12** 已收官，进度见追踪表）。
 
@@ -14,6 +14,20 @@
 服务端持久任务与不可变资产），四期收官。
 改造主干对全部行业一致，电商购买与订阅转化只是 `backend/industry_profiles.py` 中的两个画像；
 其它行业通过局部调整价值维度、语义保护、证据类型、视觉主体与版位偏好输出素材，不改通用链路。
+
+**V4.44 新版验收整改第 1 期（D0）**：依据《素材创作平台新版验收与自动化创作改造实施方案》v2.0，
+问题映射与分期见 [docs/ACCEPTANCE_TRACKER.md](docs/ACCEPTANCE_TRACKER.md)。本版修复 N01 / N02 / N04 / N05 / N06：
+`backend/claims.py` 统一 `[E###]` 证据命名空间并把「原文可定位」与「商业真实性已审核」分离，
+广告短句丢掉「最多 / 护理模式 / 计费周期」等限定会在生成后标为需修订；
+`industry_profiles.SCENE_POLICIES` 用声明式场景策略取代哈希动作池（软件用真实 UI、实体商品用官方 SKU）；
+`media_platforms.resolve_placement()` 按版位完整主键拒绝未知版位与尺寸错配，目录补 Moloco；
+`job_service` 执行前预登记子任务、幂等键按账号隔离且同键异内容返回 409、重启后未派发项可重试而结果未知项先对账；
+源码移除全部固定管理员口令与自愈重置，新增 `scripts/rotate_admin.py`（同时轮换 `AUTH_SECRET` 使既有会话失效）。
+**上线前必须执行口令轮换并重启**：`python3 scripts/rotate_admin.py --username leson`，随后删除
+`backend/.bootstrap_credentials`。删除源码固定口令不能替代这一步。
+可复现回归：`python3 tests/run_all.py`（72 项，仅标准库 + 临时 SQLite，不发起真实付费调用）。
+验收状态按文档要求分列：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。
+默认自动创作与商品素材缺口（N03 / D1–D6）安排在后续两期，本版不宣称已实现。
 
 **V4.43 版本通知改造**：`backend/version.py` 的 `APP_VERSION` 是系统运行版本的唯一来源，
 `main.py`、`backend/release_notes.py` 与 `scripts/prepare_release.py` 共用；版本通知以该版本为锚点，

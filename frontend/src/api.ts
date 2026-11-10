@@ -259,9 +259,16 @@ export interface LandingAnalysis {
   assumptions?: string[]
   gaps?: string[]
   evidence_ids?: string[]
-  evidence_chain?: { claim: string; evidence_ids: string[]; kind: string }[]
+  evidence_chain?: { claim: string; evidence_ids: string[]; kind: string; rejected?: boolean }[]
   evidence_index?: EvidenceRecord[]
   evidence_coverage?: EvidenceCoverage[]
+  /** V4.44 / N01：唯一 [E###] 命名空间与不可变证据快照审计 */
+  evidence_snapshot_id?: string
+  evidence_fetched_at?: string
+  evidence_review_status?: string
+  evidence_invalid_ids?: string[]
+  evidence_ref_audit?: { checked: number; invalid: number; status: string; note?: string }
+  sections_index?: { section_id?: string; sample_ids?: string[]; referenceable: boolean }[]
   evidence_dropped_chars?: number
   evidence_source_chars?: number
   evidence_expired_offers?: { expires_on: string; quote: string }[]
@@ -287,6 +294,11 @@ export interface EvidenceRecord {
   applicable_scope?: string
   legacy_unverified?: boolean
   has_key_clause?: boolean
+  /** V4.44 / N01：可定位原文与商业真实性审核分离 */
+  review_status?: string
+  referenceable?: boolean
+  section_ids?: string[]
+  tags?: string[]
 }
 
 export interface EvidenceCoverage {
@@ -370,6 +382,17 @@ export interface CopyRevisionNeeded {
   protected: string[]
   reason: string
 }
+/** V4.44 / N01：证据→广告承诺的生成后审计（与字数 / 压缩无关） */
+export interface ClaimAudit {
+  status: 'ok' | 'needs_revision' | 'legacy_unverified'
+  rules_version?: string
+  snapshot?: { snapshot_id: string; evidence_ids: string[]; count: number;
+               review_status?: string }
+  checked?: number
+  violations?: { field: string; index?: number | null; text: string;
+                 type: string; missing?: string[]; invalid_ids?: string[]; reason: string }[]
+  note?: string
+}
 export interface MediaCopyResult {
   platform: string
   /** V4.40 / F08：广告产品（用于区分 Google RSA / UAC 等文案 schema） */
@@ -392,6 +415,8 @@ export interface MediaCopyResult {
   clips?: any[]
   copy_revisions?: any[]
   needs_revision?: CopyRevisionNeeded[]
+  /** V4.44 / N01：每次生成后都执行的证据与限定校验 */
+  claim_audit?: ClaimAudit
   industry_profile?: string
   industry_profile_label?: string
   compress_calls?: number

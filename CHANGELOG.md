@@ -1575,3 +1575,51 @@
 - 历史版本没有「更新要点」时按模块聚合改动标题，最多 6 条、每条最多 120 字；不展示改动细节、影响范围与前因后果。
 - 改造进度（四期 12 个问题）已完成并从版本通知页移除，避免与「版本更新内容」混淆；如需查阅请见 `docs/REMEDIATION_TRACKER.md`。
 
+## V4.44 新版验收整改第 1 期（D0）：证据、规则、任务与安全
+
+**发布日期**：2026-11-10
+**变更类型**：修复 / 新增 / 优化 / 发布
+**涉及模块**：素材创作平台、落地页分析、广告文案、推广图片、行业适配、素材历史、服务端任务、媒体规则、系统设置、系统版本、新版通知、后端接口、数据模型、前端与菜单、发版流程、改造追踪、安全初始化
+**变更摘要**：按《素材创作平台新版验收与自动化创作改造实施方案》v2.0 完成 D0，修复验收报告指出的 N01 / N02 / N04 / N05 / N06 五个工程缺口：证据编号与广告承诺建立强引用、删除随机场景池、版位级规则强校验、任务重启与幂等边界闭环、移除源码固定凭据并新增可运行回归目录。
+
+**更新要点**
+- 证据统一为 `[E###]` 单一命名空间；不存在的编号直接拒绝，广告承诺必须能定位到原文。
+- 量化承诺生成后统一校验限定条件，短句丢掉「最多 / 护理模式 / 计费周期」也会标为需修订。
+- 删除按关键词和哈希挑选动作 / 场景的兜底，画面改由产品类型与真实素材决定。
+- 版位与尺寸按完整规则主键校验，未知版位和尺寸错配在调用模型前拒绝；目录补 Moloco。
+- 任务执行前预登记子任务，重启后可重试项续跑、结果未知项先对账；幂等键按账号隔离且内容冲突返回 409。
+- 移除源码固定管理员口令与启动自愈，新增可运行 `tests/` 回归目录与显式口令轮换脚本。
+
+**本次优化与更改的功能 / 模块**
+- 【新增】落地页分析 / 证据统一命名空间：`backend/evidence.py` 新增 `build_canonical_index()` 与 `snapshot_id_of()`，`[E###]` 成为唯一可对外引用编号，每条带原文 quote、字符区间、所属分区、条款类型与来源；分区记录退为内部索引并挂 `sample_ids`。不可变快照 ID 由内容决定，内容不变则稳定。
+- 【新增】广告文案 / 证据→承诺强引用：`backend/claims.py` 提供 `EvidenceSnapshot` / `validate_evidence_refs()` / `validate_evidence_chain()` / `claim_contract()`；`services._normalize_landing()` 剔除无效编号并把对应 claim 标 `rejected`，`media_ad._analysis_context()` 首次把 facts、assumptions、gaps、事实→证据映射与限定契约送进文案模型。
+- 【新增】广告文案 / 生成后限定校验：`claims.check_claim_qualifiers()` 把广告短句的数字回连原文窗口，要求保留上限、条件、计费周期、测试条件与适用范围；`audit_copy_fields()` 在**每次**生成后执行，与是否超长、是否压缩无关，违规写入 `claim_audit` 与 `needs_revision`。「可定位原文」与「商业真实性已审核」显式分离。
+- 【修复】推广图片 / 概念证据语义：`creative_config.build_concept()` 不再把副标直接命名为已验证证据，新增 `claim_refs` / `evidence_ids` / `claim_verified` / `evidence_kind=copy_subhead_not_verified`。
+- 【修复】推广图片 / 删除随机场景（N02）：`industry_profiles.py` 新增声明式 `SCENE_POLICIES`（实体类型、主体资产、允许场景、禁止推断、默认动作与场景），`creative_config.build_visual_brief()` 移除 `_ACTION_POOL` / `_SETTING_POOL` / `_pick()` 哈希兜底；软件保留真实 UI 图层不被 no-UI 背景规则删除（A09）。
+- 【修复】媒体规则 / 版位级主键（N04）：`media_platforms.py` 新增 `resolve_placement()`，`validate_task_matrix()` 对已标注版位强制校验「版位存在 + 尺寸属于该版位 + 已登记交付语义」，未知版位不再静默返回 `unspecified`；未标注版位的旧调用兼容放行但写入 `placement_warnings`。目录补 Moloco 图片 / 原生角色，Google「RSA 配图」改为「上传式展示图」，`SPEC_VERSION` 升至 `2026-11-10.3`，`SPEC_VERIFIED_ON` 仍为空并显式标注需官方复核。
+- 【修复】服务端任务 / 恢复与幂等（N05）：`models.GenerationJob` 新增 `payload_hash`；`job_service.create_job()` 执行前预登记全部子任务、按账号作用域隔离幂等键、同键不同内容抛 `IdempotencyConflict`（路由返回 409）；`recover_interrupted()` 把未派发项标 `failed`（可重试）、已派发结果未知项标 `unknown_outcome`（先对账，不自动重发）；`run_job()` 回写逐图子任务状态；`retry_failed()` 优先用预登记子任务且只重试可安全重试项。
+- 【修复】安全初始化（N06）：`main.py` 删除源码内全部固定默认口令与「命中历史口令就重置」的自愈逻辑；首次初始化口令来自 `INITIAL_PASSWORD_<USERNAME>` 环境变量或 CSPRNG 随机值，只写入 0600 的 `backend/.bootstrap_credentials`（已 gitignore）；新增 `scripts/rotate_admin.py`，轮换口令的同时轮换 `AUTH_SECRET` 使既有会话在重启后失效。
+- 【新增】回归测试 / 可复现目录（N06）：新增 `tests/`（`run_all.py` + 6 个模块 + README），覆盖 N01 / N02 / N04 / N05 / N06 与版本通知动态回归；测试强制清空模型密钥、使用临时 SQLite，不触碰生产数据、不发起付费调用。
+- 【优化】前端 / 证据与承诺可见：`api.ts` 增加证据快照、无效编号、审核状态与 `ClaimAudit` 类型；`MaterialCreation.tsx` 展示快照 ID、审核状态与已拒绝承诺；`MediaAdStudio.tsx` 增加证据 / 承诺校验警示。
+
+**影响范围**
+- 前端：`api.ts`、`MaterialCreation.tsx`、`MediaAdStudio.tsx` 增加只读展示字段；原有生成、勾选、任务与历史流程不变。
+- 后端：新增 `claims.py`；`evidence.py` / `services.py` / `schemas.py` / `media_ad.py` / `creative_config.py` / `industry_profiles.py` / `media_platforms.py` / `job_service.py` / `models.py` / `routers.py` / `main.py` / `version.py` 均有改动；有效 `/api` 路径仍为 42 条。
+- 数据：`generation_jobs` 自动补 `payload_hash` 列（迁移幂等）；历史任务的幂等键在首次命中时补写哈希，不判冲突；历史图片、资产与提示词不改写、不重新收费生成。
+- 兼容性：未标注版位的旧调用仍放行但标记 `mixed_legacy`；证据 `evidence_index` 由 `EV_S###` 改为 `[E###]`，前端已同步；Google 广告产品名变更会影响导出元数据显示，不影响生成链路。
+- 权限与部署：所有登录角色可查阅新增证据展示；**必须由管理员执行 `scripts/rotate_admin.py` 轮换线上口令与 `AUTH_SECRET` 并重启服务**，删除源码固定口令不能替代轮换；`backend/.bootstrap_credentials` 首次启动后应删除。
+- 验收口径：本版为**工程修复**，不宣称素材视觉合格或投放效果提升；真实模型、真实供应商、官方规格与投放实验仍为未验证。
+
+**验证**
+- `python3 tests/run_all.py`：**72 项断言全部通过**（证据命名空间与无效引用 18 项、场景策略 14 项、版位规则 14 项、任务恢复与幂等 8 项、凭据整改 7 项、版本通知动态回归 11 项）。
+- 前一期不回退：V4.42 后端回归 **85 项断言全部通过**。该脚本原使用 Facebook 不存在的 `square` 版位（旧版被静默放行），按 N04 修正为合法版位后复跑通过；测试口令改由 `INITIAL_PASSWORD_LESON` 环境变量注入临时库，不再来自源码。
+- 后端 `compileall -q backend scripts tests`、`import main` 通过，版本 `4.44.0`，有效 `/api` 路径 42 条；前端 `tsc --noEmit` 通过，`vite build` 44 模块 / 265.79 kB JS / 50.82 kB CSS。
+- 版本通知锚点：`version.APP_VERSION=4.44.0` 时 `get_release_notes()` 返回 `app_version=V4.44`、首条 `V4.44`，证明 V4.43 的「升版即同步」机制在本版仍生效。
+- 所有回归在临时 SQLite、临时文件副本与纯函数上执行，强制清空 `DEFAULT_LLM_API_KEY`，未修改生产数据、未产生真实付费模型调用。
+
+**说明 / 默认约定**
+- 文档 N03（商品素材缺口）与默认自动创作属 D1–D6，安排在第 2 / 3 期，本版不宣称已实现。
+- `SPEC_VERIFIED_ON` 与供应商 `size_verified_on` 继续留空；Moloco 目录为内部整理，正式投放前须按账户广告产品与官方文档核验。
+- 「已验证事实」仍只表示页面原文可引用，不构成价格真实性、效果或合规背书；限制条件保护为规则级拦截，不替代人工审核。
+- 四种状态分开记录：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。
+

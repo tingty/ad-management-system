@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-APP_VERSION = "4.43.0"
+APP_VERSION = "4.44.0"
 
 
 def release_tag(version: str | None = None) -> str:

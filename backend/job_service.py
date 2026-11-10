@@ -21,6 +21,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -43,6 +45,47 @@ def _uid(prefix: str = "") -> str:
     return prefix + uuid.uuid4().hex[:20]
 
 
+class IdempotencyConflict(ValueError):
+    """V4.44 / N05：同一幂等键复用了不同请求内容，路由层据此返回 409。"""
+
+    def __init__(self, job_id: str, expected: str, actual: str):
+        self.job_id, self.expected, self.actual = job_id, expected, actual
+        super().__init__(f"幂等键已用于不同请求内容（任务 {job_id}）；请更换 idempotency_key")
+
+
+def _scoped_key(raw: str, owner_id) -> str:
+    """幂等键按用户 / 工作区隔离：不同用户用同一个 key 不会串任务。"""
+    key = (raw or "").strip()[:180]
+    return f"u{int(owner_id or 0)}:{key}" if key else ""
+
+
+def raw_key(stored: str) -> str:
+    """返回给前端时去掉作用域前缀，保持与提交时一致。"""
+    s = str(stored or "")
+    return s.split(":", 1)[1] if s.startswith("u") and ":" in s else s
+
+
+def payload_hash_of(request: dict) -> str:
+    """规范化请求哈希；只忽略不影响生成结果的字段顺序差异。"""
+    canonical = json.dumps(request or {}, ensure_ascii=False, sort_keys=True,
+                           separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _prefill_subtasks(parsed: MediaImageRequest) -> list[dict]:
+    """V4.44 / N05：执行前持久化全部子任务，重启后仍有可重试依据。"""
+    out = []
+    for i, s in enumerate(parsed.slots or []):
+        row = {"task_index": i, "status": "pending", "size": str(s.size or ""),
+               "placement": str(s.placement or ""),
+               "placement_id": str(getattr(s, "placement_id", "") or ""),
+               "concept_index": getattr(s, "concept_index", None),
+               "input_hash": payload_hash_of(s.model_dump())[:16],
+               "vendor_request_id": None, "outcome_note": ""}
+        out.append(row)
+    return out
+
+
 def job_to_dict(job: GenerationJob, include_result: bool = True) -> dict:
     def _iso(v):
         if v is None:
@@ -52,7 +95,8 @@ def job_to_dict(job: GenerationJob, include_result: bool = True) -> dict:
         return str(v)
     out = {
         "job_id": job.job_id,
-        "idempotency_key": job.idempotency_key,
+        "idempotency_key": raw_key(job.idempotency_key),
+        "payload_hash": job.payload_hash or "",
         "kind": job.kind,
         "status": job.status,
         "owner_id": job.owner_id,
@@ -69,8 +113,18 @@ def job_to_dict(job: GenerationJob, include_result: bool = True) -> dict:
         "updated_at": _iso(job.updated_at),
         "finished_at": _iso(job.finished_at),
         "terminal": job.status in TERMINAL,
+        "subtask_counts": _subtask_counts(job.subtasks_json),
     }
     return out
+
+
+def _subtask_counts(rows) -> dict:
+    counts: dict[str, int] = {}
+    for r in rows or []:
+        if isinstance(r, dict):
+            k = str(r.get("status") or "unknown")
+            counts[k] = counts.get(k, 0) + 1
+    return counts
 
 
 def asset_to_dict(a: CreativeAsset) -> dict:
@@ -86,26 +140,43 @@ def asset_to_dict(a: CreativeAsset) -> dict:
 
 def create_job(db: Session, payload: dict, user, *,
                idempotency_key: str = "", kind: str = "images") -> tuple[GenerationJob, bool]:
-    """幂等创建：同 key 返回已有任务（created=False），绝不重复出图 / 归档。"""
-    key = (idempotency_key or "").strip()[:200]
-    if key:
-        old = db.query(GenerationJob).filter_by(idempotency_key=key).first()
-        if old:
-            return old, False
+    """V4.44 / N05：按用户作用域幂等 + 请求内容哈希 + 执行前预登记子任务。
+
+    - 同 key 且同内容 → 返回原任务（created=False），不重复调用模型 / 归档；
+    - 同 key 但内容不同 → 抛 `IdempotencyConflict`，路由返回 409，不串任务；
+    - 子任务在排队时就落库，进程重启后可据此续跑或提示对账。
+    """
+    raw = (idempotency_key or "").strip()[:180]
+    owner = getattr(user, "id", None)
+    key = _scoped_key(raw, owner)
     req = payload.get("images_request") if isinstance(payload.get("images_request"), dict) else payload
     # 入参在进入后台任务之前就按 Pydantic 校验一遍，避免把坏请求排进队列
     parsed = MediaImageRequest(**req)
     archive = payload.get("archive") if isinstance(payload.get("archive"), dict) else {}
+    request_snapshot = {"images_request": parsed.model_dump(), "archive": archive}
+    digest = payload_hash_of(request_snapshot)
+
+    if key:
+        old = db.query(GenerationJob).filter_by(idempotency_key=key).first()
+        if old:
+            if old.payload_hash and old.payload_hash != digest:
+                raise IdempotencyConflict(old.job_id, old.payload_hash, digest)
+            if not old.payload_hash:      # 升级前创建的旧任务：补写哈希，不判冲突
+                old.payload_hash = digest
+                db.commit()
+            return old, False
+
     hid = archive.get("history_id")
     job = GenerationJob(
         job_id=_uid("job_"),
         idempotency_key=key or _uid("idem_"),
+        payload_hash=digest,
         kind=kind, status="queued",
-        owner_id=getattr(user, "id", None),
+        owner_id=owner,
         owner_name=(getattr(user, "display_name", None) or getattr(user, "username", "") or ""),
         history_id=hid if isinstance(hid, int) else None,
-        request_json={"images_request": parsed.model_dump(), "archive": archive},
-        subtasks_json=[], progress=0, attempts=0,
+        request_json=request_snapshot,
+        subtasks_json=_prefill_subtasks(parsed), progress=0, attempts=0,
         created_at=utcnow(), updated_at=utcnow(),
     )
     db.add(job)
@@ -124,13 +195,62 @@ def spawn_job(job_id: str) -> None:
 
 
 def recover_interrupted() -> int:
-    """进程重启后把停在 running / queued 的任务标为失败，不假装它还在跑。"""
+    """V4.44 / N05：进程重启后按子任务状态分类恢复，而不是一律标 failed 后无项可重试。
+
+    - `pending`（未派发）→ `failed`，可安全由「仅重试失败项」续跑；
+    - `running`（已派发、结果未知）→ `unknown_outcome`，**不自动重发**，
+      须先与供应商对账，避免重复收费（文档 A18）；
+    - 升级前的旧任务没有子任务登记 → 从请求快照补建，再按上述规则分类。
+    """
     db = SessionLocal()
     try:
         rows = db.query(GenerationJob).filter(GenerationJob.status.in_(["running", "queued"])).all()
         for r in rows:
+            subs = [dict(x) for x in (r.subtasks_json or []) if isinstance(x, dict)]
+            req = (r.request_json or {}).get("images_request") or {}
+            if not subs:
+                slots = req.get("slots") or []
+                subs = [{"task_index": i, "status": "pending",
+                         "size": str(s.get("size") or ""),
+                         "placement": str(s.get("placement") or ""),
+                         "placement_id": str(s.get("placement_id") or ""),
+                         "input_hash": payload_hash_of(s)[:16],
+                         "vendor_request_id": None, "outcome_note": "由请求快照补建"}
+                        for i, s in enumerate(slots) if isinstance(s, dict)]
+            result = dict(r.result_json or {})
+            task_results = [dict(x) for x in (result.get("task_results") or [])
+                            if isinstance(x, dict)]
+            known_idx = {x.get("task_index") for x in task_results}
+            for s in subs:
+                idx = s.get("task_index")
+                st = s.get("status")
+                if st in ("ok", "failed", "unknown_outcome", "canceled"):
+                    continue
+                if st == "running":
+                    s["status"] = "unknown_outcome"
+                    s["outcome_note"] = "已派发但结果未知；须先与供应商对账，不自动重发"
+                    new_status = "unknown_outcome"
+                else:
+                    s["status"] = "failed"
+                    s["outcome_note"] = "进程重启前未派发；可安全重试"
+                    new_status = "failed"
+                if idx not in known_idx:
+                    task_results.append({"task_index": idx, "status": new_status,
+                                         "reason": s["outcome_note"],
+                                         "size": s.get("size", "")})
+                    known_idx.add(idx)
+            result["task_results"] = task_results
+            result["recovery"] = {
+                "policy": "pending→failed 可重试；running→unknown_outcome 先对账",
+                "retryable": sum(1 for x in task_results if x.get("status") == "failed"),
+                "requires_reconciliation": sum(1 for x in task_results
+                                               if x.get("status") == "unknown_outcome"),
+            }
+            r.result_json = result
+            r.subtasks_json = subs
             r.status = "failed"
-            r.error = "服务进程在任务执行期间重启；该任务未自动续跑，请用分项重试重新提交失败项"
+            r.error = ("服务进程在任务执行期间重启：未派发项标 failed 可分项重试；"
+                       "已派发项标 unknown_outcome 需先对账，不自动续跑、不重复收费")
             r.finished_at = utcnow()
             r.updated_at = utcnow()
         db.commit()
@@ -246,6 +366,7 @@ async def run_job(job_id: str) -> None:
     """后台执行：规则校验 → 生成 → 服务端归档 → 定稿。任何异常都落库为 failed。"""
     await _set_status(job_id, status="running", progress=5)
     db = SessionLocal()
+    job, running_subs = None, []
     try:
         job = db.query(GenerationJob).filter_by(job_id=job_id).first()
         if not job:
@@ -278,7 +399,12 @@ async def run_job(job_id: str) -> None:
             await _set_status(job_id, status="canceled", progress=100,
                               error="任务在调用模型前已取消", finished_at=utcnow())
             return
-        await _set_status(job_id, progress=20, attempts=GenerationJob.attempts + 1)
+        # V4.44 / N05：派发前把子任务标 running（进程重启时可区分「未派发 / 结果未知」）
+        running_subs = [{**dict(s), "status": ("running" if dict(s).get("status") == "pending"
+                                               else dict(s).get("status"))}
+                        for s in (job.subtasks_json or []) if isinstance(s, dict)]
+        await _set_status(job_id, progress=20, attempts=GenerationJob.attempts + 1,
+                          subtasks_json=running_subs)
         result = await generate_media_images(
             db, analysis, checked["meta"]["platform"], parsed.lang,
             parsed.copy_fields, parsed.style_opts, checked["slots"],
@@ -294,14 +420,35 @@ async def run_job(job_id: str) -> None:
                   "failed" if result.get("status") == "failed" else
                   "partial_success" if result.get("status") == "partial_success" else
                   "succeeded")
-        subtasks = result.get("task_results") or []
+        # V4.44 / N05：把逐图结果回写到预登记子任务，供分项重试 / 重启恢复
+        by_idx = {int(s.get("task_index")): dict(s) for s in running_subs
+                  if isinstance(s, dict) and isinstance(s.get("task_index"), int)}
+        for tr in (result.get("task_results") or []):
+            if not isinstance(tr, dict) or not isinstance(tr.get("task_index"), int):
+                continue
+            s = by_idx.get(tr["task_index"])
+            if s is None:
+                continue
+            st = str(tr.get("status") or "unknown_outcome")
+            s["status"] = "ok" if st == "ok" else st
+            s["vendor_request_id"] = tr.get("request_id") or tr.get("vendor_request_id")
+            s["outcome_note"] = str(tr.get("reason") or tr.get("error") or "")[:200]
+        subtasks = [by_idx[k] for k in sorted(by_idx)]
         await _set_status(
             job_id, status=status, progress=100, result_json=result,
             subtasks_json=subtasks,
             error=("任务已取消；已生成部分仍完成归档，不丢素材" if canceled else ""),
             finished_at=utcnow())
     except Exception as e:
+        # 生成阶段异常时已派发子任务结果未知，不得当作可安全重试的 failed
+        subs = [dict(s) for s in (running_subs or (job.subtasks_json if job else None) or [])
+                if isinstance(s, dict)]
+        for s in subs:
+            if s.get("status") in ("pending", "running"):
+                s["status"] = "unknown_outcome"
+                s["outcome_note"] = "生成阶段异常，供应商是否已完成未知，需先对账"
         await _set_status(job_id, status="failed", progress=100,
+                          subtasks_json=subs,
                           error=f"{type(e).__name__}: {str(e)[:300]}",
                           finished_at=utcnow())
     finally:
@@ -329,14 +476,23 @@ def retry_failed(db: Session, origin: GenerationJob, user) -> tuple[GenerationJo
     if origin.status not in TERMINAL:
         return None, "原任务尚未结束，暂不能重试"
     results = origin.result_json or {}
-    failed = [x for x in (results.get("task_results") or [])
-              if isinstance(x, dict) and x.get("status") == "failed"]
-    if not failed:
-        return None, "原任务没有可重试的失败项（needs_revision 需先人工修改文案）"
+    subs = [x for x in (origin.subtasks_json or []) if isinstance(x, dict)]
+    # V4.44 / N05：优先用执行前预登记的子任务状态；unknown_outcome 不自动重发
+    retryable = [x for x in subs if x.get("status") == "failed"]
+    unknown = [x for x in subs if x.get("status") == "unknown_outcome"]
+    if retryable:
+        candidates = [{"task_index": x.get("task_index")} for x in retryable]
+    else:
+        candidates = [x for x in (results.get("task_results") or [])
+                      if isinstance(x, dict) and x.get("status") == "failed"]
+    if not candidates:
+        hint = ("；另有 %d 项结果未知（unknown_outcome），须先与供应商对账，不自动重发"
+                % len(unknown)) if unknown else ""
+        return None, "原任务没有可重试的失败项（needs_revision 需先人工修改文案）" + hint
     req = (origin.request_json or {}).get("images_request") or {}
     slots = list(req.get("slots") or [])
     picked, used = [], set()
-    for f in failed:
+    for f in candidates:
         ti = f.get("task_index")
         if isinstance(ti, int) and 0 <= ti < len(slots) and ti not in used:
             used.add(ti)

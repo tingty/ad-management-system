@@ -22,6 +22,7 @@ from prompt_catalog import PROMPT_META, EXTRA_PROMPTS, preset_prompt_entries
 from industry_profiles import brand_from_page, resolve_profile
 # V4.42 / F09：事实证据链、分区预算采样与空证据阻断
 from evidence import build_evidence_pack, evidence_contract
+from claims import EvidenceSnapshot, claim_contract, validate_evidence_chain
 
 # V4.37：旧的 5 条系统级提示词（网站核心内容分析 / 创意方向 / 文案 / 视频分镜 / 图片设计）
 # 只服务于已删除的「创作工作台 / 批量生成」，故从注册表移除。
@@ -464,6 +465,10 @@ def build_landing_prompt(url: str, text: str, page: dict,
         f"{len(pack.get('coverage') or [])} 个带编号片段，未覆盖 {pack.get('dropped_chars', 0)} 字符）:\n"
         f"{pack.get('budgeted_text') or '（无正文）'}\n\n"
         + evidence_contract(pack) + "\n"
+        + claim_contract(EvidenceSnapshot(
+            pack.get("evidence"), snapshot_id=pack.get("evidence_snapshot_id") or "",
+            source_url=pack.get("final_url") or "",
+            fetched_at=pack.get("fetched_at") or "")) + "\n"
         "请基于以上页面真实内容，输出 8 字段 JSON，并额外输出 facts / assumptions / gaps / "
         "evidence_ids / evidence_chain（每条事实引用 [E###] 编号）。"
         "不得从域名推断品牌，不得编造页面未出现的价格、优惠、评价或效果数据；缺资料时留空并写进 gaps。"
@@ -504,8 +509,13 @@ def _landing_identity(url: str, page: dict, logo_info: dict,
     }
 
 
-def _normalize_landing(raw: dict, url: str) -> dict:
-    """把模型原始输出规整为 8 字段结构（裁剪长度、保证类型）。"""
+def _normalize_landing(raw: dict, url: str, evidence_pack: dict | None = None) -> dict:
+    """把模型原始输出规整为 8 字段结构（裁剪长度、保证类型）。
+
+    V4.44 / N01：接受 `evidence_pack` 后，所有 `evidence_ids` 引用必须在本次
+    `[E###]` 快照中存在且能定位原文；不存在的编号直接剔除并记入审计，
+    对应 claim 标 `rejected`，不会静默进入下游文案依据。
+    """
     raw = raw if isinstance(raw, dict) else {}
 
     def as_str(v):
@@ -536,19 +546,44 @@ def _normalize_landing(raw: dict, url: str) -> dict:
         if len(chs) >= 5:
             break
 
+    pack = evidence_pack if isinstance(evidence_pack, dict) else {}
+    snap = EvidenceSnapshot(pack.get("evidence"),
+                            snapshot_id=pack.get("evidence_snapshot_id") or "",
+                            source_url=pack.get("final_url") or "",
+                            fetched_at=pack.get("fetched_at") or "")
+    valid = snap.valid_ids
+    invalid_ids: list[str] = []
+
     def as_evidence_ids(v):
-        if isinstance(v, list):
-            return [as_str(x)[:24] for x in v if as_str(x)][:24]
-        return [as_str(v)[:24]] if as_str(v) else []
+        items = ([as_str(x)[:24] for x in v if as_str(x)] if isinstance(v, list)
+                 else [as_str(v)[:24]] if as_str(v) else [])
+        if not valid:
+            return items[:24]          # 无快照的旧调用：保留原样，但下游标 legacy_unverified
+        good, bad = [], []
+        for x in items:
+            if x in valid and snap.quote_of(x):
+                good.append(x)
+            else:
+                bad.append(x)
+        invalid_ids.extend(bad)
+        return good[:24]
 
     chain = []
     for item in (raw.get("evidence_chain") or [])[:16]:
         if isinstance(item, dict):
+            original_ids = item.get("evidence_ids")
+            had_refs = bool(original_ids)
+            ids = as_evidence_ids(original_ids)
             chain.append({"claim": as_str(item.get("claim"))[:240],
-                          "evidence_ids": as_evidence_ids(item.get("evidence_ids")),
-                          "kind": as_str(item.get("kind"))[:32] or "fact"})
+                          "evidence_ids": ids,
+                          "kind": as_str(item.get("kind"))[:32] or "fact",
+                          "rejected": bool(had_refs and not ids)})
         elif isinstance(item, str) and as_str(item):
-            chain.append({"claim": as_str(item)[:240], "evidence_ids": [], "kind": "fact"})
+            chain.append({"claim": as_str(item)[:240], "evidence_ids": [], "kind": "fact",
+                          "rejected": False})
+    ref_audit = (validate_evidence_chain(chain, snap) if snap.available else
+                 {"checked": len(chain), "invalid": 0, "items": [],
+                  "status": "legacy_unverified", "note": "无证据快照，引用未校验"})
 
     return {
         "url": url or as_str(raw.get("url")),
@@ -565,6 +600,12 @@ def _normalize_landing(raw: dict, url: str) -> dict:
         "gaps": as_str_list(raw.get("gaps"), 8),
         "evidence_ids": as_evidence_ids(raw.get("evidence_ids")),
         "evidence_chain": chain,
+        # V4.44 / N01：无效引用与不可变快照审计，下游文案生成必须消费
+        "evidence_invalid_ids": sorted({x for x in invalid_ids if x})[:24],
+        "evidence_snapshot_id": snap.snapshot_id,
+        "evidence_fetched_at": snap.fetched_at,
+        "evidence_ref_audit": ref_audit,
+        "evidence_review_status": "locatable_not_reviewed" if snap.available else "legacy_unverified",
     }
 
 
@@ -612,13 +653,18 @@ async def analyze_landing_concise(db, url, text, page=None) -> dict:
     pack = build_evidence_pack(page, text)
     gate = pack["gate"]
     evidence_fields = {
-        "facts": [], "assumptions": [], "gaps": [], "evidence_ids": [],
+        # V4.44 / N01：evidence_ids 是本次快照的**可用编号全集**，唯一命名空间 [E###]
+        "facts": [], "assumptions": [], "gaps": [], "evidence_ids": pack["evidence_ids"],
         "evidence_chain": [], "evidence_gate": gate["status"],
         "blocked_reasons": gate["reasons"],
         "evidence_coverage": pack["coverage"],
         "evidence_dropped_chars": pack["dropped_chars"],
         "evidence_source_chars": pack["source_chars"],
         "evidence_index": pack["evidence"],
+        "sections_index": pack["sections_index"],
+        "evidence_snapshot_id": pack["evidence_snapshot_id"],
+        "evidence_fetched_at": pack["fetched_at"],
+        "evidence_review_status": "locatable_not_reviewed" if pack["evidence"] else "legacy_unverified",
         "evidence_expired_offers": gate["expired_offers"],
         "legacy_unverified": pack["legacy_unverified"],
         "evidence_note": pack["note"],
@@ -651,8 +697,13 @@ async def analyze_landing_concise(db, url, text, page=None) -> dict:
             or raw.get("language") or raw.get("advantages") or raw.get("channels"))
         info = finalize_invocation(info, llm, parsed_ok)
         if parsed_ok:
-            data = _normalize_landing(raw, input_url)
+            data = _normalize_landing(raw, input_url, pack)
             return {**evidence_fields, **data, **identity, "model_info": info,
+                    # 模型引用的编号写入 evidence_chain / evidence_invalid_ids；
+                    # evidence_ids 恒定表示本次可用快照全集，供下游校验
+                    "evidence_ids": evidence_fields["evidence_ids"],
+                    "evidence_index": evidence_fields["evidence_index"],
+                    "evidence_snapshot_id": evidence_fields["evidence_snapshot_id"],
                     "source": "mock" if info["fallback"] else "llm",
                     "gate_status": "ok"}
         print(f"[landing] 模型返回无法解析为 8 字段 JSON（len={len(resp)}），回退本地构造")
