@@ -1,7 +1,7 @@
-# 广告管理系统（在线营销素材管理平台 V4.45）
+# 广告管理系统（在线营销素材管理平台 V4.46）
 
 对应方案文档：《在线营销素材管理平台方案.docx》；开发节奏见《在线营销素材管理平台-版本开发规划.docx》。
-**当前版本：V4.45（2026-11-10）**。完整发版归档见 [CHANGELOG.md](CHANGELOG.md)；
+**当前版本：V4.46（2026-11-10）**。完整发版归档见 [CHANGELOG.md](CHANGELOG.md)；
 系统内「系统设置 → 新版通知」**按系统运行版本自动同步**，从最新版本开始只展示「版本号 + 总结式更新要点」，
 不再展示功能细节、前因后果、改造进度、影响范围与验证结果（AI 改造 **12 / 12** 已收官，进度见追踪表）。
 
@@ -24,9 +24,15 @@
 **N03 交付门**：缺官方商品图 / 真实 UI、官方规格未核验、逐图质检未上线时，自动产出统一标记
 `delivery_grade=draft` 且 `deliverable=false`，草案等级与计划版本随生成任务 `archive` 快照归档，
 不按「PNG 保存成功」计作可投放商品广告。源文限定词、未在原文定位的量化承诺与地区报价同样受控（A05 / A06 / A07）。
-可复现回归：`python3 tests/run_all.py`（96 项，含 esbuild 打包后真实执行的前端会话用例）。
-D4–D6（媒体全覆盖计划 / PromptBundle / 多阶段持久任务 / 逐图质检 / A09–A20 验收）仍为后续期次；
+可复现回归：`python3 tests/run_all.py`（V4.46 已扩至 128 项，含 esbuild 打包后真实执行的前端会话用例）。
+D4–D6（媒体全覆盖计划 / PromptBundle / 多阶段持久任务 / 逐图质检 / A09–A20 验收）已由 V4.46 完成工程路径与模拟回归；
 官方 `SPEC_VERIFIED_ON` 与供应商 `size_verified_on` 仍为空，真实模型与真实投放验证均未执行。
+
+**V4.46 媒体覆盖计划 + 多阶段编排 + 灰度验收（D4–D6）**：依据《素材创作平台新版验收与自动化创作改造实施方案》v2.0 完成 D4–D6。
+`backend/media_coverage.py` 按「平台 × 资产角色 × 尺寸 × 概念」生成媒体全覆盖计划（每概念完整适配全部版位、贪心拆子批、成本上界估算）；
+`backend/prompt_compiler.py` 编译 `PromptBundle`，按资产角色决定文字 / Logo / CTA 烘焙，软件真实 UI 不烘焙文字或 CTA 避免 no UI 误删产品界面；
+`backend/creation_plan_service.py` 提供 `CreationPlan` 持久编排（状态机 + 版本冻结 + 幂等 + 质检 + 可恢复），新增 5 条 `/api/creation-plans*` 路径（灰度开关 `ENABLE_AUTO_CREATION_PLAN` 默认开启，回滚不删列）；
+A09–A20 全部落成 `tests/test_d4_d5_d6.py`（32 项断言）。仍只完成工程路径与模拟回归，真实模型与真实投放验证未执行。
 
 **V4.44 新版验收整改第 1 期（D0）**：依据《素材创作平台新版验收与自动化创作改造实施方案》v2.0，
 问题映射与分期见 [docs/ACCEPTANCE_TRACKER.md](docs/ACCEPTANCE_TRACKER.md)。本版修复 N01 / N02 / N04 / N05 / N06：
@@ -40,7 +46,7 @@ D4–D6（媒体全覆盖计划 / PromptBundle / 多阶段持久任务 / 逐图�
 `backend/.bootstrap_credentials`。删除源码固定口令不能替代这一步。
 可复现回归：`python3 tests/run_all.py`（72 项，仅标准库 + 临时 SQLite，不发起真实付费调用）。
 验收状态按文档要求分列：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。
-默认自动创作与商品素材缺口（N03 / D1–D3）已在 V4.45 完成工程路径；D4–D6 仍为后续期次。
+默认自动创作与商品素材缺口（N03 / D1–D3）已在 V4.45 完成工程路径；D4–D6（媒体覆盖计划 / PromptBundle / 多阶段持久编排 / 逐图质检逻辑 / A09–A20 模拟回归）已由 V4.46 完成工程路径与模拟回归。
 
 **V4.43 版本通知改造**：`backend/version.py` 的 `APP_VERSION` 是系统运行版本的唯一来源，
 `main.py`、`backend/release_notes.py` 与 `scripts/prepare_release.py` 共用；版本通知以该版本为锚点，
@@ -280,7 +286,7 @@ npm run dev          # http://localhost:5173
 6. **规格库**：7 平台尺寸/视频/字数红线/关键词逻辑；管理员与经理可在线编辑，改动即时影响生成与校验。
 7. **设置（管理员）**：按用途配置模型（analysis/copy/image/video）+ 连通性测试 + 用户与角色 + 审计日志。
 
-## 关键 API（V4.43 当前有效接口，共 42 条路径）
+## 关键 API（V4.46 当前有效接口，共 56 条路径）
 
 | 分组 | 接口 |
 |---|---|

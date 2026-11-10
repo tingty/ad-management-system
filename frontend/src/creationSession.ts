@@ -97,6 +97,11 @@ export interface CreationSession {
   autoStage: 'idle' | 'await_images'
   workspaceDefaults: WorkspaceDefaults
   recommendation: CreationRecommendation | null
+  /** V4.46 / D5：自动创作的持久计划引用，使出图任务绑定到已冻结、已授权费用的计划 */
+  planId: string
+  planVersion: string
+  planApproved: boolean
+  planCoverage: any | null
 }
 
 /** localStorage key 保持不变：旧会话必须能被读到并迁移，不能靠换 key 丢弃历史。 */
@@ -162,6 +167,10 @@ function defaults(): CreationSession {
     autoStage: 'idle',
     workspaceDefaults: defaultWorkspace(),
     recommendation: null,
+    planId: '',
+    planVersion: '',
+    planApproved: false,
+    planCoverage: null,
   } as CreationSession
 }
 
@@ -199,6 +208,11 @@ function sanitize(raw: any): CreationSession {
     ...defaultWorkspace(),
     ...(raw.workspaceDefaults && typeof raw.workspaceDefaults === 'object' ? raw.workspaceDefaults : {}),
   }
+  // V4.46 / D5：计划引用随会话清洗；刷新后重新确认，避免拿旧的冻结版本去生成。
+  merged.planId = typeof raw.planId === 'string' ? raw.planId : ''
+  merged.planVersion = typeof raw.planVersion === 'string' ? raw.planVersion : ''
+  merged.planApproved = Boolean(raw.planApproved)
+  merged.planCoverage = raw.planCoverage && typeof raw.planCoverage === 'object' ? raw.planCoverage : null
   merged.analysis = raw.analysis && typeof raw.analysis === 'object' ? raw.analysis : null
   merged.copy = raw.copy && typeof raw.copy === 'object' ? raw.copy : null
   merged.images = Array.isArray(raw.images) ? raw.images : []

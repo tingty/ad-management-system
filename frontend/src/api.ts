@@ -383,6 +383,41 @@ export interface CreationRecommendation {
   note: string
 }
 
+/** V4.46 / D5：自动创作的持久计划（多阶段编排 + 版本冻结 + 质检归档）。 */
+export interface CreationPlan {
+  plan_id: string
+  plan_version: string
+  mode: string
+  /** 状态机阶段：created → analyzing → needs_input / recommendation_ready →
+   *  platform_confirmed → planning → generating → validating → succeeded / … */
+  stage: string
+  status: string
+  recommendation: CreationRecommendation | null
+  coverage: {
+    coverage?: {
+      platforms: string[]; asset_roles: string[]; required_tasks: number
+      sub_batch_count: number; spec_verified: boolean; spec_verified_on: string
+    }
+    cost_estimate?: {
+      model_calls_upper: number; cost_upper_usd: number
+      budget_cap_usd: number; over_budget: boolean; is_estimate: boolean; note: string
+    }
+    report?: Record<string, any>
+    [k: string]: any
+  } | null
+  approval_token: string | null
+  fee_authorized: boolean
+  job_ids: string[]
+  manifest: {
+    item_count?: number; plan_required_tasks?: number; missing_report?: any[]
+    complete?: boolean; incomplete_reason?: string; qa?: Record<string, any>
+  } | null
+  owner_id?: number | null
+  owner_name?: string
+  created_at?: string | null
+  updated_at?: string | null
+}
+
 /** V4.39：行业 / 品类画像（用于「素材创作」局部调整） */
 export interface IndustryProfile {
   key: string
@@ -859,6 +894,22 @@ export const api = {
   }) =>
     req<CreationRecommendation>('/api/creation-recommendation',
       { method: 'POST', body: JSON.stringify(payload) }),
+  // V4.46 / D5：自动创作的持久计划（创建 → 确认平台 → 冻结版本与费用授权 → 归档）
+  createCreationPlan: (payload: {
+    analysis: LandingAnalysis; platforms?: string[]; workspace_defaults?: Partial<WorkspaceDefaults>
+  }) =>
+    req<CreationPlan>('/api/creation-plans', { method: 'POST', body: JSON.stringify(payload) }),
+  getCreationPlan: (planId: string) =>
+    req<CreationPlan>(`/api/creation-plans/${encodeURIComponent(planId)}`),
+  setPlanCoverage: (planId: string, platforms: string[]) =>
+    req<CreationPlan>(`/api/creation-plans/${encodeURIComponent(planId)}/coverage`,
+      { method: 'POST', body: JSON.stringify({ platforms }) }),
+  confirmPlan: (planId: string, feeAuthorizedUsd: number) =>
+    req<CreationPlan>(`/api/creation-plans/${encodeURIComponent(planId)}/confirm`,
+      { method: 'POST', body: JSON.stringify({ fee_authorized_usd: feeAuthorizedUsd }) }),
+  finalizePlan: (planId: string, jobResults: any[]) =>
+    req<CreationPlan>(`/api/creation-plans/${encodeURIComponent(planId)}/finalize`,
+      { method: 'POST', body: JSON.stringify({ job_results: jobResults }) }),
   // 基于落地页分析结论 + 选中平台，调用大模型生成可编辑广告文案
   mediaCopy: (payload: { analysis: LandingAnalysis; platform: string; lang?: string
     /** V4.41 / F04：编辑过的方向 / 风格 / 配色预设参与文案生成 */

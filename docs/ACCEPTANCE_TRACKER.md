@@ -42,7 +42,7 @@
 | --- | --- | --- | --- |
 | V4.44 | D0 | N01 / N02 / N04 / N05 / N06 修复 + 可运行回归目录 | 已完成（工程修复，非素材/效果验收通过） |
 | V4.45 | D1 / D2 / D3 | 产品与资产对象、版本化行业策略、结构化概念、`recommended_visual_summary`、覆盖摘要、草案交付门、默认 auto + 可选 custom + 旧会话迁移 | 已完成（工程路径 + 模拟回归，非素材 / 效果验收通过） |
-| V4.46 | D4 / D5 / D6 | 媒体全覆盖计划、PromptBundle、多阶段持久任务、逐图质检与归档、A09–A20 验收记录 | 规划中 |
+| V4.46 | D4 / D5 / D6 | 媒体全覆盖计划、PromptBundle、多阶段持久任务、逐图质检与归档、A09–A20 验收记录 | 已完成（工程路径 + 模拟回归，非素材 / 效果验收通过） |
 
 ## 四、验收用例（文档 A01–A20）
 
@@ -52,7 +52,7 @@ A01–A08 属 D1–D3 界面与策划路径；A09–A20 属 D4–D6 规则、编
 | 用例 | 覆盖期次 | 状态 |
 | --- | --- | --- |
 | A01–A08 | V4.45 | 模拟回归通过（`tests/test_auto_creation.py`）；真实模型 / 真实投放 / 人工视觉核验未验证 |
-| A09–A20 | V4.46 | 未验证 |
+| A09–A20 | V4.46 | 模拟回归通过（`tests/test_d4_d5_d6.py`，32 项断言）；真实模型 / 真实投放 / 人工视觉核验未验证 |
 
 A01–A08 逐项回归落点：A01 默认 auto 与推荐语（后端契约 + 前端会话）；A02 旧会话迁移 custom 且输入 / 历史不变（前端真实执行）；A03 四类行业主体与场景；A04 多商品页 `needs_input`；A05 价格条款与投放国家不推断；A06 无效 / 不可定位证据阻断并移除量化承诺；A07 硬限定词随概念下发、描述改非量化；A08 缺产品资产仅草案。另附 A10 未知平台拒绝、A13 计划版本失效、A15 草案不计可投放。
 
@@ -90,7 +90,20 @@ A01–A08 逐项回归落点：A01 默认 auto 与推荐语（后端契约 + 前
 | 交付门 | 全部自动产出 `delivery_grade=draft` / `deliverable=false`；`plan_id` / `plan_version` / 草案等级随 `archive` 快照落库 |
 | 真实模型验证 / 真实投放验证 | **均未验证**；`SPEC_VERIFIED_ON` 与供应商 `size_verified_on` 仍为空 |
 
-未完成项（转后续期次）：媒体全覆盖计划 / PromptBundle / 多阶段编排与逐图质检（D4–D5）、
-A09–A20 用例与灰度验收（D6）、`CreationPlan` / `ProductSnapshot` 持久化表、
-官方媒体规格逐项核验、真实模型与视觉人工抽检、受控投放实验。
-V4.45 的草案门只做到「不宣称可投放并随任务归档」，尚不能替代逐图商品外观比对与 OCR 质检（A15 的完整判定）。
+V4.46 已完成（D4–D6）：媒体全覆盖计划 / PromptBundle（D4）、多阶段持久编排与逐图质检逻辑（D5）、A09–A20 用例与灰度验收（D6）、`CreationPlan` 持久化表与 `GenerationJob` 计划关联列。
+转后续期次（仍未验证）：官方媒体规格逐项核验（`SPEC_VERIFIED_ON` / `size_verified_on` 仍为空）、真实模型调用与视觉人工抽检、受控投放实验。
+V4.46 的逐图质检只做到「供应商失败纯背景→draft/needs_revision、规则未核验→draft、manifest 聚合 qa」，尚不能替代逐图商品外观比对与 OCR 质检（A15 的完整人工判定）。
+
+### V4.46 / D4–D6（2026-11-10）
+
+| 项目 | 实测结果 |
+| --- | --- |
+| `python3 tests/run_all.py` | 128 项断言全部通过（V4.45 既有 96 项 + 本版 32 项）；0 失败 0 错误 0 跳过 |
+| 前端会话真实执行 | `tests/frontend/auto_creation_session.mjs` 经本地 esbuild 打包 `creationSession.ts` 后由 node 运行（test_23）：6 组断言通过 |
+| 编译与构建 | `compileall -q backend scripts tests`、`import main` = 4.46.0 / 56 条 API；`tsc --noEmit` 通过；`vite build` 45 模块、282.87 kB JS / 57.21 kB CSS |
+| 版本通知锚点 | `APP_VERSION=4.46.0` → `release_tag()` = `V4.46`；`prepare_release.py --check` 通过 |
+| 交付门 | 全部自动产出 `delivery_grade=draft` / `deliverable=false`；`plan_id` / `plan_version` 经 D5 `CreationPlan` 冻结后随任务 `archive` 落库；manifest 聚合覆盖范围与缺失报告 |
+| 灰度开关 | `ENABLE_AUTO_CREATION_PLAN = True`（默认开启）；关闭时 5 条 `/api/creation-plans*` 返回 503，回滚不删列 |
+| 真实模型验证 / 真实投放验证 | **均未验证**；`SPEC_VERIFIED_ON` 与供应商 `size_verified_on` 仍为空 |
+
+A09–A20 逐项回归落点：A09 软件真实 UI 不烘焙文字/CTA 且保留 Logo（prompt_compiler ASSET_ROLE_RENDER + bundle 可溯源）；A10 未知平台 `create_plan` 抛 `MediaRuleError`；A11 `set_coverage` 只按已选平台；A12 6 平台×3 概念=48 任务拆 2 批、父计划不丢、无轮换伪装；A13 计划版本失效→409（版本冲突）；A14 confirm 费用低于成本上界/0 费拒绝、`over_budget` 显式标出；A15 失败纯背景→draft/needs_revision、规则未核验即便成功也 draft、manifest 聚合 qa；A16 同键不同内容冲突→409、路由 409 映射；A17 全链路 + 新会话按 plan_id 恢复；A18 中断标记 unknown_outcome 不自动重发、cancel 不复活；A19 取消后不可再 confirm；A20 manifest 含 item/missing/complete 不谎报。

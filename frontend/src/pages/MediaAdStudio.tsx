@@ -331,13 +331,16 @@ export default function MediaAdStudio() {
           style_opts: {
             creative_direction: s.direction, content_style: s.styleName, color_scheme: s.colorName,
           },
-          // V4.45 / N03：自动流程的草案等级与计划版本随任务快照落库，
-          // 事后查阅时仍能看出「这是草案，不计作可投放商品广告」。
-          ...(s.mode === 'auto' && s.recommendation ? {
-            delivery_grade: s.recommendation.delivery_grade,
-            plan_id: s.recommendation.plan_id,
-            plan_version: s.recommendation.plan_version,
-          } : {}),
+          // V4.45 / N03：自动流程的草案等级随任务快照落库，事后仍能看出「这是草案，不计可投放」。
+          // V4.46 / D5：计划已冻结并授权费用后，把出图任务绑定到该计划（版本失效 / 事实改写会被后端拒绝）。
+          ...(s.mode === 'auto' && s.recommendation
+            ? {
+                delivery_grade: s.recommendation.delivery_grade,
+                ...(s.planApproved && s.planId
+                  ? { plan_id: s.planId, plan_version: s.planVersion }
+                  : {}),
+              }
+            : {}),
         },
         // 同批次重复提交复用同一幂等键；主动重新生成递增 seq，不误用旧任务
         idempotency_key: `hist-${s.historyId ?? 'none'}-p-${s.platform}-seq-${seq}`,

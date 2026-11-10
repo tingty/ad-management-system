@@ -292,8 +292,12 @@ class TestPlanVersionAndDeliveryGate(unittest.TestCase):
 
     def test_22_frontend_grades_and_plan_are_archived(self):
         studio = (FRONTEND / "pages" / "MediaAdStudio.tsx").read_text(encoding="utf-8")
+        # 草案等级始终随任务归档
         self.assertIn("delivery_grade: s.recommendation.delivery_grade", studio)
-        self.assertIn("plan_version: s.recommendation.plan_version", studio)
+        # V4.46 回归修复：plan_id / plan_version 仅在计划已确认(planApproved)时附加，
+        # 避免未确认计划（D5 CreationPlan 未创建/未 confirm）触发后端 422 中断自动链路
+        self.assertIn("s.planApproved && s.planId", studio)
+        self.assertIn("plan_version: s.planVersion", studio)
         panel = (FRONTEND / "pages" / "AutoCreationPanel.tsx").read_text(encoding="utf-8")
         self.assertIn("不计可投放", panel)
         self.assertIn("rec.structured_concepts", panel)

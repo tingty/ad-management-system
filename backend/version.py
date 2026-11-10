@@ -13,7 +13,13 @@ from __future__ import annotations
 
 import re
 
-APP_VERSION = "4.45.0"
+APP_VERSION = "4.46.0"
+
+#: V4.46 / D5–D6：自动创作「策划 + 计划 + 编排」新路径的灰度开关。
+#: 默认对内部工作区开启；回滚时只需改为 False，新入口即关闭，但资产 / 计划 / 任务记录保留，
+#: 不删除数据库列来回滚（文档「迁移与向后兼容」）。
+ENABLE_AUTO_CREATION_PLAN = True
+
 
 
 def release_tag(version: str | None = None) -> str:

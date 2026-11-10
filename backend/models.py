@@ -103,6 +103,9 @@ class GenerationJob(Base):
     # V4.44 / N05：同 key 不同内容必须冲突（409），不能再静默返回旧任务
     payload_hash = Column(String(64), nullable=True, index=True)
     kind = Column(String(24), default="images")       # images / auto_creation
+    # V4.46 / D5：关联持久计划；执行版本须与计划冻结版本一致，禁止客户端改写事实绕过计划
+    plan_id = Column(String(40), nullable=True, index=True)
+    plan_version = Column(String(40), nullable=True)
     status = Column(String(24), default="queued")     # queued/running/succeeded/partial_success/failed/canceled
     owner_id = Column(Integer, nullable=True, index=True)
     owner_name = Column(String(64), nullable=True)
@@ -151,3 +154,35 @@ class AuditLog(Base):
     target = Column(String(128), nullable=True)
     detail = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=utcnow)
+
+
+# ----------------------------- V4.46 / D5：自动创作持久计划 -----------------------------
+class CreationPlan(Base):
+    """D5：自动创作的持久计划（与 GenerationJob 解耦，承载多阶段编排与版本冻结）。
+
+    不另造生成系统：计划只持有「分析 / 推荐 / 覆盖 / 确认令牌 / 关联任务 / 归档 manifest」，
+    真正的出图仍通过既有 `GenerationJob` 执行。状态机：
+    created → analyzing → needs_input / recommendation_ready → platform_confirmed
+    → planning → generating → validating → succeeded / partial_success / failed / canceled。
+    迁移幂等：`ensure_schema()` 的 `create_all` 只在表不存在时建表，不删列。
+    """
+    __tablename__ = "creation_plans"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    plan_id = Column(String(40), unique=True, index=True)
+    plan_version = Column(String(40), default="")     # 冻结版本，执行版本须一致
+    mode = Column(String(16), default="auto")          # auto / custom
+    stage = Column(String(24), default="created")      # 状态机当前阶段
+    status = Column(String(24), default="draft")       # draft / partial_success / succeeded / failed / canceled
+    analysis_json = Column(JSON, nullable=True)
+    recommendation_json = Column(JSON, nullable=True)   # 来自 creation_planner
+    coverage_json = Column(JSON, nullable=True)         # 来自 media_coverage
+    approval_token = Column(String(64), nullable=True)  # 冻结版本 + 范围 + 费用授权的令牌
+    fee_authorized = Column(Boolean, default=False)
+    owner_id = Column(Integer, nullable=True, index=True)
+    owner_name = Column(String(64), nullable=True)
+    history_id = Column(Integer, nullable=True, index=True)
+    job_ids = Column(JSON, nullable=True)              # 关联的 generation job id 列表
+    manifest_json = Column(JSON, nullable=True)        # 归档 manifest（media/concept/role/缺失报告）
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+

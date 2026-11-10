@@ -22,6 +22,11 @@ from media_platforms import (list_media_platforms, validate_platform,
                              MediaRuleError, SPEC_VERSION, MEDIA_RULES)
 from media_ad import generate_media_copy, generate_media_images
 from industry_profiles import resolve_profile
+from creation_plan_service import (
+    create_plan, set_coverage, confirm_plan, attach_job, finalize,
+    get_plan, plan_to_dict,
+)
+from version import ENABLE_AUTO_CREATION_PLAN
 from image_capabilities import public_capabilities
 import job_service
 from auth import (current_user, require_roles, verify_password, hash_password, create_token,
@@ -165,11 +170,35 @@ async def create_generation_job(body: dict, db: Session = Depends(get_db),
 
     同一个 `idempotency_key` 重复提交只返回原任务，不重复调用模型、不重复归档。
     浏览器断开 / 刷新后可用 `GET /api/generation-jobs/{job_id}` 恢复结果与状态。
+
+    V4.46 / D5：若携带 `plan_id`，须与持久计划的冻结版本、分析原文一致；
+    客户端不得提交任意改写的事实绕过计划（否则 422 拒绝）。
     """
     from pydantic import ValidationError
+    plan_id = str(body.get("plan_id") or "").strip() or None
+    plan_version = str(body.get("plan_version") or "").strip() or None
+    kind = "auto_creation" if plan_id else str(body.get("kind") or "images")
+    if plan_id:
+        plan = get_plan(db, plan_id)
+        if not plan:
+            raise HTTPException(422, detail={"message": "关联的创作计划不存在", "plan_id": plan_id})
+        if plan_version and plan.plan_version and plan_version != plan.plan_version:
+            raise HTTPException(409, detail={
+                "message": "计划版本已失效（产品事实 / 目标地区变化），请重新确认",
+                "plan_id": plan_id, "frozen": plan.plan_version, "given": plan_version})
+        incoming_analysis = (body.get("images_request") or {}).get("analysis") or {}
+        base_snap = (plan.analysis_json or {}).get("evidence_snapshot_id") or ""
+        req_snap = incoming_analysis.get("evidence_snapshot_id") or ""
+        if base_snap and req_snap and base_snap != req_snap:
+            raise HTTPException(422, detail={
+                "message": "生成请求的分析原文与计划不一致，已阻止改写事实绕过计划",
+                "plan_id": plan_id})
+        if not plan.approval_token:
+            raise HTTPException(422, detail={"message": "计划尚未确认（未冻结版本 / 未授权费用），不能生成"})
     try:
         job, created = job_service.create_job(
-            db, body, user, idempotency_key=str(body.get("idempotency_key") or "").strip())
+            db, body, user, idempotency_key=str(body.get("idempotency_key") or "").strip(),
+            kind=kind, plan_id=plan_id, plan_version=plan_version)
     except ValidationError as e:
         raise HTTPException(422, detail={
             "message": "生成任务入参不合法，已在排队前拒绝",
@@ -188,10 +217,16 @@ async def create_generation_job(body: dict, db: Session = Depends(get_db),
     except Exception as e:
         raise HTTPException(422, detail={"message": "生成任务创建失败",
                                         "errors": [f"{type(e).__name__}: {str(e)[:180]}"]})
+    if created and plan_id:
+        try:
+            attach_job(db, plan_id, job.job_id)
+        except Exception:
+            pass
     if created:
         job_service.spawn_job(job.job_id)
     return {**job_service.job_to_dict(job, include_result=False),
             "created": created,
+            "plan_id": plan_id,
             "poll_url": f"/api/generation-jobs/{job.job_id}",
             "message": ("任务已创建并在服务端执行，可离开页面；刷新后按 job_id 恢复"
                         if created else "同一幂等键已存在，返回原任务（不重复生成）")}
@@ -1092,3 +1127,92 @@ def creation_recommendation(body: dict,
     return build_recommendation(analysis, plats,
                                 workspace_defaults=defaults,
                                 mode=str(body.get("mode") or "auto"))
+
+
+# ===========================================================================
+# V4.46 / D5：自动创作持久计划（多阶段编排 + 版本冻结 + 质检归档）
+# ===========================================================================
+def _plan_feature_off() -> bool:
+    """灰度开关：关闭时新入口不可达，但资产 / 计划 / 任务记录保留（文档回滚要求）。"""
+    return not bool(ENABLE_AUTO_CREATION_PLAN)
+
+
+@router.post("/creation-plans", status_code=202)
+def api_create_plan(body: dict, db: Session = Depends(get_db),
+                    user: User = Depends(require_roles(*CAN_EDIT))):
+    """D5：基于落地页分析创建持久计划，落库推荐与覆盖快照，返回 plan_id + 状态。
+
+    输入 analysis（来自 /api/landing-analysis）+ 已选平台 + 工作区默认值；不调用新模型。
+    未知平台在创建时即由 `validate_platform` 拒绝（A10）。
+    """
+    if _plan_feature_off():
+        raise HTTPException(503, detail={"message": "自动创作计划功能当前已关闭（灰度开关）"})
+    analysis = body.get("analysis") if isinstance(body.get("analysis"), dict) else {}
+    platforms = body.get("platforms") if isinstance(body.get("platforms"), list) else []
+    defaults = body.get("workspace_defaults") if isinstance(body.get("workspace_defaults"), dict) else {}
+    if not analysis:
+        raise HTTPException(422, detail={"message": "请提供落地页分析结果"})
+    try:
+        plan = create_plan(db, analysis, platforms, defaults, user)
+    except MediaRuleError as e:
+        raise HTTPException(422, detail={"message": "媒体平台目录校验未通过", "errors": e.errors})
+    return {**plan_to_dict(plan), "created": True,
+            "message": "计划已创建；确认平台与费用授权后可生成"}
+
+
+@router.get("/creation-plans/{plan_id}")
+def api_get_plan(plan_id: str, db: Session = Depends(get_db),
+                 _: User = Depends(require_roles(*ROLES))):
+    """读取计划的推荐描述、概念、覆盖摘要、阶段与确认状态；刷新 / 关闭后据此恢复。"""
+    plan = get_plan(db, plan_id)
+    if not plan:
+        raise HTTPException(404, "创作计划不存在")
+    return plan_to_dict(plan)
+
+
+@router.post("/creation-plans/{plan_id}/coverage")
+def api_plan_coverage(plan_id: str, body: dict, db: Session = Depends(get_db),
+                      user: User = Depends(require_roles(*CAN_EDIT))):
+    """D4 / A11：用户确认平台后计算「全规则图片」覆盖计划与成本上界（只按已选范围）。"""
+    plan = get_plan(db, plan_id)
+    if not plan:
+        raise HTTPException(404, "创作计划不存在")
+    platforms = body.get("platforms") if isinstance(body.get("platforms"), list) else []
+    try:
+        plan = set_coverage(db, plan_id, platforms, user)
+    except MediaRuleError as e:
+        raise HTTPException(422, detail={"message": "媒体平台目录校验未通过", "errors": e.errors})
+    return {**plan_to_dict(plan),
+            "message": "覆盖计划已按所选平台与概念数计算（超批自动拆子批，不截断版位）"}
+
+
+@router.post("/creation-plans/{plan_id}/confirm")
+def api_plan_confirm(plan_id: str, body: dict, db: Session = Depends(get_db),
+                    user: User = Depends(require_roles(*CAN_EDIT))):
+    """D5 / A13 / A14：冻结版本、范围与费用授权，生成 approval_token。
+
+    费用授权须 ≥ 预计成本上界，否则明确拒绝（不隐瞒缺口）；冻结后产品事实 / 目标地区变化
+    将使下游推荐、提示词、覆盖与确认令牌失效。
+    """
+    plan = get_plan(db, plan_id)
+    if not plan:
+        raise HTTPException(404, "创作计划不存在")
+    fee = float(body.get("fee_authorized_usd") or 0)
+    try:
+        plan = confirm_plan(db, plan_id, fee, user)
+    except ValueError as e:
+        raise HTTPException(422, detail={"message": str(e)})
+    return {**plan_to_dict(plan),
+            "message": "计划已冻结；可携带 plan_id / plan_version 创建生成任务"}
+
+
+@router.post("/creation-plans/{plan_id}/finalize")
+def api_plan_finalize(plan_id: str, body: dict, db: Session = Depends(get_db),
+                      _: User = Depends(require_roles(*CAN_EDIT))):
+    """D5 / D6：汇总关联生成任务结果 → 质检 → 归档 manifest。"""
+    plan = get_plan(db, plan_id)
+    if not plan:
+        raise HTTPException(404, "创作计划不存在")
+    job_results = body.get("job_results") if isinstance(body.get("job_results"), list) else []
+    plan = finalize(db, plan_id, job_results)
+    return {**plan_to_dict(plan), "message": "计划已质检并归档"}

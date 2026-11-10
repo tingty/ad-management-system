@@ -139,7 +139,8 @@ def asset_to_dict(a: CreativeAsset) -> dict:
 
 
 def create_job(db: Session, payload: dict, user, *,
-               idempotency_key: str = "", kind: str = "images") -> tuple[GenerationJob, bool]:
+               idempotency_key: str = "", kind: str = "images",
+               plan_id: str | None = None, plan_version: str | None = None) -> tuple[GenerationJob, bool]:
     """V4.44 / N05：按用户作用域幂等 + 请求内容哈希 + 执行前预登记子任务。
 
     - 同 key 且同内容 → 返回原任务（created=False），不重复调用模型 / 归档；
@@ -175,6 +176,8 @@ def create_job(db: Session, payload: dict, user, *,
         owner_id=owner,
         owner_name=(getattr(user, "display_name", None) or getattr(user, "username", "") or ""),
         history_id=hid if isinstance(hid, int) else None,
+        plan_id=plan_id or None,
+        plan_version=plan_version or None,
         request_json=request_snapshot,
         subtasks_json=_prefill_subtasks(parsed), progress=0, attempts=0,
         created_at=utcnow(), updated_at=utcnow(),

@@ -44,7 +44,10 @@ export default function AutoCreationPanel() {
   const [showDefaults, setShowDefaults] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
   const [picked, setPicked] = useState<string>(s.platform || '')
+  const [planLoading, setPlanLoading] = useState(false)
+  const [planErr, setPlanErr] = useState('')
   const lastKey = useRef('')
+  const planKeyRef = useRef('')
 
   useEffect(() => {
     let alive = true
@@ -90,6 +93,36 @@ export default function AutoCreationPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planKey, s.mode, !!s.analysis])
 
+  /**
+   * V4.46 / D5：推荐就绪后自动建立「持久计划」（确定性幂等，重复提交复用同一计划），
+   * 供确认冻结与出图任务绑定。仅创建草稿，不授权费用、不发起任何生成。
+   */
+  useEffect(() => {
+    if (s.mode !== 'auto' || !s.recommendation) return
+    if (planKeyRef.current === planKey && s.planId) return
+    planKeyRef.current = planKey
+    const analysis = s.analysis
+    if (!analysis) return
+    let alive = true
+    setPlanLoading(true)
+    setPlanErr('')
+    api.createCreationPlan({
+      analysis,
+      platforms: picked ? [picked] : [],
+      workspace_defaults: s.workspaceDefaults,
+    }).then(p => {
+      if (!alive) return
+      updateSession({
+        planId: p.plan_id, planVersion: p.plan_version,
+        planCoverage: p.coverage, planApproved: false,
+      })
+    }).catch((e: any) => {
+      if (alive) setPlanErr(e?.message || '计划创建失败')
+    }).finally(() => { if (alive) setPlanLoading(false) })
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planKey, s.mode, !!s.recommendation, picked])
+
   const rec = s.recommendation
   const meta = STATUS_META[rec?.status || 'draft_only'] || STATUS_META.draft_only
   const wd = s.workspaceDefaults
@@ -100,14 +133,44 @@ export default function AutoCreationPanel() {
   }
 
   /** 用户显式点击后，才把自动链路交给工作台执行（不隐式收费）。 */
-  function confirmAndGenerate() {
+  async function confirmAndGenerate() {
     const p = picked || platforms[0]?.platform || ''
+    const analysis = s.analysis
     if (!p) { setErr('请选择一个媒体平台'); return }
-    if (!s.analysis) { setErr('请先完成落地页分析'); return }
+    if (!analysis) { setErr('请先完成落地页分析'); return }
     if (rec?.status === 'needs_input') {
       setErr('存在阻断项，请先明确推广对象或重新分析落地页')
       return
     }
+    setErr('')
+    // ---- V4.46 / D5：建立并冻结计划（版本 + 费用授权），出图任务绑定该计划 ----
+    let planId = s.planId
+    let planVersion = s.planVersion
+    if (!planId) {
+      try {
+        const cp = await api.createCreationPlan({
+          analysis, platforms: [p], workspace_defaults: s.workspaceDefaults,
+        })
+        planId = cp.plan_id; planVersion = cp.plan_version
+        updateSession({ planId, planVersion, planCoverage: cp.coverage, planApproved: false })
+      } catch (e: any) {
+        setErr(e?.message || '计划创建失败'); return
+      }
+    }
+    // 费用授权：成本上界（仅为估算上界，不代表真实计费）
+    const costUpper = Number(s.planCoverage?.cost_estimate?.cost_upper_usd ?? 0)
+    let approved = false
+    try {
+      const cf = await api.confirmPlan(planId, Math.max(costUpper, 0.01))
+      approved = true
+      planVersion = cf.plan_version
+      updateSession({ planApproved: true, planId: cf.plan_id, planVersion: cf.plan_version })
+    } catch (e: any) {
+      // 冻结失败不阻断：回退为不带计划元数据生成，避免硬断自动流程
+      updateSession({ planApproved: false })
+      setPlanErr(e?.message || '计划冻结失败，将不带计划元数据生成')
+    }
+
     const sp = platforms.find(x => x.platform === p) || null
     const defaultIds = sp ? sp.placements.filter(pl => pl.default).map(pl => pl.id) : []
     const { adaptations } = buildAdaptations(sp, defaultIds, false)
@@ -121,9 +184,11 @@ export default function AutoCreationPanel() {
       studioError: '',
       autoContinue: true,
       autoStage: 'idle',
+      planId, planVersion,
       taskLogs: [...s.taskLogs, {
         at: Date.now(), kind: 'info' as const,
-        text: `自动创作已确认：平台 ${p}，主要图片任务约 ${Math.max(1, adaptations.length)} 项，计划版本 ${rec?.plan_hash || '-'}`,
+        text: `自动创作已确认：平台 ${p}，主要图片任务约 ${Math.max(1, adaptations.length)} 项，` +
+              `计划 ${planId} 已${approved ? '冻结并授权费用' : '未冻结'}（版本 ${planVersion || '-'}）`,
       }].slice(-40),
     })
     setTimeout(() => document.getElementById('media-studio')?.scrollIntoView({ behavior: 'smooth' }), 80)
@@ -241,6 +306,29 @@ export default function AutoCreationPanel() {
             )}
           </div>
 
+          {/* V4.46 / D4：已建立的「全覆盖计划」——总任务、预计成本上界、规则核验状态 */}
+          {s.planCoverage && (
+            <div className="ac-coverage">
+              <div className="ac-label">覆盖计划（D4 全规则图片）</div>
+              <div className="ac-kv">
+                <span>总任务</span><b>{s.planCoverage.coverage?.required_tasks ?? '—'} 项</b>
+                <span>子批</span><b>{s.planCoverage.coverage?.sub_batch_count ?? '—'}（超 24 任务 / 40MP 自动拆批，不截断）</b>
+                <span>资产角色</span><b>{(s.planCoverage.coverage?.asset_roles || []).length} 类</b>
+                <span>预计成本上界</span><b>${(s.planCoverage.cost_estimate?.cost_upper_usd ?? 0).toFixed(2)} USD（估算，非真实计费）</b>
+                <span>规则核验</span><b>{s.planCoverage.coverage?.spec_verified ? '已核验' : '内部目录，投放前须官方核验'}</b>
+              </div>
+              {s.planCoverage.cost_estimate?.over_budget && (
+                <div className="alert err ac-status-hint">
+                  预计成本上界已超过工作区预算上限：{s.planCoverage.cost_estimate.note}
+                </div>
+              )}
+              <div className="ac-note">
+                计划 {s.planId || '—'} · 版本 {s.planVersion || '—'} · 确认冻结后出图任务绑定该计划；
+                内部规则目录尚未官方核验，全部产出按草案记录、不计作可投放商品广告（A14 / A15）。
+              </div>
+            </div>
+          )}
+
           {(rec.missing_inputs.length > 0 || rec.blocking_reasons.length > 0) && (
             <div className="ac-missing">
               <div className="ac-label">需要补充 / 已阻断</div>
@@ -262,7 +350,7 @@ export default function AutoCreationPanel() {
               ))}
             </div>
             <div className="ac-note">
-              本期按单个平台执行主要图片角色；多平台全覆盖计划、版本化官方规则与 PromptBundle 属于后续 D4–D5，尚未上线。
+              已按所选平台建立「自动创作计划」（D4 全覆盖 + D5 多阶段编排）：确认后将冻结版本与费用授权，出图任务绑定到该计划，刷新 / 关闭后可按 plan_id 恢复。
             </div>
 
             <button className="linkbtn ac-defaults-toggle" onClick={() => setShowDefaults(v => !v)}>

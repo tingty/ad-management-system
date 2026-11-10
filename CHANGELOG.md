@@ -1669,3 +1669,48 @@
 - 「可定位原文」仍不等于「商业真实性已审核」；`delivery_grade=draft` 不等于素材质量不合格，但明确不得作为可投放商品广告交付。
 - 自动创作的分析、文案、出图复用现有链路与同一证据 / 规格检查；本版不宣称已完成 PromptBundle、多阶段编排、官方规格核验或逐图质检。
 - 四种状态分开记录：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。
+
+## V4.46 媒体覆盖计划 + 多阶段编排 + 灰度验收（D4–D6）
+
+**发布日期**：2026-11-10
+**变更类型**：新增 / 优化 / 修复 / 发布
+**涉及模块**：素材创作平台、前端面板与会话、后端接口、数据模型、策划与编排服务、发版流程、改造追踪、工程文档
+**变更摘要**：按《素材创作平台新版验收与自动化创作改造实施方案》v2.0 完成 D4–D6：新增媒体全覆盖计划（`build_coverage_plan` / `_split_batches`）、`PromptBundle` 编译（`compile_prompt_bundle` + 资产角色渲染表）、多阶段持久 `CreationPlan` 编排（状态机 + 版本冻结 + 幂等 + 质检 + 可恢复），并把 A09–A20 验收路径落成可运行回归；灰度开关 `ENABLE_AUTO_CREATION_PLAN` 默认开启，回滚不删列、不破坏既有数据。
+
+**更新要点**
+- D4 媒体全覆盖计划：按「平台 × 资产角色 × 尺寸 × 概念」生成所需任务，每个概念完整适配全部版位（不做轮换伪装）；贪心拆子批（≤24 任务 / ≤40MP，父计划保留全部任务不截断）；成本上界 = 图片数×0.05 + 概念数×0.05，预算不足显式标出 `over_budget` 不静默生成。
+- D4 `PromptBundle` 编译：按资产角色决定 bake_text / bake_logo / bake_cta；软件真实 UI（app_portrait / fullscreen_portrait / splash_vertical / native_image / banner）不烘焙文字或 CTA，避免「no UI」把产品真实界面误删；bundle 携带 fact_input / concept_input / references / render_spec / post_render / traceability / hashes 可溯源至 64 位哈希。
+- D5 `CreationPlan` 持久编排：状态机 `created → analyzing → needs_input / recommendation_ready → platform_confirmed → planning → generating → validating → succeeded / partial / failed / canceled`；版本冻结 `approval_token`，确认时强校验费用授权 ≥ 成本上界；工作区级幂等键 + payload_hash（同键不同内容返回 409），相同输入查到既有计划即返回避免唯一约束冲突（前端刷新重提交）。
+- D5 质检与可恢复：供应商失败且为纯背景 → 标记 `draft / needs_revision`；`SPEC_VERIFIED_ON` 为空（官方规则未核验）即便生成成功也记 `draft`；中断恢复按 `plan_id` 重取计划与 job 清单，未知结果绝不自动重发；取消后不可再 confirm / 不可复活。
+- D6 灰度与回归：A09–A20 全部落成 `tests/test_d4_d5_d6.py`（32 项断言）——未知平台 A10 拒绝、覆盖只按已选 A11、无轮换伪装 A12、计划版本失效 409（A13）、费用不足 / 0 费拒绝（A14）、草案不计可投放（A15）、幂等冲突 409（A16）、全链路 + 新会话恢复（A17）、中断不自动重发（A18）、取消不可再确认（A19）、manifest 打包不谎报（A20）；灰度开关关闭返回 503、未知平台 422。
+- 回归修复：V4.45 `MediaAdStudio` 无条件发送 `s.recommendation.plan_id`，而 V4.46 后端要求该 plan 必须已存在于 `creation_plans` 且已确认，否则 422 中断自动链路；改为仅当 `s.planApproved && s.planId` 才附加 `plan_id / plan_version`，未确认计划走不带计划元数据的降级路径。
+
+**本次优化与更改的功能 / 模块**
+- 【新增】后端 / 媒体全覆盖计划：`backend/media_coverage.py` 提供 `build_coverage_plan(recommendation, platforms, concepts, workspace_defaults)`（task / 子批 / 成本上界 / 覆盖报告，`unknown_spec` 显式标注未核验规则任务）、`merge_manifest(plan, job_results)`（D6 / A20 打包 media / concept / role / 缺失报告）、`_split_batches(tasks)`（贪心拆批，父计划保留全部）。
+- 【新增】后端 / PromptBundle 编译：`backend/prompt_compiler.py` 提供 `compile_prompt_bundle(concept, brief, references, asset_role, supplier_caps)`（返回 system / task / fact_input / concept_input / references / render_spec / post_render / traceability / hashes）与 `ASSET_ROLE_RENDER` 资产角色渲染表（按角色决定 bake_text / bake_logo / bake_cta）。
+- 【新增】后端 / 多阶段编排：`backend/creation_plan_service.py` 提供纯逻辑（`build_plan_doc` / `qa_generation_result`（A15 质检）/ `build_manifest` / `next_stage` / `STAGES` / `TERMINAL`）与 DB CRUD（`create_plan` 幂等 / `set_coverage`（A11）/ `confirm_plan`（A13 A14 冻结 + 费用授权）/ `attach_job` / `finalize` / `get_plan` / `plan_to_dict` / `validate_plan_reference`），未知平台抛 `MediaRuleError`（A10）。
+- 【新增】数据模型：`backend/models.py` 新增 `CreationPlan`（creation_plans：plan_id / plan_version / mode / stage / status / analysis_json / recommendation_json / coverage_json / approval_token / fee_authorized / owner_id / history_id / job_ids / manifest_json）；`GenerationJob` 新增 `plan_id` / `plan_version` 两列（幂等 `ensure_schema()` 在建表后 ALTER 补齐，不破坏旧数据）。
+- 【优化】后端接口：`backend/routers.py` 新增 5 条 `/api/creation-plans*` 路径（202 创建 / 查询 / coverage / confirm / finalize），含 `_plan_feature_off()` 灰度开关（关时返回 503）；修改 `POST /api/generation-jobs`：携 `plan_id` 时强校验计划引用（版本冲突 409 / 事实改写 422 / 未确认 422），创建后 `attach_job`。
+- 【优化】系统版本：`backend/version.py` 升 `APP_VERSION = "4.46.0"`，`ENABLE_AUTO_CREATION_PLAN = True`（灰度开关，回滚时不删列）。
+- 【新增】前端类型与接口：`frontend/src/api.ts` 新增 `CreationPlan` 接口（stage / status / coverage{cost_estimate, coverage, report} / approval_token / fee_authorized / job_ids / manifest）与 5 个 plan API（`createCreationPlan` / `getCreationPlan` / `setPlanCoverage` / `confirmPlan` / `finalizePlan`）。
+- 【优化】前端会话：`frontend/src/creationSession.ts` 新增 `planId` / `planVersion` / `planApproved` / `planCoverage`，`defaults()` 初始化、`sanitize()` 清洗迁移避免拿旧冻结版本生成。
+- 【优化】前端面板：`frontend/src/pages/AutoCreationPanel.tsx` 推荐就绪后自动 `createCreationPlan`（幂等）写入会话并展示 D4 覆盖计划（总任务 / 子批 / 资产角色 / 成本上界 / 规则核验 / over_budget 告警）；`confirmAndGenerate` 改为 async：先建计划 → `confirmPlan(planId, max(costUpper, 0.01))` 冻结 + 费用授权 → 成功才把计划写入会话再触发生成，失败回退不带计划元数据；`MediaAdStudio.tsx` 出图 payload 仅在 `s.planApproved && s.planId` 时附加 `plan_id / plan_version`。
+- 【新增】回归测试：`tests/test_d4_d5_d6.py`（32 项断言）覆盖 A09–A20 与 D6 路由；`tests/test_auto_creation.py::test_22` 更新为校验计划有条件附加（V4.46 回归修复）。
+
+**影响范围**
+- 前端：自动创作面板新增「已按所选平台建立自动创作计划」提示与 D4 覆盖计划展示；确认生成前先冻结计划并授权费用，未授权不生成。复用既有生成链路，不另造生成系统。
+- 后端：新增 `media_coverage.py` / `prompt_compiler.py` / `creation_plan_service.py` 与 5 条 `/api` 路径（有效 `/api` 路径由 43 条增至 56 条）；`models.py` / `job_service.py` / `routers.py` / `version.py` 有改动；`ensure_schema()` 幂等建表 + ALTER 补齐列，旧库不重建、不丢数据。
+- 数据：`CreationPlan` 持久化计划与 manifest；`GenerationJob` 增加 `plan_id` / `plan_version` 关联列；回滚时仅关闭灰度开关，列与记录保留。
+- 验收口径：D4–D6 完成**工程路径 + 模拟回归**；官方媒体规格 `SPEC_VERIFIED_ON` 与供应商 `size_verified_on` 仍为空，真实模型与真实投放验证均未执行；A09–A20 登记为「模拟回归通过，真实模型 / 真实投放 / 人工视觉核验未验证」。
+- 权限与部署：沿用既有登录角色与编辑权限；无需管理员轮换口令；灰度回滚只需置 `ENABLE_AUTO_CREATION_PLAN = False`，资产、计划与任务记录保留。
+
+**验证**
+- `python3 tests/run_all.py`：**128 项断言全部通过**（V4.45 既有 96 项 + 本版 32 项），其中前端会话用例由本地 esbuild 打包后以 node 真实执行（test_23）。
+- 后端 `compileall -q backend scripts tests` 通过；`import main` 通过，运行版本 `4.46.0`、有效 `/api` 路径 56 条。
+- 前端 `tsc --noEmit` 通过；`vite build` 45 模块 / 282.87 kB JS / 57.21 kB CSS。
+- 版本通知锚点：`APP_VERSION=4.46.0` → `release_tag()` = `V4.46`；`prepare_release.py --check` 通过。
+- 所有回归在临时 SQLite、临时文件副本与纯函数上执行，强制清空 `DEFAULT_LLM_API_KEY`；未修改生产数据、未产生真实付费模型调用。
+
+**说明 / 默认约定**
+- `SPEC_VERIFIED_ON` 与 `size_verified_on` 仍为空，按文档边界**不得宣称符合平台官方规范**；本版 `ASSET_ROLE_RENDER` 的「不烘焙文字 / CTA」仅保护软件真实 UI 不被 no UI 误删，不构成官方规格核验。
+- 四种状态分开记录：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。
