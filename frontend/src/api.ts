@@ -417,6 +417,35 @@ export interface MediaCopyResult {
   industry_profile?: string
   industry_profile_label?: string
   compress_calls?: number
+  /** V4.41 / F04：本次文案实际使用的配置快照（后续改预设不覆盖） */
+  creative_config?: CreativeConfigSnapshot
+  creative_prompt_hash?: string
+}
+
+/** V4.41 / F04：归档用的不可变配置快照 */
+export interface CreativeConfigSnapshot {
+  config_id: string
+  version: string
+  hash: string
+  preset_ids?: Record<string, string>
+  custom_fields?: string[]
+  visual?: { layout: string; template: string; palette_accent: string }
+  scope?: Record<string, string>
+  reference_mode?: string
+}
+
+/** V4.41 / F03：每张图对应的视觉简报（概念 → 画面） */
+export interface VisualBrief {
+  concept_id: string
+  concept_key: string
+  layout: string
+  subject: string
+  action: string
+  setting: string
+  core_promise: string
+  evidence: string
+  reference_mode: string
+  capability_note: string
 }
 
 /** V4.38：一条被勾选的「创意文案组合」，会叠加到一张推广图片上 */
@@ -456,6 +485,13 @@ export interface MediaImageItem {
   asset_role?: string
   os?: string
   spec_version?: string
+  /** V4.41 / F03 + F04 + F05：概念、视觉简报、版式、配置与提示词哈希 */
+  concept_key?: string
+  layout?: string
+  prompt_hash?: string
+  creative_config_id?: string
+  visual_brief?: VisualBrief
+  creative_config?: CreativeConfigSnapshot
 }
 
 /** V4.39 / F01：因图内文案超预算被阻止；V4.40 / F11：失败任务同样逐项列出 */
@@ -482,6 +518,10 @@ export interface MediaImageTaskResult {
   error: string
   retries: number
   batch_id: string
+  /** V4.41：逐图版式与配置追溯 */
+  layout?: string
+  prompt_hash?: string
+  creative_config_id?: string
 }
 
 export interface MediaImageResult {
@@ -499,6 +539,10 @@ export interface MediaImageResult {
   task_results?: MediaImageTaskResult[]
   batch_id?: string
   spec_version?: string
+  /** V4.41 / F04：整批配置快照，写入「素材历史」后不可被后续预设修改覆盖 */
+  creative_config?: CreativeConfigSnapshot
+  reference_mode?: string
+  capability_note?: string
   rules?: Record<string, any>
 }
 
@@ -600,13 +644,15 @@ export const api = {
   industryProfiles: () =>
     req<IndustryProfilesResponse>('/api/industry-profiles'),
   // 基于落地页分析结论 + 选中平台，调用大模型生成可编辑广告文案
-  mediaCopy: (payload: { analysis: LandingAnalysis; platform: string; lang?: string }) =>
+  mediaCopy: (payload: { analysis: LandingAnalysis; platform: string; lang?: string
+    /** V4.41 / F04：编辑过的方向 / 风格 / 配色预设参与文案生成 */
+    style_opts?: Record<string, any> }) =>
     req<MediaCopyResult>('/api/media-campaign/copy', { method: 'POST', body: JSON.stringify(payload) }),
   // 基于「勾选的创意文案组合」+ 落地页分析结论 + 风格/样式/颜色，生成推广图片
   mediaImages: (payload: {
     analysis: LandingAnalysis; platform: string; lang?: string
     copy_fields: Record<string, any>; copy_variants?: CopyVariant[]
-    style_opts: Record<string, string>
+    style_opts: Record<string, any>
     slots: { size: string; placement: string; placement_id?: string
              concept_index?: number; concept_id?: string }[]
     logo?: string
@@ -625,7 +671,7 @@ export const api = {
     // V4.38：copy 允许附带 selected_copy / copy_variants，记录本次选用的创意文案
     platform?: string; lang?: string; copy?: any
     images?: MediaImageItem[]; images_mode?: 'append' | 'replace'
-    style_opts?: Record<string, string>; image_model?: ModelInfo | null; note?: string
+    style_opts?: Record<string, any>; image_model?: ModelInfo | null; note?: string
   }) =>
     req<CreationHistory>(`/api/creation-history/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteCreationHistory: (ids: number[]) =>

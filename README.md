@@ -1,24 +1,27 @@
-# 广告管理系统（在线营销素材管理平台 V4.40）
+# 广告管理系统（在线营销素材管理平台 V4.41）
 
 对应方案文档：《在线营销素材管理平台方案.docx》；开发节奏见《在线营销素材管理平台-版本开发规划.docx》。
-**当前版本：V4.40（2026-11-10）**。每次优化与更改的完整版本内容见 [CHANGELOG.md](CHANGELOG.md)，
+**当前版本：V4.41（2026-11-10）**。每次优化与更改的完整版本内容见 [CHANGELOG.md](CHANGELOG.md)，
 系统内「系统设置 → 新版通知」顶部显示当前更新版本号与主要更新内容，并统一展示各期改造进度
-（当前 6 / 12，支持按涉及模块 / 变更类型筛选、查看影响范围与验证结果）。
+（当前 9 / 12，支持按涉及模块 / 变更类型筛选、查看影响范围与验证结果）。
 
 **AI 改造分期**：依据《广告素材平台问题诊断与AI改造实施说明书》，12 个问题按「每期 3 个、
 独立提交、独立版本通知」分 4 期推进，问题核对与验收用例见 [docs/REMEDIATION_TRACKER.md](docs/REMEDIATION_TRACKER.md)。
 第 1 期 V4.39 完成 F01 / F02 / F10（输入与输出可信度）；第 2 期 V4.40 完成 F07 / F08 / F11
 （任务矩阵完整覆盖、媒体规则版本化与模型调用前强校验、批次隔离与逐图状态）；
-第 3–4 期 V4.41 / V4.42 分别为 F03 / F04 / F05 与 F06 / F09 / F12。
+第 3 期 V4.41 完成 F03 / F04 / F05（概念驱动画面、预设编辑全量生效、动态版式与品牌色）；
+第 4 期 V4.42 为 F06 / F09 / F12。
 改造主干对全部行业一致，电商购买与订阅转化只是 `backend/industry_profiles.py` 中的两个画像；
 其它行业通过局部调整价值维度、语义保护、证据类型、视觉主体与版位偏好输出素材，不改通用链路。
 
-**V4.40 新增能力速览**：`frontend/src/taskMatrix.ts` 提供可确认的版位任务矩阵（预览数量 = 实际请求数量，
-预算不足明确提示不静默截断）；`backend/media_platforms.py` 提供版本化规则目录与
-`validate_task_matrix()`，`GET /api/media-rules` 下发强制 / 政策 / 建议三层规则；
-`backend/batch_workspace.py` 让每批出图拥有独立临时目录，`generate_media_images` 增加供应商并发 / 超时限制、
-逐图 `ok / fallback / failed` 状态与 `partial_success / failed` 批次结果。
-规则版本 `2026-11-10.2` 为内部整理，`SPEC_VERIFIED_ON` 为空表示尚未按各平台官方文档核验。
+**V4.41 新增能力速览**：`backend/creative_config.py` 提供 `ResolvedCreativeConfig` / `CreativeConcept` /
+`VisualBrief`——文案与图片共用同一份预设解析结果，先选概念再生成逐任务视觉简报与背景提示词；
+编辑过的方向 / 风格 / 配色文本原样进入文案和文生图请求，配置 ID / 版本 / 哈希与提示词哈希随图与素材历史归档。
+`backend/imaging.py` 提供五种内容版式（hero / demo / detail / offer / review）、品牌 token 上色、
+先算 Logo 安全区、白色 Logo 细节保留与文字区局部遮罩。
+`style_opts.reference_image` 支持传入真实商品图：供应商声明参考编辑能力时交给供应商，否则本地合成并明确标注能力限制。
+`backend/creative_config.py` 的 `CREATIVE_CONFIG_VERSION=4.41.1`；媒体规则版本 `2026-11-10.2` 为内部整理，
+`SPEC_VERIFIED_ON` 为空表示尚未按各平台官方文档核验。
 
 **定位**：面向投放人员的「素材创作 + 推广图片交付」工具。核心链路是
 **落地页 URL / 正文 → 大模型 8 字段分析 → 营销推广平台设置 → 广告推广文案 → 推广图片 →

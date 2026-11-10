@@ -117,7 +117,12 @@ export default function MediaAdStudio() {
     updateSession({ studioError: '' })
     beginTask('copy', '正在生成广告文案', `平台 ${s.platform} · 语言 ${s.lang.toUpperCase()}，调用文案大模型…`)
     try {
-      const res = await api.mediaCopy({ analysis: s.analysis, platform: s.platform, lang: s.lang })
+      // V4.41 / F04：编辑过的方向 / 风格 / 配色预设参与文案生成（策略字段），
+      // 纯视觉字段（调色板 / 版式）由服务端解析，不会进入文案大模型。
+      const res = await api.mediaCopy({
+        analysis: s.analysis, platform: s.platform, lang: s.lang,
+        style_opts: { creative_direction: s.direction, content_style: s.styleName, color_scheme: s.colorName },
+      })
       const sel = allSelectedCopy(res, { ...res.fields })
       updateSession({
         copy: res, copyEdit: { ...res.fields }, brandEdit: res.brand || '',
@@ -240,7 +245,11 @@ export default function MediaAdStudio() {
           platform: s.platform, lang: s.lang, copy: finalCopy,
           images: res.images.map(im => ({ ...im, url: im.file })),
           images_mode: 'append',
-          style_opts: { creative_direction: s.direction, content_style: s.styleName, color_scheme: s.colorName },
+          style_opts: {
+            creative_direction: s.direction, content_style: s.styleName, color_scheme: s.colorName,
+            // V4.41 / F04：历史保存「当时实际生效」的配置快照，改预设不会覆盖旧任务
+            creative_config: res.creative_config || null,
+          },
           image_model: res.image_model,
           note: res.note || '',
         }).then(() => updateSession({ savedNote: '本批图片与选用文案已存入「素材历史」，可随时再下载' }))
@@ -259,6 +268,9 @@ export default function MediaAdStudio() {
     s.analysis.advantages?.length && `优势：${s.analysis.advantages.join('、')}`,
     s.analysis.competitors?.length && `竞品：${s.analysis.competitors.join('、')}`,
   ].filter(Boolean).join('　|　') : ''
+
+  // V4.41 / F04：展示本批实际生效的配置快照（来自图片元数据，不是当前预设）
+  const batchConfig = s.images.find(im => im.creative_config)?.creative_config
 
   const STEPS: { id: StudioStep; label: string }[] = [
     { id: 1, label: '设置媒体平台' },
@@ -630,6 +642,16 @@ export default function MediaAdStudio() {
           <h3>③ 推广图片素材</h3>
           {s.imageModel && <ModelBadge info={s.imageModel} fallbackText="使用 Pillow 模板兜底" />}
           {s.imgNote && <p className="muted">{s.imgNote}</p>}
+          {batchConfig && (
+            <div className="cfg-snapshot">
+              <b>本次生效配置 {batchConfig.config_id}</b>
+              <span>版本 {batchConfig.version}</span>
+              <span>哈希 {batchConfig.hash?.slice(0, 12)}…</span>
+              {(batchConfig.custom_fields || []).length > 0 &&
+                <span>自定义预设：{batchConfig.custom_fields!.join('、')}</span>}
+              <div className="muted">编辑过的预设已完整参与文案与画面生成；纯视觉字段不进入文案模型。「素材历史」保存的是当时快照，后续改预设不会覆盖旧任务。</div>
+            </div>
+          )}
           {(s.imageIssues || []).length > 0 && (
             <div className={`alert ${s.imageIssues.some(x => x.status === 'failed') ? 'err' : 'warn'} rev-alert`}>
               <b>{s.imageIssues.length} 个任务未生成（逐项状态见下）</b>
@@ -691,6 +713,10 @@ export default function MediaAdStudio() {
                         title={img.fallback_reason || (img.ai_background ? '文生图模型生成背景' : 'Pillow 模板兜底')}>
                     {img.ai_background ? 'AI 底图' : '模板兜底'}
                   </span>
+                  {img.layout &&
+                    <span className="pill off" title={img.visual_brief
+                      ? `主体：${img.visual_brief.subject}｜动作：${img.visual_brief.action}`
+                      : '按概念选择的版式'}>版式 {img.layout}</span>}
                 </div>
                 {img.copy && (
                   <div className="ic-copy" title="本张图片选用的创意文案">
@@ -703,6 +729,13 @@ export default function MediaAdStudio() {
                 {(img.ad_product || img.spec_version) && (
                   <div className="ic-spec">
                     {img.ad_product || '未标注广告产品'} · 规则 {img.spec_version || '—'}
+                  </div>
+                )}
+                {img.visual_brief && (
+                  <div className="ic-brief" title={img.visual_brief.capability_note || '按概念生成的画面说明'}>
+                    <span>画面：{img.visual_brief.action}</span>
+                    {img.visual_brief.reference_mode && img.visual_brief.reference_mode !== 'none' &&
+                      <span className="pill off">参考图 {img.visual_brief.reference_mode}</span>}
                   </div>
                 )}
                 <div className="ic-actions">

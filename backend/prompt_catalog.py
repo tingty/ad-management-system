@@ -78,7 +78,8 @@ MEDIA_COPY_SYS = (
     "只输出 JSON、不要任何解释或 markdown。COPY_JSON\n"
     "字段结构（key 必须完全匹配，count>1 的字段用字符串数组）：[[SCHEMA]]\n"
     "字数红线（务必遵守，超长会被平台拒投）：[[LIMITS]]\n"
-    "语言要求：用 [[LANGUAGE]] 撰写，语气贴合平台与目标人群。"
+    "语言要求：用 [[LANGUAGE]] 撰写，语气贴合平台与目标人群。\n"
+    "[[CREATIVE]]"
 )
 
 MEDIA_CONTEXT_SYS = (
@@ -173,14 +174,24 @@ def render_prompt(template: str, variables: dict) -> str:
 
 
 def compose_copy_prompt(template: str, *, schema: str, limits: str,
-                        language: str, platform: str) -> str:
-    """文案系统提示词 = 目录模板 / 总结库模板 + 系统强制输出契约（仅在模板未内嵌契约时追加）。"""
+                        language: str, platform: str, creative: str = "") -> str:
+    """文案系统提示词 = 目录模板 / 总结库模板 + 系统强制输出契约 + 创意表达倾向。
+
+    V4.41 / F04：`creative` 是 `ResolvedCreativeConfig.strategy` 解析出的预设文本，
+    只作为表达倾向参与文案生成；纯视觉字段（调色板 / 版式 / 背景键）不进入这里。
+    旧模板或用户在「素材提示词」里保存的自定义模板可能没有 `[[CREATIVE]]` 占位符，
+    此时统一追加，保证编辑过的预设一定生效（说明书 T06）。
+    """
+    tpl = template or ""
     variables = {"SCHEMA": schema, "LIMITS": limits,
-                 "LANGUAGE": language, "PLATFORM": platform}
-    has_contract = "[[SCHEMA]]" in (template or "")
-    body = render_prompt(template, variables)
+                 "LANGUAGE": language, "PLATFORM": platform,
+                 "CREATIVE": creative or ""}
+    has_contract = "[[SCHEMA]]" in tpl
+    body = render_prompt(tpl, variables)
     if not has_contract:
         body += "\n" + render_prompt(COPY_OUTPUT_CONTRACT, variables)
+    if creative and "[[CREATIVE]]" not in tpl:
+        body += "\n" + creative
     return body
 
 

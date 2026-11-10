@@ -151,6 +151,9 @@ class MediaCopyRequest(BaseModel):
     lang: str = "en"              # 文案语言
     # V4.40 / F08：可选广告产品，用于把 Google RSA 与 UAC 之类不同产品的文案 schema 分开。
     ad_product: str = ""
+    # V4.41 / F04：编辑过的方向 / 风格 / 配色预设必须参与文案生成。
+    # 只注入 ResolvedCreativeConfig.strategy；纯视觉字段不进入文案大模型。
+    style_opts: dict = {}
 
 class MediaImageSlot(BaseModel):
     """V4.40 / F07 + F08：任务矩阵中的一行（一个版位 × 尺寸 × 概念）。

@@ -97,7 +97,8 @@ async def api_media_campaign_copy(req: MediaCopyRequest, db: Session = Depends(g
     except MediaRuleError as e:
         raise _rule_error(e)
     result = await generate_media_copy(db, req.analysis.model_dump(), platform, req.lang,
-                                       ad_product=req.ad_product)
+                                       ad_product=req.ad_product,
+                                       style_opts=req.style_opts or {})
     return result
 
 @router.post("/media-campaign/images")

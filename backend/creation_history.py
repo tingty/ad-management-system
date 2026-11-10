@@ -192,6 +192,29 @@ def copy_as_text(row) -> str:
             if vals:
                 lines.append(f"{label}：{' / '.join(vals)}")
         lines.append("说明：规则版本为系统内部整理，正式投放前须按平台官方文档复核。")
+    # V4.41 / F04：展示「当时」实际生效的预设解析结果，不能被后续预设修改覆盖。
+    cfg = (row.style_opts_json or {}).get("creative_config") if isinstance(row.style_opts_json, dict) else None
+    if not isinstance(cfg, dict) or not cfg:
+        for x in imgs:
+            if isinstance(x, dict) and isinstance(x.get("creative_config"), dict):
+                cfg = x["creative_config"]
+                break
+    if isinstance(cfg, dict) and cfg:
+        lines += ["", "【本次生成实际生效的创意配置（历史快照）】"]
+        lines.append(f"配置 ID：{cfg.get('config_id', '')} ｜ 版本：{cfg.get('version', '')} ｜ "
+                     f"哈希：{str(cfg.get('hash', ''))[:16]}")
+        ids = cfg.get("preset_ids") if isinstance(cfg.get("preset_ids"), dict) else {}
+        if ids:
+            lines.append("预设：方向 " + str(ids.get("direction") or "—")
+                         + " / 风格 " + str(ids.get("style") or "—")
+                         + " / 配色 " + str(ids.get("color") or "—"))
+        if cfg.get("custom_fields"):
+            lines.append("管理员编辑过的预设：" + "、".join(str(x) for x in cfg["custom_fields"]))
+        lines.append("说明：策略字段参与文案与画面语义，纯视觉字段只作用于画面；此快照不被后续配置覆盖。")
+    layouts = list(dict.fromkeys(str(x.get("layout") or "").strip() for x in imgs
+                                 if isinstance(x, dict) and x.get("layout")))
+    if layouts:
+        lines.append("本次使用版式：" + " / ".join(layouts))
     return "\n".join(lines) + "\n"
 
 
@@ -329,6 +352,14 @@ def build_history_zip(rows: list, multi: bool = False) -> io.BytesIO:
                 "asset_roles": tag("asset_role"),
                 "spec_versions": tag("spec_version"),
                 "batch_ids": tag("batch_id"),
+                # V4.41：概念 / 版式 / 配置快照与逐图提示词哈希一并归档
+                "concept_ids": tag("concept_id"),
+                "layouts": tag("layout"),
+                "creative_config_ids": tag("creative_config_id"),
+                "prompt_hashes": tag("prompt_hash"),
+                "creative_config": ((row.style_opts_json or {}).get("creative_config")
+                                    if isinstance(row.style_opts_json, dict) else None),
+                "creative_note": "配置快照记录当时实际生效的预设，后续修改不覆盖历史",
                 "spec_note": "内部整理规则，正式投放前须按平台官方文档复核",
             }))
             manifest.append({"id": row.id, "title": row.title, "folder": base or ".",

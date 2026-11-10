@@ -26,9 +26,9 @@
 | F07 任务截断和文案轮换破坏覆盖 | 已复现 + 静态确认；P1 | 存在（V4.38）。`MediaAdStudio.buildSlots` 把所选版位尺寸展开后 `slice(0, count)`；副文案池混合 `description/body/primary_text` | Facebook / Google / Unity 默认配置 | `taskMatrix.ts`、`MediaAdStudio.tsx`、`creationSession.ts`、`media_ad.py` | T09 | 第 2 期 / V4.40 | 已修复（T09 40 项通过：完整清单含 Stories / UAC、Unity 重复任务合并、概念同源配对、预算不足不截断） |
 | F08 媒体与接口规则不足以保证交付 | 静态确认；P1 | 存在（V4.38）。`media_platforms.py` 按平台名组织、无广告产品 / 资产角色 / 规则版本；`schemas.MediaImageSlot.size` 为无约束字符串 | 异常尺寸、超像素总量、超任务数、未知平台 | `media_platforms.py`、`schemas.py`、`routers.py`、`media_ad.py`、`creation_history.py` | T10 | 第 2 期 / V4.40 | 已修复（T10 通过：版本化目录、模型调用前 422 拒绝、导出标注产品与规则版本；官方核验日期仍为空） |
 | F11 批次失败和临时文件缺少隔离 | 静态风险；P1 | 存在（V4.38）。`media_ad._cleanup_ai_bgs` 按目录通配符删除全部 `_mabg_*` / `_mlogo_*`；`asyncio.gather` 无并发上限且异常直接跳过；`ai_used` 为批次级 | 两批并发出图、混合成功 / 回退 / 失败 | `batch_workspace.py`、`media_ad.py` | T15 | 第 2 期 / V4.40 | 已修复（T15 通过：批次独立目录、超时遗留回收、并发 / 超时限制、逐图 ok / fallback / failed 与 partial_success） |
-| F03 文案概念没有进入背景生成 | 静态确认；P1 | 存在。`_media_image_prompt` 不接收标题 / 副文案 / 证据；任务构造先算 `bg_prompt` 再选文案组合 | 同一 SKU 的「清洗演示 / 通勤场景」两个概念 | `media_ad.py`、`prompt_catalog.py` | T05 | 第 3 期 / V4.41 | 待实施 |
-| F04 预设编辑结果没有完整参与生成 | 静态确认；P1 | 存在。`build_directives` 返回的 `direction_text/style_text/color_text/design_prompt` 未被 `_media_image_prompt` 消费；文案入口不接收视觉设置 | 管理员给方向 / 风格文本加唯一标记 | `presets.py`、`media_ad.py` | T06 | 第 3 期 / V4.41 | 待实施 |
-| F05 固定排版和固定色板削弱表达 | 静态确认；P1 | 存在。`render_ad_png` 只有「小横幅 / 其他」两套布局，`accent` 调用方未传；`_prepare_bg` 固定混合 42% 暗色；`_composite_logo` 统一透明化近白像素 | 320×50 横幅、白色 Logo、新品牌色 | `imaging.py`、`media_ad.py` | T07 | 第 3 期 / V4.41 | 待实施 |
+| F03 文案概念没有进入背景生成 | 静态确认；P1 | 存在。`_media_image_prompt` 不接收标题 / 副文案 / 证据；任务构造先算 `bg_prompt` 再选文案组合 | 同一 SKU 的「清洗演示 / 通勤场景」两个概念 | `creative_config.py`、`media_ad.py`、`imaging.py` | T05 | 第 3 期 / V4.41 | 已修复（T05 通过：概念先于背景提示词、两概念主体/动作/证据不同、同概念跨尺寸承诺一致、每版本绑 concept_id） |
+| F04 预设编辑结果没有完整参与生成 | 静态确认；P1 | 存在。`build_directives` 返回的 `direction_text/style_text/color_text/design_prompt` 未被 `_media_image_prompt` 消费；文案入口不接收视觉设置 | 管理员给方向 / 风格文本加唯一标记 | `creative_config.py`、`prompt_catalog.py`、`media_ad.py`、`routers.py`、`schemas.py`、`creation_history.py` | T06 | 第 3 期 / V4.41 | 已修复（T06 通过：唯一标记进入文案与供应商请求、纯视觉字段不进文案、配置 ID/版本/哈希快照不被后续修改覆盖） |
+| F05 固定排版和固定色板削弱表达 | 静态确认；P1 | 存在。`render_ad_png` 只有「小横幅 / 其他」两套布局，`accent` 调用方未传；`_prepare_bg` 固定混合 42% 暗色；`_composite_logo` 统一透明化近白像素 | 320×50 横幅、白色 Logo、新品牌色 | `imaging.py`、`media_ad.py`、`api.ts`、`MediaAdStudio.tsx` | T07 | 第 3 期 / V4.41 | 已修复（T07 通过：五种版式、品牌 token 同步背景与 CTA、白色 Logo 保留、320×50 三段不重叠、局部遮罩不改商品颜色） |
 | F06 请求比例与居中裁切不保护主体 | 静态确认 + 几何推导；P1 | 存在。`DashScopeMaaSImageProvider` 把宽高分别对齐到 1024 / 2048；`_prepare_bg` 用 cover 居中裁切，无主体保护框 | 1200×628 横幅、1080×1920 竖图 | `providers.py`、`imaging.py` | T08 | 第 4 期 / V4.42 | 待实施 |
 | F09 摘要丢失事实并允许空证据继续分析 | 静态确认；P1 | 存在。`build_landing_prompt` 只送正文前 4000 字符；`_normalize_landing` 无证据 ID；抓取失败仍进入模型 | 关键订阅条款在第 4001 字符之后、空页面 | `services.py`、`schemas.py` | T11 / T12 | 第 4 期 / V4.42 | 待实施 |
 | F12 浏览器长请求无法可靠恢复和归档 | 静态确认 + 运行风险；P2 | 部分存在。V4.38 已做到「切换菜单不中断 + 刷新恢复现场」，但无服务端 `job_id`、归档仍由浏览器发起；历史追加 `uniq[-80:]` 截断 | 关闭浏览器、重复请求、历史超 80 张 | `models.py`、`routers.py`、`creationSession.ts` | T16 | 第 4 期 / V4.42 | 待实施 |
@@ -42,7 +42,7 @@
 |---|---|---|---|---|---|
 | 第 1 期 | V4.39 | F01 / F02 / F10 | 输入与输出可信度 | 建立 `industry_profiles.py` 通用主干；压缩语义保护、品牌来源规则、归因规则对全行业一致，各 profile 只提供局部词表与价值维度 | 已完成（V4.39，2026-11-10） |
 | 第 2 期 | V4.40 | F07 / F08 / F11 | 任务与规则可靠性 | 版位矩阵与媒体规则按 profile 给出偏好，不写死电商版位 | 已完成（V4.40，2026-11-10） |
-| 第 3 期 | V4.41 | F03 / F04 / F05 | 创意与视觉表达 | profile 的 `visual_subject` / 配色 / 布局偏好驱动 `VisualBrief`，其它行业只改配置即可出图 | 规划中 |
+| 第 3 期 | V4.41 | F03 / F04 / F05 | 创意与视觉表达 | profile 的 `visual_subject` / `value_axes` 进入 `VisualBrief` 主视觉与事实边界，配色 / 版式由 `ResolvedCreativeConfig` 解析，其它行业只改配置即可出图 | 已完成（V4.41，2026-11-10） |
 | 第 4 期 | V4.42 | F06 / F09 / F12 | 事实与工程化 | profile 的 `evidence_types` 决定要核验的事实类型；服务端任务与归档全行业通用 | 规划中 |
 
 运行时的期次状态**不在此表维护**：`backend/roadmap.py` 保存静态规划，`release_notes.py` 从 CHANGELOG 每个版本的
@@ -78,6 +78,20 @@
 | 未验证 | 真实付费文本 / 文生图模型调用、真实供应商并发与配额、真实样本逐图人工抽检、投放效果数据；媒体尺寸与政策尚未按各平台官方文档核验（`SPEC_VERIFIED_ON` 为空）。第 3–4 期 F03–F06 / F09 / F12 未实施 |
 
 所有回归均在数据库副本、临时 uploads 目录与模拟供应商上执行；测试生成的 PNG、临时库与批次目录已清理，未修改生产数据、未读取或输出任何密钥。
+
+## 第 3 期验证记录（V4.41 · 2026-11-10）
+
+| 项目 | 实际执行结果 |
+|---|---|
+| 后端编译 | `python3 -m compileall -q backend` 通过；`import main` 正常，版本 4.41.0，注册路由 49 条 |
+| T05 / F03 | 两个概念（清洗演示 / 通勤场景）产出不同 `concept_key`、不同主体动作与场景；两条实际发给模拟供应商的提示词字面不同且各含自己的核心承诺与 `concept_id`；同一概念在 1080x1080 与 320x50 下仍携带相同承诺与证据；`prompt_hash` 可区分概念；事实边界约束存在。修复了「Commute portable cleaning」因含 cleaning 被误判为清洗演示的关键词优先级问题 |
+| T06 / F04 | 唯一标记 `UNIQUE_MARKER_7QX9` 写进方向预设后，进入 `ResolvedCreativeConfig.strategy`、`strategy_block`、`visual_text_block`、文案系统提示词与实际文生图请求；无 `[[CREATIVE]]` 模板变量的自定义主提示词同样收到标记；调色板十六进制值不出现在文案提示词但出现在图片提示词；相同配置解析稳定、修改预设后 ID 改变、旧任务快照不被覆盖；HTTP 文案 / 图片调用均验证供应商请求含该标记 |
+| T07 / F05 | 切换配色后模板底图与 CTA / 强调元素同步变化；五种版式产出五种不同构图；白色 Logo 细节默认保留、近白去除改为显式开关且只作用于无真实透明通道的源；320x50 下标题 / CTA / Logo 三段边界互不重叠且文字预算扣除 Logo 预留框；局部遮罩不改动主体区商品颜色、文字区仍有可读性处理；`render_ad_png` 旧 11 个位置参数与 `text_budget` 默认口径保持兼容 |
+| HTTP 端到端 | 临时数据库 + TestClient + 模拟供应商共 71 项断言全通过：文案 / 图片接口 200、两概念各出一张 PNG 且真实落盘、逐图 `concept_id` / `visual_brief` / `creative_config` / `prompt_hash` / `layout` 齐备、批次返回配置快照、未知平台仍在调用模型前 422、商品参考图在供应商未声明能力时标注本地合成、超预算版位被阻断且整批无可用素材（F01 / F11 未回退）；媒体规则 / 行业画像 / 新版通知 / 素材历史 / 大模型配置接口未受影响；新版通知当前版本 V4.41、改造进度 9/12 |
+| 前端 | `tsc --noEmit` 通过；`vite build` 通过；`prepare_release.py --check` 通过（含改造期次 3 问题 / 版本一致性 / 模块覆盖校验） |
+| 未验证 | 真实付费文本 / 文生图模型调用、真实样本逐图人工抽检、投放效果数据；主体保护框与比例适配（F06，第 4 期）、产品事实与证据 ID 完整数据模型、服务端持久任务仍未实施。内置供应商均未声明参考编辑能力，商品参考图默认走本地合成并明确标注能力限制 |
+
+所有回归均在临时数据库、临时 uploads 目录与模拟供应商上执行；测试 PNG、临时库与批次目录已清理，未修改生产数据、未读取或输出任何密钥。
 
 ## 发布门槛（沿用说明书，按每期执行）
 

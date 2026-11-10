@@ -16,13 +16,14 @@
 
 复用既有能力：
 - providers.get_llm_with_info / finalize_invocation / get_image / parse_json / UPLOAD_DIR / _active_config
-- presets.build_directives / style_visual / palette_prompt / DIRECTION_MOOD / STYLE_TO_BG / DIRECTION_TO_BG / COLOR_TO_PALETTE
-- imaging.render_ad_png
+- creative_config.resolve_creative_config（文案与图片共用同一份预设解析结果）
+- imaging.render_ad_png（按版式 / 品牌 token / Logo 安全区合成）
 - text_utils.fit_text
 - media_platforms.get_media_platform
 """
 import os
 import asyncio
+import inspect
 import json
 import time
 import uuid
@@ -31,8 +32,7 @@ import urllib.parse
 
 from providers import (get_llm_with_info, finalize_invocation,
                        get_image, parse_json, UPLOAD_DIR, _active_config)
-from presets import (build_directives, style_visual, palette_prompt,
-                     DIRECTION_MOOD, STYLE_TO_BG, DIRECTION_TO_BG, COLOR_TO_PALETTE)
+from presets import style_visual, palette_prompt, DIRECTION_MOOD
 # V4.35：广告推广文案 / 推广图片的提示词改由「素材提示词」统一管理，保存即生效
 from services import get_prompt
 from prompt_catalog import (render_prompt, compose_copy_prompt, compose_image_prompt,
@@ -43,6 +43,11 @@ from industry_profiles import (resolve_profile, is_complete_sentence, missing_pr
                                protected_fragments)
 from media_platforms import get_media_platform, SPEC_VERSION
 from batch_workspace import BatchWorkspace
+# V4.41 / F03 + F04：统一创意配置、创意概念与视觉简报
+from creative_config import (resolve_creative_config, strategy_block, visual_text_block,
+                             build_concept, build_visual_brief, choose_layout,
+                             brief_prompt_block, prompt_hash, config_snapshot,
+                             CREATIVE_CONFIG_VERSION)
 
 # V4.40 / F11：供应商级并发上限、单任务超时与本地渲染重试（不重试已计费的模型调用）。
 MAX_CONCURRENT_IMAGE_TASKS = int(os.getenv("AD_MAX_IMAGE_CONCURRENCY", "4"))
@@ -387,13 +392,16 @@ def _char_table(fields: dict, schema) -> list:
 
 
 async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en",
-                              ad_product: str = "") -> dict:
+                              ad_product: str = "", style_opts: dict | None = None,
+                              creative_config: dict | None = None) -> dict:
     """基于落地页分析结论 + 选中平台，生成可编辑广告文案（V4.39 / F01 + F10，V4.40 / F08）。
 
     - 保留原始模型输出与每次裁剪的状态；
     - 超长文案请求有限次「语义压缩」，必须保留否定 / 价格条件 / 订阅限制；
     - 压缩仍失败则返回 needs_revision（valid=false），绝不把残句标为合格；
     - 模型展示与真实调用共用同一路由，回退标记在调用结束后刷新。
+    - V4.41 / F04：注入 `ResolvedCreativeConfig.strategy` 的编辑后预设文本；
+      纯视觉字段（调色板 / 版式 / 背景键）不会进入文案提示词。
     """
     platform = platform or "Facebook"
     analysis = _as_dict(analysis)
@@ -402,6 +410,8 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
     spec = get_media_platform(platform) or {}
     lim = spec.get("copy_limits", {})
     labels = {f["key"]: f["label"] for f in schema}
+    config = creative_config or resolve_creative_config(
+        style_opts, lang=lang, overrides=load_preset_overrides(db))
 
     ctx = _analysis_context(analysis, platform, lang, db)
     sys_prompt = compose_copy_prompt(
@@ -410,6 +420,7 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
         limits=_limits_instr(lim, schema),
         language=LANG_NAME.get(lang, "English"),
         platform=platform,
+        creative=strategy_block(config),
     )
 
     llm, info = get_llm_with_info(db, "copy")
@@ -493,6 +504,9 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
         "industry_profile": profile["key"],
         "industry_profile_label": profile["label"],
         "compress_calls": compress_calls,
+        # F04：文案任务归档「当时实际使用的配置」，后续改预设不会覆盖这份快照
+        "creative_config": config_snapshot(config),
+        "creative_prompt_hash": prompt_hash(sys_prompt),
     }
 
 
@@ -515,14 +529,16 @@ def _overlay_text(copy_fields: dict, platform: str, brand: str):
 
 
 def build_overlay_text(headline: str, sub: str, cta: str, w: int, h: int,
-                       profile: dict | None = None) -> dict:
+                       profile: dict | None = None, layout: str = "",
+                       logo_path: str | None = None) -> dict:
     """V4.39 / F01：平台正文与图内文字分离，按版位像素预算检查。
 
     平台正文（primary_text / body / description）属于投放字段，不应整段压到图上；
     图内只放标题 + 短副标 + CTA。超预算时返回 overflow，由调用方阻止该版位出图，
     而不是用省略号或硬截断把必要说明删掉。
+    V4.41 / F05：预算按所选版式与 Logo 预留框计算，与渲染层使用同一规格。
     """
-    budget = text_budget(w, h)
+    budget = text_budget(w, h, layout=layout, logo_path=logo_path)
     headline = (headline or "").strip()
     sub = (sub or "").strip()
     cta = (cta or "").strip()
@@ -540,25 +556,28 @@ def build_overlay_text(headline: str, sub: str, cta: str, w: int, h: int,
             "budget": budget, "overflow": overflow, "ok": not overflow}
 
 
-def _media_image_prompt(analysis: dict, platform: str, directives: dict, design: dict, db=None) -> str:
-    """结合落地页分析结论 + 创意方向/风格/配色，拼文生图背景提示词（不含文字）。
+def _media_image_prompt(analysis: dict, platform: str, config: dict,
+                        brief: dict | None = None, db=None) -> str:
+    """V4.41 / F03 + F04：按「概念 → 视觉简报 → 提示词」顺序逐任务构建背景提示词。
 
-    V4.35：提示词模板改为「素材提示词 → 广告推广图片 · 文生图背景提示词」(media_image_sys)，
-    可由总结库一键设为系统默认；db 为 None 时退回内置模板，保证任何调用点都不会失败。
+    与 V4.40 的根本差别：本函数**收标题 / 证据 / 概念 / 版式**，且只在文案组合
+    选定后调用；不同概念得到不同的主体、动作、证据与构图（说明书 T05）。
+    同时把编辑过的全部预设文本原样写入提示词（T06 的唯一标记必须出现）。
     """
     ind = (analysis.get("industry") or "").strip()
     typ = (analysis.get("type") or "").strip()
     aud = (analysis.get("audience") or "").strip()
     adv = analysis.get("advantages") or []
     comp = analysis.get("competitors") or []
+    cfg = config or {}
+    visual = cfg.get("visual") or {}
 
-    dir_id = directives.get("direction_id") or ""
+    dir_id = (cfg.get("preset_ids") or {}).get("direction") or ""
     mood = DIRECTION_MOOD.get(dir_id, "")
-    style_keys = design.get("styles") or []
+    style_keys = visual.get("styles") or []
     style_desc = "; ".join(style_visual(s) for s in style_keys[:3]) or "modern advertising visual backdrop"
-    pal = design.get("palette")
+    pal = visual.get("palette") or {}
 
-    # 结合落地页分析结论（需求要求：一定要按网站已有分析结论作为生成依据）
     ctx_bits = []
     if adv:
         ctx_bits.append("Product strengths: " + "; ".join(adv[:3]))
@@ -582,13 +601,22 @@ def _media_image_prompt(analysis: dict, platform: str, directives: dict, design:
     }
     template = get_prompt(db, "media_image_sys") if db is not None else MEDIA_IMAGE_SYS
     base = compose_image_prompt(template, variables)
-    # V4.39：行业 / 品类局部调整真正进入画面约束。主干（分析 → 文案 → 背景 → 合成）
-    # 对所有行业一致，这里只替换主视觉与表达重点；电商与订阅并非系统前提。
+
+    # V4.39：行业 / 品类局部调整。主干对所有行业一致，只替换主视觉与表达重点。
     profile = resolve_profile(analysis, key=(analysis.get("industry_profile") or ""))
     subject = (f"行业视觉约束（局部调整）: {profile['visual_subject']}。"
-               f"表达重点: {'; '.join(profile['value_axes'])}。"
-               "不得虚构商品外观、标签、价格、评价与效果数据。")
-    return f"{base}\n{subject}"
+               f"表达重点: {'; '.join(profile['value_axes'])}。")
+
+    blocks = [base, subject]
+    preset_text = visual_text_block(cfg)
+    if preset_text:
+        # F04：direction_text / style_text / color_text / design_prompt 原样进供应商请求
+        blocks.append("[ResolvedCreativeConfig / F04] " + preset_text)
+    if brief:
+        # F03：先确定概念再写画面；同一 concept_key 跨尺寸保持承诺一致
+        blocks.append(brief_prompt_block(brief))
+    needs = [b for b in blocks if b and b.strip()]
+    return "\n".join(needs)
 
 
 def _cleanup_ai_bgs():
@@ -646,33 +674,28 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
     V4.40 / F07：slots 每行可指定 concept_index，同一概念的标题 / 证据 / CTA 一起出图。
     V4.40 / F08：每行带服务端解析的 ad_product / asset_role / os / spec_version，随图与导出标注。
     V4.40 / F11：批次独立临时目录、供应商并发 / 超时限制、逐图状态与失败隔离。
-    返回：images / image_model / note / count / status / issues / skipped / task_results / rules。
+    V4.41 / F03 + F04 + F05：共用一份 ResolvedCreativeConfig；先选概念再做 VisualBrief
+      与背景提示词；按版式 / 品牌 token / Logo 安全区逐张合成。
+    返回：images / image_model / note / count / status / issues / skipped / task_results /
+          rules / creative_config。
     """
     platform = platform or "Facebook"
     analysis = _as_dict(analysis)
-    style_opts = style_opts or {}
+    style_opts = dict(style_opts or {})
     rules_meta = dict(rules_meta or {})
     profile = resolve_profile(analysis, key=analysis.get("industry_profile") or "")
     # 上线保留开关：strict_text=False 可临时回到旧的宽松排版（默认严格）
     strict_text = style_opts.get("strict_text", True) is not False
-    creative_direction = style_opts.get("creative_direction") or ""
-    content_style = style_opts.get("content_style") or ""
-    color_scheme = style_opts.get("color_scheme") or ""
     spec = get_media_platform(platform) or {}
     spec_sizes = spec.get("image_sizes") or ["1080x1080"]
 
-    directives = build_directives(creative_direction, content_style, color_scheme, lang=lang,
-                                  overrides=load_preset_overrides(db))
-    design = {}
-    bg_key = None
-    if content_style and content_style in STYLE_TO_BG:
-        bg_key = STYLE_TO_BG[content_style]
-    elif creative_direction and creative_direction in DIRECTION_TO_BG:
-        bg_key = DIRECTION_TO_BG[creative_direction]
-    if bg_key:
-        design["styles"] = [bg_key]
-    if color_scheme and color_scheme in COLOR_TO_PALETTE:
-        design["palette"] = dict(COLOR_TO_PALETTE[color_scheme])
+    # F04：唯一一份解析结果。删除此前的 STYLE_TO_BG / COLOR_TO_PALETTE 重复映射，
+    # 编辑过的预设文本、调色板与版式都从这里进入文案与画面。
+    config = resolve_creative_config(style_opts, lang=lang,
+                                     overrides=load_preset_overrides(db))
+    cfg_snapshot = config_snapshot(config)
+    palette = dict(config["visual"].get("palette") or {})
+    dim_ratio = float(config["visual"].get("dim_ratio") or 0.28)
 
     brand = ((copy_fields or {}).get("brand")
              or (copy_variants[0].get("brand") if copy_variants and isinstance(copy_variants[0], dict) else "")
@@ -706,6 +729,31 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
 
     img = get_image(db)
     img_cfg = _active_config(db, "image")
+
+    # F03：商品参考图 / 真实 UI。供应商声明支持参考编辑时把原图传给它；
+    # 否则退回本地合成，并在归档明确写出能力限制，不假装做了 AI 参考编辑。
+    ref_rel = str(style_opts.get("reference_image") or "").strip()
+    product_path = None
+    if ref_rel.startswith("/files/"):
+        candidate = os.path.join(UPLOAD_DIR, os.path.basename(ref_rel[len("/files/"):]))
+        if os.path.isfile(candidate):
+            product_path = candidate
+    try:
+        sig = inspect.signature(img.generate) if img is not None else None
+        provider_supports_ref = bool(sig and "reference_image" in sig.parameters)
+    except (TypeError, ValueError):
+        provider_supports_ref = False
+    if product_path and provider_supports_ref:
+        reference_mode, capability_note = "provider_reference", ""
+    elif product_path:
+        reference_mode = "local_composite"
+        capability_note = ("当前文生图供应商未声明参考编辑能力，已把用户提供的真实商品图"
+                           "本地合成到主体区；这不是 AI 参考编辑，商品细节不再生成。")
+    else:
+        reference_mode = "none"
+        capability_note = ("未提供商品参考图；画面只使用落地页事实与行业视觉约束，"
+                           "不得虚构商品外观、标签、规格与评价。")
+
     provider_name = (img_cfg.provider if img_cfg else "template")
     model_name = ((img_cfg.model if img_cfg else "") or "Pillow 品牌渐变模板")
     image_model = {
@@ -732,19 +780,36 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             w, h = slot.get("w"), slot.get("h")
             if not w or not h:
                 w, h = _size_wh(size)
-            bg_prompt = _media_image_prompt(analysis, platform, directives, design, db)
 
+            # V4.41 / F03：顺序修正 —— 先选文案概念，再构造视觉简报与背景提示词。
+            # V4.40 是先算 bg_prompt 再选文案，导致所有概念共用同一画面描述。
             ci = slot.get("concept_index")
             if variants:
                 use_idx = ci if isinstance(ci, int) and 0 <= ci < len(variants) else idx % len(variants)
                 v = variants[use_idx]
                 headline, sub, cta = v["headline"], v["sub"], v["cta"]
                 vlabel = v["label"] or f"组合 {use_idx + 1}"
-                concept_id = v.get("concept_id") or f"C{use_idx + 1}"
+                concept = build_concept(v, use_idx, analysis, profile)
             else:
                 use_idx = None
                 headline, sub, cta = base_headline, base_sub, base_cta
-                vlabel, concept_id = "", ""
+                concept = build_concept({"headline": headline, "sub": sub, "cta": cta},
+                                        idx, analysis, profile)
+                vlabel = ""
+            concept_id = concept["concept_id"]
+            layout = choose_layout(concept, config, w, h)
+            brief = build_visual_brief(concept, analysis, profile, config, w, h,
+                                       placement=placement,
+                                       ad_product=slot.get("ad_product") or "")
+            brief["reference_mode"] = reference_mode
+            brief["capability_note"] = capability_note
+            if reference_mode == "local_composite" and layout == "banner":
+                # 小横幅没有可用的主体区，不假称已叠加商品图
+                brief["capability_note"] = (capability_note +
+                                            " 本版位为小横幅，无可用主体区，未叠加商品图。")
+            bg_prompt = _media_image_prompt(analysis, platform, config, brief, db)
+            phash = prompt_hash(bg_prompt)
+
             meta = {
                 "ad_product": slot.get("ad_product") or "未标注广告产品",
                 "asset_role": slot.get("asset_role") or "unspecified",
@@ -753,9 +818,14 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 "spec_version": slot.get("spec_version") or SPEC_VERSION,
                 "concept_index": use_idx,
                 "concept_id": concept_id,
+                "concept_key": concept["concept_key"],
+                "layout": layout,
+                "prompt_hash": phash,
+                "creative_config_id": config["config_id"],
             }
-            # V4.39 / F01：出图前先按该版位的像素预算核对，超预算直接标记并跳过
-            overlay = build_overlay_text(headline, sub, cta, w, h, profile)
+            # V4.39 / F01：出图前先按该版式 + Logo 预留框核对像素预算
+            overlay = build_overlay_text(headline, sub, cta, w, h, profile,
+                                         layout=layout, logo_path=logo_path)
             if strict_text and not overlay["ok"]:
                 skipped.append({
                     "size": size, "placement": placement, "variant": vlabel,
@@ -773,16 +843,25 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             tasks.append({"out": out, "w": w, "h": h, "bg_prompt": bg_prompt,
                           "fn": fn, "size": size, "placement": placement,
                           "logo_path": logo_path, "headline": headline, "sub": sub,
-                          "cta": cta, "vlabel": vlabel, "meta": meta, "idx": idx})
+                          "cta": cta, "vlabel": vlabel, "meta": meta, "idx": idx,
+                          "brief": brief, "layout": layout, "palette": palette,
+                          "dim_ratio": dim_ratio, "prompt_hash": phash})
 
         sem = _supplier_semaphore()
 
         async def _render_one(t: dict) -> dict:
             """一张图一个独立状态：成功 / 模板回退 / 失败，异常不外溢到整批。"""
             meta = t["meta"]
+            b = t["brief"]
+            brief_view = {k: b.get(k, "") for k in (
+                "concept_id", "concept_key", "layout", "subject", "action",
+                "setting", "core_promise", "evidence", "reference_mode",
+                "capability_note")}
             common = {"size": t["size"], "placement": t["placement"],
                       "variant": t["vlabel"], "concept_id": meta["concept_id"],
-                      "batch_id": batch_id, **meta}
+                      "batch_id": batch_id, **meta,
+                      "visual_brief": brief_view,
+                      "creative_config": cfg_snapshot}
             bg_path = None
             ai_ok = False
             provider_error = ""
@@ -793,9 +872,13 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 rel = workspace.temp_name("mabg")
                 try:
                     async with sem:      # F11：供应商并发 / 速率限制
-                        bg = await asyncio.wait_for(
-                            img.generate(t["bg_prompt"], t["w"], t["h"], rel),
-                            timeout=IMAGE_TASK_TIMEOUT_SECONDS)
+                        gen = img.generate
+                        if reference_mode == "provider_reference" and product_path:
+                            call = gen(t["bg_prompt"], t["w"], t["h"], rel,
+                                       reference_image=product_path)
+                        else:
+                            call = gen(t["bg_prompt"], t["w"], t["h"], rel)
+                        bg = await asyncio.wait_for(call, timeout=IMAGE_TASK_TIMEOUT_SECONDS)
                     if bg and os.path.isfile(bg):
                         bg_path, ai_ok = bg, True
                     else:
@@ -814,13 +897,17 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                     await asyncio.to_thread(
                         render_ad_png, t["out"], t["w"], t["h"],
                         t["headline"], t["sub"], t["cta"], (brand or "")[:40],
-                        bg_path or None, t["logo_path"] or None, None, strict_text)
+                        bg_path or None, t["logo_path"] or None, None, strict_text,
+                        t["palette"], t["layout"],
+                        product_path if reference_mode == "local_composite" else None,
+                        t["dim_ratio"])
                     break
                 except TextOverflowError as e:
                     return {"__skipped__": {
                         **common, "status": "needs_revision",
                         "reason": f"图内文案无法完整排版：{e}",
-                        "budget": text_budget(t["w"], t["h"]),
+                        "budget": text_budget(t["w"], t["h"], layout=t["layout"],
+                                              logo_path=t["logo_path"]),
                     }}
                 except Exception as e:
                     if attempt >= MAX_RENDER_RETRIES:
@@ -848,6 +935,9 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                           "request_id": request_id},
                 "retries": retries,
                 "batch_id": batch_id,
+                # F04：每张图绑定当时的概念、配置快照与最终提示词哈希
+                "visual_brief": brief_view,
+                "creative_config": cfg_snapshot,
                 **meta,
             }}
 
@@ -895,6 +985,9 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         note_bits = [f"本批 {len(images)} 张成功（AI 底图 {ai_count} / 模板兜底 {fallback_count}）"]
         if variants:
             note_bits.append(f"共 {len(variants)} 组创意文案，按任务矩阵指定的概念叠加，同一概念的标题与证据保持一致")
+        note_bits.append(f"每张图按概念生成独立视觉简报，配置 {config['config_id']}（{CREATIVE_CONFIG_VERSION}）已随图归档")
+        if reference_mode != "none":
+            note_bits.append(f"商品参考图模式 {reference_mode}：{capability_note}")
         if image_model["mixed"]:
             note_bits.append("同批存在模板回退，已逐张标注，不按整批 AI 成功计")
         if failed_count:
@@ -920,6 +1013,8 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             "file": "", "ai_background": False, "fallback": True,
             "error": s.get("reason", ""), "retries": s.get("retries", 0),
             "batch_id": batch_id,
+            "layout": s.get("layout", ""), "prompt_hash": s.get("prompt_hash", ""),
+            "creative_config_id": s.get("creative_config_id", ""),
         } for s in skipped] + [{
             "status": x["status"], "size": x["size"], "placement": x["placement"],
             "concept_id": x["concept_id"], "ad_product": x["ad_product"],
@@ -927,6 +1022,8 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             "ai_background": x["ai_background"], "fallback": x["fallback"],
             "error": x["fallback_reason"], "retries": x["retries"],
             "batch_id": batch_id,
+            "layout": x.get("layout", ""), "prompt_hash": x.get("prompt_hash", ""),
+            "creative_config_id": x.get("creative_config_id", ""),
         } for x in images]
 
         return {
@@ -943,6 +1040,14 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             "task_results": task_results,
             "batch_id": batch_id,
             "spec_version": SPEC_VERSION,
+            # F04：整批的配置快照，供「素材历史」写入；后续修改预设不会覆盖它
+            "creative_config": {**cfg_snapshot,
+                                "scope": config["scope"],
+                                "strategy_text_hash": prompt_hash(
+                                    visual_text_block(config)),
+                                "reference_mode": reference_mode},
+            "reference_mode": reference_mode,
+            "capability_note": capability_note,
             "rules": {**rules_meta,
                       "stale_cleanup": stale,
                       "supplier_concurrency": MAX_CONCURRENT_IMAGE_TASKS,
