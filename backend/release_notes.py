@@ -42,7 +42,15 @@ from datetime import date, datetime
 import version as _version
 
 _CHANGELOG = os.path.join(os.path.dirname(__file__), "..", "CHANGELOG.md")
+_DATAFILE = os.path.join(os.path.dirname(__file__), "release_notes_data.py")
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+# 部署环境权威来源：随代码发布的版本通知数据。即使部署环境没有 CHANGELOG.md 或
+# git，接口也能直接展示最新版本内容；开发期若 CHANGELOG 已含更新版本则优先实时解析。
+try:
+    from release_notes_data import NOTES as _EMBEDDED_NOTES
+except Exception:  # pragma: no cover - 生成文件缺失时回退到 CHANGELOG / 自动兜底
+    _EMBEDDED_NOTES = []
 
 _VER_RE = re.compile(r"^##\s+(V\d+\.\d+(?:\.\d+)?)\s*(.*)$")
 _DATE_RE = re.compile(r"发布日期\D*?(\d{4}-\d{2}-\d{2})")
@@ -321,18 +329,21 @@ def public_note(n: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 缓存：按 (mtime_ns, size, inode) 失效；也提供显式失效入口
+# 缓存：按 CHANGELOG + 内置数据文件的签名失效；也提供显式失效入口
 # ---------------------------------------------------------------------------
 _sig = None
 _cache = None
 
 
 def _file_sig():
-    try:
-        st = os.stat(_CHANGELOG)
-        return (st.st_mtime_ns, st.st_size, st.st_ino)
-    except Exception:
-        return None
+    sigs = []
+    for path in (_CHANGELOG, _DATAFILE):
+        try:
+            st = os.stat(path)
+            sigs.append((st.st_mtime_ns, st.st_size, st.st_ino))
+        except Exception:
+            sigs.append(None)
+    return tuple(sigs)
 
 
 def invalidate_cache() -> None:
@@ -340,21 +351,47 @@ def invalidate_cache() -> None:
     _cache, _sig = None, None
 
 
+def _collect_notes():
+    """合并内置发布数据（部署环境权威来源）与 CHANGELOG 实时解析（开发期优先）。"""
+    tag = _version.release_tag()
+    notes = {n["version"]: dict(n) for n in _EMBEDDED_NOTES}
+    data_versions = list(notes.keys())
+    data_latest = max(data_versions, key=_vkey) if data_versions else None
+    try:
+        parsed = parse_changelog()
+    except Exception:
+        parsed = []
+    if parsed:
+        cl_latest = parsed[0]["version"]
+        # 仅当 CHANGELOG 的最新版本不落后于内置数据时，整体采用实时解析，
+        # 避免部署环境里陈旧的 CHANGELOG 覆盖掉已随代码发布的新版本。
+        if data_latest is None or _vkey(cl_latest) >= _vkey(data_latest):
+            notes = {n["version"]: public_note(n) for n in parsed}
+    merged = sorted(notes.values(), key=lambda n: _vkey(n["version"]), reverse=True)
+    return merged, tag
+
+
 def get_release_notes() -> dict:
-    """返回「最新在前」的版本通知；保证包含当前系统版本对应的通知。"""
+    """返回「最新在前」的版本通知；保证包含当前系统版本对应的通知。
+
+    权威来源为随代码发布的 `release_notes_data.py`（即使部署环境没有
+    CHANGELOG.md 或 git 也能展示最新内容）；开发期若 CHANGELOG 已包含更新的
+    版本段落，则优先使用其实时解析结果。当前系统版本在任一来源缺失时，
+    仍由 `auto_note()` 生成一条明确标注「自动同步」的兜底通知。
+    """
     global _cache, _sig
     sig = _file_sig()
     if _cache is not None and sig == _sig:
         return _cache
 
-    parsed = parse_changelog()
-    tag = _version.release_tag()
-    auto_generated = not any(n["version"] == tag for n in parsed)
+    merged, tag = _collect_notes()
+    auto_generated = not any(n["version"] == tag for n in merged)
     if auto_generated:
-        parsed = [auto_note(tag)] + parsed
-        parsed.sort(key=lambda n: _vkey(n["version"]), reverse=True)
+        fallback = public_note(auto_note(tag))
+        merged = [fallback] + merged
+        merged.sort(key=lambda n: _vkey(n["version"]), reverse=True)
 
-    notes = [public_note(n) for n in parsed]
+    notes = merged
     _cache = {
         "latest": notes[0]["version"] if notes else None,
         "app_version": tag,

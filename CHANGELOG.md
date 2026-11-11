@@ -1753,3 +1753,40 @@
 **说明 / 默认约定**
 - 登录日志覆盖「账号 + IP + 时间」三项，满足本需求的追溯与合规要求；更细的会话级行为（登出、超时、操作轨迹）属后续增强。
 - 四种状态分开记录：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。
+
+## V4.48 新版通知可靠性修复：版本内容强制随代码同步
+
+**发布日期**：2026-11-11
+**变更类型**：修复 / 优化 / 新增
+**涉及模块**：新版通知、发版流程、后端接口、系统版本
+**变更摘要**：修复「新版通知」模块在部署环境中可能因缺少 CHANGELOG.md / git 而展示陈旧或空内容的问题；将版本通知改造为「随代码发布的权威数据文件（release_notes_data.py）」驱动，并由发版校验（`prepare_release.py --check`）强制要求每个系统版本都生成同步的发布数据，从而实现「每次代码更新都总结更新内容并同步到新版通知」。
+
+**更新要点**
+- 根因：原「新版通知」运行期直接解析仓库根目录 CHANGELOG.md，并依赖 git 生成兜底摘要；部署环境若未随包发布 CHANGELOG.md 或不含 .git，最新版本内容会缺失或被弱兜底内容替代，表现为「近期更新未整理发布」。
+- 权威来源改为 `backend/release_notes_data.py`：随代码发布的版本通知数据，接口优先读取，部署环境无论是否有 CHANGELOG.md / git 都能展示最新版本；开发期若 CHANGELOG 已含更新版本则优先实时解析，避免陈旧 CHANGELOG 覆盖已发布的新版本。
+- 发版闭环：`prepare_release.py --sync` 在整理 CHANGELOG 段落的同时，自动重建 `release_notes_data.py`；`--check` 新增校验「发布数据最新版本 == 系统版本」并校验当前版本已包含，缺失即拦截发布。
+- 兜底仍保留：若某版本在两个来源都缺失，仍由 `auto_note()` 生成一条明确标注「自动同步」的通知，但发版校验会强制要求补写，杜绝静默兜底的弱内容。
+- 同步机制文档化：README 补充「每次系统更新 → 运行 `--sync` → 通知随代码入库 → 部署即包含」的标准动作，并新增 `tests/test_release_notes.py` 回归保护接口返回当前版本且有非空要点。
+
+**本次优化与更改的功能 / 模块**
+- 【修复】后端 / 新版通知：`backend/release_notes.py` 的 `get_release_notes()` 改为以内置 `release_notes_data.NOTES` 为权威来源，CHANGELOG 仅在版本更新时作为实时覆盖；`auto_note()` 保留为最终兜底。
+- 【新增】部署发布数据：`scripts/prepare_release.py` 新增 `write_data_file()`，将 CHANGELOG 全部版本整理为 `backend/release_notes_data.py`（仅含前端消费的版本号 / 标题 / 日期 / 摘要 / 要点 / 类型 / 模块 / 自动标记字段）。
+- 【优化】发版校验：`scripts/prepare_release.py --check` 增加发布数据版本一致性校验（缺失 / 落后 / 未含当前版本均报错拦截），并打印「发布数据最新版本」。
+- 【优化】系统版本：`backend/version.py` 升 `APP_VERSION = "4.48.0"`。
+- 【新增】回归测试：`tests/test_release_notes.py` 覆盖接口返回当前版本（非自动生成）且要点非空、`prepare_release.py --check` 通过、内置发布数据首条为当前版本。
+
+**影响范围**
+- 前端：「系统设置 → 新版通知」读取的数据来源不变（仍经 `/api/system/release-notes`），但后端现在优先使用随代码发布的权威数据，部署更可靠。
+- 后端：新增 `backend/release_notes_data.py`（生成文件，随代码提交）；有效 `/api` 路径数不变（仍为 57 条）。
+- 发版流程：每次版本更新须运行 `python3 scripts/prepare_release.py --sync`，该命令会同时更新 CHANGELOG 与发布数据；CI / pre-push 的 `--check` 会拦截未同步的发布。
+- 兼容：未部署 `release_notes_data.py` 的旧构建回退到 CHANGELOG 实时解析，行为不退化。
+
+**验证**
+- `python3 tests/run_all.py`：原有 133 项断言全部通过，新增 `tests/test_release_notes.py` 覆盖接口与发版校验。
+- `python3 scripts/prepare_release.py --check`：发布数据最新版本 V4.48 == 系统版本 V4.48，校验通过。
+- 后端 `compileall -q backend scripts tests` 通过；`import main` 通过，运行版本 `4.48.0`、有效 `/api` 路径 57 条。
+- 前端 `tsc --noEmit` 通过；`vite build` 45 模块 / 284.79 kB JS / 57.21 kB CSS。
+
+**说明 / 默认约定**
+- 「新版通知」现在以随代码发布的 `release_notes_data.py` 为权威来源，彻底摆脱对部署环境 CHANGELOG.md / git 的依赖；CHANGELOG.md 仍是人类可读的完整归档。
+- 四种状态分开记录：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。

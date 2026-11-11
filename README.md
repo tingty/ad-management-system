@@ -1,7 +1,7 @@
-# 广告管理系统（在线营销素材管理平台 V4.47）
+# 广告管理系统（在线营销素材管理平台 V4.48）
 
 对应方案文档：《在线营销素材管理平台方案.docx》；开发节奏见《在线营销素材管理平台-版本开发规划.docx》。
-**当前版本：V4.47（2026-11-11）**。完整发版归档见 [CHANGELOG.md](CHANGELOG.md)；
+**当前版本：V4.48（2026-11-11）**。完整发版归档见 [CHANGELOG.md](CHANGELOG.md)；
 系统内「系统设置 → 新版通知」**按系统运行版本自动同步**，从最新版本开始只展示「版本号 + 总结式更新要点」，
 不再展示功能细节、前因后果、改造进度、影响范围与验证结果（AI 改造 **12 / 12** 已收官，进度见追踪表）。
 
@@ -24,7 +24,7 @@
 **N03 交付门**：缺官方商品图 / 真实 UI、官方规格未核验、逐图质检未上线时，自动产出统一标记
 `delivery_grade=draft` 且 `deliverable=false`，草案等级与计划版本随生成任务 `archive` 快照归档，
 不按「PNG 保存成功」计作可投放商品广告。源文限定词、未在原文定位的量化承诺与地区报价同样受控（A05 / A06 / A07）。
-可复现回归：`python3 tests/run_all.py`（V4.46 已扩至 128 项，含 esbuild 打包后真实执行的前端会话用例）。
+可复现回归：`python3 tests/run_all.py`（V4.48 已扩至 136 项，含 esbuild 打包后真实执行的前端会话用例）。
 D4–D6（媒体全覆盖计划 / PromptBundle / 多阶段持久任务 / 逐图质检 / A09–A20 验收）已由 V4.46 完成工程路径与模拟回归；
 官方 `SPEC_VERIFIED_ON` 与供应商 `size_verified_on` 仍为空，真实模型与真实投放验证均未执行。
 
@@ -39,6 +39,10 @@ A09–A20 全部落成 `tests/test_d4_d5_d6.py`（32 项断言）。仍只完成
 IP 优先取 `X-Forwarded-For` 第一段（适配 Cloudflare Tunnel / Caddy 反向代理），回退 `X-Real-IP` 与直连地址；仅管理员可读。
 后端新增 `backend/models.py::LoginLog`（表 `login_logs`）、`routers.py` 的 `_log_login` / `_client_ip` 与 `GET /api/login-logs`，`POST /api/auth/login` 在成功与失败分支均写入登录日志；
 前端 `api.ts` 新增 `LoginLog` 接口与 `loginLogs` 方法，`pages/Logs.tsx` 增加标签页与「仅成功 / 仅失败」筛选。回归 `tests/test_login_logs.py`（5 项）。
+
+**V4.48 新版通知可靠性修复（2026-11-11）**：修复「新版通知」在部署环境可能因缺少 CHANGELOG.md / git 而展示陈旧或空内容的问题，落实「每次代码更新都总结更新内容并同步到新版通知」。
+根因为旧实现运行期直接解析仓库 `CHANGELOG.md` 并依赖 git 生成兜底摘要；改造为以**随代码发布的 `backend/release_notes_data.py`** 为权威发布来源，接口优先读取，无论部署环境是否有 CHANGELOG.md / git 都能展示最新版本；开发期若 CHANGELOG 已含更新版本则优先实时解析，避免陈旧 CHANGELOG 覆盖已发布的新版本。
+`scripts/prepare_release.py --sync` 在整理 CHANGELOG 段落的同时自动重建 `release_notes_data.py`；`--check` 新增「发布数据最新版本 == 系统版本」的强制校验（缺失 / 落后 / 未含当前版本均拦截发布）。历史 CHANGELOG 里残留的默认口令字样在生成发布数据时被脱敏。回归 `tests/test_release_notes.py`（新增 V4.48 用例 3 项，全量 136 项通过）。
 
 **V4.44 新版验收整改第 1 期（D0）**：依据《素材创作平台新版验收与自动化创作改造实施方案》v2.0，
 问题映射与分期见 [docs/ACCEPTANCE_TRACKER.md](docs/ACCEPTANCE_TRACKER.md)。本版修复 N01 / N02 / N04 / N05 / N06：
@@ -58,8 +62,10 @@ IP 优先取 `X-Forwarded-For` 第一段（适配 Cloudflare Tunnel / Caddy 反�
 `main.py`、`backend/release_notes.py` 与 `scripts/prepare_release.py` 共用；版本通知以该版本为锚点，
 CHANGELOG 尚未写入该版本时自动生成标注 `auto_generated` 的兜底通知，**系统升级后通知不会停留在旧版本**。
 `prepare_release.py --sync` 可按当前版本自动生成总结式通知，`--check` 强制「系统版本 == CHANGELOG 最新版本」
-且最新版本必须含 `**更新要点**` 章节。接口只下发精简字段并禁用缓存，前端进入页面 / 窗口聚焦 / 定时轮询
-都会重新拉取。`size_verified_on` 为空仍表示供应商尺寸能力尚未核验。
+且最新版本必须含 `**更新要点**` 章节。
+**V4.48 起**，版本通知的权威来源为随代码发布的 `backend/release_notes_data.py`（由 `--sync` 从 CHANGELOG 生成），
+彻底摆脱对部署环境 CHANGELOG.md / git 的依赖；`--check` 进一步校验「发布数据最新版本 == 系统版本」。
+接口只下发精简字段并禁用缓存，前端进入页面 / 窗口聚焦 / 定时轮询都会重新拉取。`size_verified_on` 为空仍表示供应商尺寸能力尚未核验。
 
 **V4.42 新增能力速览**：`backend/image_capabilities.py` 用 `PROVIDER_CAPABILITIES` 声明供应商尺寸候选、
 核验日期与参考图能力，`plan_generation_size()` 把宽高作为一个比例整体选候选（不再分别吸附成方形），
@@ -103,18 +109,20 @@ CHANGELOG 尚未写入该版本时自动生成标注 `auto_generated` 的兜底�
 
 ## 每次发版：版本通知流程（V4.37 起）
 
-单一数据源是根目录 `CHANGELOG.md`；每条版本段落按统一结构发布，
-系统「新版通知」由 `backend/release_notes.py` 解析后经 `/api/system/release-notes` 展示。
+单一数据源是根目录 `CHANGELOG.md`；每条版本段落按统一结构发布。
+**V4.48 起**，系统「新版通知」由随代码发布的 `backend/release_notes_data.py`（`scripts/prepare_release.py --sync` 从 CHANGELOG 生成）作为权威来源，
+经 `backend/release_notes.py` 读取后通过 `/api/system/release-notes` 展示；部署环境无需 CHANGELOG.md / git 也能展示最新内容。
 
 ```bash
 # 1. 升级 backend/version.py 的 APP_VERSION（系统版本唯一来源）
 
-# 2. 按当前系统版本自动生成总结式版本通知（推荐；也可手工撰写）
+# 2. 按当前系统版本自动生成总结式版本通知，并重建发布数据文件
+#    （backend/release_notes_data.py，随代码发布，是「新版通知」权威来源）
 python3 scripts/prepare_release.py --sync --title "版本主题" \
   --summary "一句话总结" --points "要点一|要点二|要点三"
 
-# 3. 同步 git 前校验：系统版本 == CHANGELOG 最新版本、更新要点齐备、
-#    字段完整、无占位文字、模块已总结（pre-push 钩子自动执行）
+# 3. 同步 git 前校验：系统版本 == CHANGELOG 最新版本 == 发布数据最新版本、
+#    更新要点齐备、字段完整、无占位文字、模块已总结（pre-push 钩子自动执行）
 python3 scripts/prepare_release.py --check
 
 # 4. 安装一次本机 pre-push 钩子，之后每次 push 自动执行第 3 步
