@@ -349,7 +349,9 @@ def get_preset(lib: str, pid: Optional[str]) -> Optional[dict]:
     """按库名（directions / styles / colors）与编号取单个预设；不存在返回 None。"""
     if not pid:
         return None
-    return _index(LIB_MAP.get(lib, []))[pid]
+    # A1（V4.57）：未知编号直接返回 None，不再对字典做 [pid] 硬索引（避免 KeyError）。
+    # 调用方（build_directives）会把非合法预设 ID 的自然语言文本当作自定义指令保留进提示词。
+    return _index(LIB_MAP.get(lib, [])).get(pid)
 
 
 def creative_presets_payload() -> dict:
@@ -385,15 +387,19 @@ def build_directives(
 
     # V4.35：管理员在「素材提示词」里编辑过的预设片段（key=preset_D01 等）优先，
     # 否则用内置默认文本。overrides 由调用方用 prompt_catalog.load_preset_overrides(db) 传入。
-    def _text(preset, pid):
-        if not preset:
-            return ""
-        custom = (overrides or {}).get(pid)
-        return custom if custom and custom.strip() else preset.get("prompt", "")
+    # A1（V4.57）：preset 为 None 且原始值本身是自然语言文本（如创意路线名/角度/描述）时，
+    # 直接作为自定义指令文本返回，确保路线内容进入最终提示词，而非被静默丢弃。
+    def _text(preset, pid, raw=None):
+        if preset:
+            custom = (overrides or {}).get(pid)
+            return custom if custom and custom.strip() else preset.get("prompt", "")
+        if raw and isinstance(raw, str) and raw.strip():
+            return raw.strip()
+        return ""
 
-    direction_text = _text(d, creative_direction)
-    style_text = _text(s, content_style)
-    color_text = _text(c, color_scheme)
+    direction_text = _text(d, creative_direction, creative_direction)
+    style_text = _text(s, content_style, content_style)
+    color_text = _text(c, color_scheme, color_scheme)
 
     parts = [p for p in (direction_text, style_text, color_text) if p]
     extra_prompt = "；".join(parts)

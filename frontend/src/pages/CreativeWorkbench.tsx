@@ -208,64 +208,84 @@ export default function CreativeWorkbench() {
     const activeRoutes = routes.filter(r => r.selected)
     const targets = selected
     const collected: any[] = []
+    const finalStates: string[] = []
+    // A2（V4.57）：总任务数 = 平台数 × 选中路线数，进度分母据此计算（不再按平台数）。
+    const totalJobs = targets.length * Math.max(1, activeRoutes.length)
     let done = 0
     try {
       const rules: any = await api.mediaRules().catch(() => ({}))
       const allowed: Record<string, string[]> = rules?.platforms || {}
-      const routeFor = (i: number) => activeRoutes.length ? activeRoutes[i % activeRoutes.length] : null
+      let genIdx = 0
       for (let i = 0; i < targets.length; i++) {
-        const p = targets[i]; const route = routeFor(i)
-        setProgressText(`正在为 ${p} 生成推广图片…`)
-        const sizes = (allowed[p] || ['1080x1080']).slice(0, 2)
-        const slots = sizes.map(size => ({ size, placement: p }))
-        const style_opts = {
-          creative_direction: `${route?.name || ''}（${route?.angle || ''}）`.replace(/[（）\s]+$/, ''),
-          content_style: `${route?.description || ''}；${((route?.tags) || []).join('、')}`.replace(/^[；\s]+|[；\s]+$/g, ''),
-          color_scheme: '',
+        const p = targets[i]
+        // A2：去掉 slice(0, 2) 静默截断，按媒体平台返回的全部规格生成。
+        const sizes = allowed[p] || ['1080x1080']
+        const routeList = activeRoutes.length ? activeRoutes : [null]
+        // A2：每个平台 × 每条选中路线各生成一组，保证多选路线都被覆盖（单平台也不会只用第一条）。
+        for (const route of routeList) {
+          genIdx++
+          setProgressText(`正在为 ${p} · ${route?.name || '默认'} 生成推广图片…`)
+          const slots = sizes.map(size => ({ size, placement: p }))
+          const style_opts = {
+            creative_direction: `${route?.name || ''}（${route?.angle || ''}）`.replace(/[（）\s]+$/, ''),
+            content_style: `${route?.description || ''}；${((route?.tags) || []).join('、')}`.replace(/^[；\s]+|[；\s]+$/g, ''),
+            color_scheme: '',
+          }
+          const payload = {
+            images_request: {
+              analysis: landing || cw?.analysis || {}, platform: p, lang: 'en',
+              copy_fields: {}, copy_variants: [], style_opts, slots,
+              spec_version: rules?.spec_version || '',
+              total_pixels: sizes.reduce((n: number, s: string) => { const [w, h] = s.split('x').map(Number); return n + (w * h || 0) }, 0),
+            },
+            archive: hid ? { history_id: hid, platform: p, lang: 'en' } : undefined,
+            idempotency_key: `cw_${p}_${genIdx}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          }
+          setJobs(j => [...j, { platform: p, jobId: null, status: 'submitting', progress: 0, images: [], route }])
+          let job: any
+          try { job = await api.createGenerationJob(payload) }
+          catch (e: any) {
+            setJobs(j => j.map(x => x.platform === p && x.route === route ? { ...x, status: 'failed', error: e?.message || '创建失败' } : x))
+            finalStates.push('failed'); done++; setProgressPct(Math.round(done / totalJobs * 100)); continue
+          }
+          const jobId = job?.job_id
+          setJobs(j => j.map(x => x.platform === p && x.route === route ? { ...x, jobId, status: job?.status || 'queued' } : x))
+          let st: any = job
+          for (let k = 0; k < 80; k++) {
+            await sleep(1500)
+            try { st = await api.generationJob(jobId) } catch { continue }
+            setJobs(j => j.map(x => x.platform === p && x.route === route ? { ...x, status: st?.status || x.status, progress: st?.progress ?? x.progress } : x))
+            if (['succeeded', 'partial_success', 'failed', 'canceled'].includes(st?.status)) break
+          }
+          let imgs: any[] = (st?.result?.images || []).slice()
+          if (!imgs.length) {
+            try { const got: any = await api.creativeAssets({ job_id: jobId }); imgs = (got?.items || []).slice() } catch { /* 兜底 */ }
+          }
+          setJobs(j => j.map(x => x.platform === p && x.route === route ? { ...x, status: st?.status || x.status, images: imgs } : x))
+          for (const im of imgs) { im.__route = route; im.__platform = p }
+          collected.push(...imgs); setAssets(a => [...a, ...imgs])
+          if (imgs.length) showToast(`图片已生成 ${imgs.length} 张（${p} · ${route?.name || '默认'}）`)
+          finalStates.push(st?.status || 'unknown')
+          done++; setProgressPct(Math.round(done / totalJobs * 100))
         }
-        const payload = {
-          images_request: {
-            analysis: landing || cw?.analysis || {}, platform: p, lang: 'en',
-            copy_fields: {}, copy_variants: [], style_opts, slots,
-            spec_version: rules?.spec_version || '',
-            total_pixels: sizes.reduce((n: number, s: string) => { const [w, h] = s.split('x').map(Number); return n + (w * h || 0) }, 0),
-          },
-          archive: hid ? { history_id: hid, platform: p, lang: 'en' } : undefined,
-          idempotency_key: `cw_${p}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        }
-        setJobs(j => [...j, { platform: p, jobId: null, status: 'submitting', progress: 0, images: [], route }])
-        let job: any
-        try { job = await api.createGenerationJob(payload) }
-        catch (e: any) {
-          setJobs(j => j.map(x => x.platform === p ? { ...x, status: 'failed', error: e?.message || '创建失败' } : x))
-          done++; setProgressPct(Math.round(done / targets.length * 100)); continue
-        }
-        const jobId = job?.job_id
-        setJobs(j => j.map(x => x.platform === p ? { ...x, jobId, status: job?.status || 'queued' } : x))
-        let st: any = job
-        for (let k = 0; k < 80; k++) {
-          await sleep(1500)
-          try { st = await api.generationJob(jobId) } catch { continue }
-          setJobs(j => j.map(x => x.platform === p ? { ...x, status: st?.status || x.status, progress: st?.progress ?? x.progress } : x))
-          if (['succeeded', 'partial_success', 'failed', 'canceled'].includes(st?.status)) break
-        }
-        let imgs: any[] = (st?.result?.images || []).slice()
-        if (!imgs.length) {
-          try { const got: any = await api.creativeAssets({ job_id: jobId }); imgs = (got?.items || []).slice() } catch { /* 兜底 */ }
-        }
-        setJobs(j => j.map(x => x.platform === p ? { ...x, status: st?.status || x.status, images: imgs } : x))
-        for (const im of imgs) { im.__route = route; im.__platform = p }
-        collected.push(...imgs); setAssets(a => [...a, ...imgs])
-        if (imgs.length) showToast(`图片已生成 ${imgs.length} 张（${p}）`)
-        done++; setProgressPct(Math.round(done / targets.length * 100))
       }
     } catch (e: any) {
       setError((e?.message || '图片生成失败') + '（可重试或调整媒体后继续）')
     }
+    // A3（V4.57）：依据真实终态裁决完成态，不再无条件标记成功 / 写 status=done。
+    const okImages = collected.length
+    const anyFailed = finalStates.some(s => s === 'failed' || s === 'canceled')
     setProgressText('创作完成')
-    setView('result')
-    showToast(`创作完成：共生成 ${collected.length} 张图片`)
-    if (planId) await api.updateCreativePlan(planId, { status: 'done', asset_count: collected.length, history_id: hid ?? undefined }).catch(() => {})
+    if (okImages > 0) {
+      setView('result')
+      showToast(`创作完成：共生成 ${okImages} 张图片`)
+      if (planId) await api.updateCreativePlan(planId, { status: 'done', asset_count: okImages, history_id: hid ?? undefined }).catch(() => {})
+    } else {
+      // 零图 / 全失败：进入结果区以便重试，但不宣称完成、不写 status=done。
+      setError((anyFailed ? '本次生成失败（部分平台未返回素材）' : '本次生成超时或未返回素材')
+        + '，请调整媒体或重试（可重试或调整媒体后继续）')
+      setView('result')
+    }
   }
 
   function download(file: string) { window.open(api.mediaFileDownloadUrl(file), '_blank') }
@@ -273,6 +293,11 @@ export default function CreativeWorkbench() {
   const selectedCount = selectedFiles().length
   function downloadSelected() {
     const f = selectedFiles(); if (f.length) window.open(api.mediaZipUrl(f, '创意工作台素材'), '_blank')
+  }
+  // A5（V4.57）：独立「下载全部」，与「下载已选」解耦，未勾选也能打包全部素材。
+  function downloadAll() {
+    const f = assets.filter(a => a.file).map(a => a.file)
+    if (f.length) window.open(api.mediaZipUrl(f, '创意工作台素材'), '_blank')
   }
   function toggleSelectAll() {
     if (selectedCount > 0) setChecked({})
@@ -288,11 +313,15 @@ export default function CreativeWorkbench() {
     try { const d: any = await api.creativePlans({ limit: 50, offset: 0 }); setHistory(d?.items || []) } catch { setHistory([]) }
   }
   function loadPlan(item: any) {
+    // A4（V4.57）：先清理上一项目的残留（landing / assets / jobs / historyId），避免跨项目旧数据参与生成。
+    setLanding(null); setAssets([]); setJobs([]); setHistoryId(null); setError('')
     setCw({ id: item.id, title: item.title, summary: item.analysis?.summary || '',
       boxes: item.analysis?.boxes || {}, brief: item.analysis?.brief || {}, recommendedPlatforms: item.analysis?.recommendedPlatforms || [] })
     setSelected((item.platforms || []).slice())
     setRoutes((item.routes || []).map((r: any) => ({ ...r, selected: r.selected !== false })))
     setPlanId(item.id)
+    if (item.history_id) setHistoryId(item.history_id)   // 还原历史归属，便于后续再下载 / 复用
+    if (item.input) setInput(item.input)                 // 还原输入链接 / 文本（若存在）
     setHistOpen(false); setView('plan')
   }
 
@@ -490,7 +519,7 @@ export default function CreativeWorkbench() {
             {view === 'result' && assets.length > 0 && (
               <div className="cwb-confirm">
                 <button className="cwb-link-btn" onClick={resetAll}>新的创作</button>
-                <button className="cwb-gen-btn sm" onClick={downloadSelected}>打包下载全部</button>
+                <button className="cwb-gen-btn sm" onClick={downloadAll}>打包下载全部</button>
               </div>
             )}
           </section>
