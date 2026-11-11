@@ -1256,6 +1256,28 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ac-progress-logs li { padding: 2px 0; color: var(--muted); }
 .ac-progress-logs li.ok { color: var(--ok); }
 .ac-progress-logs li.error { color: #c0392b; }
+
+/* V4.50 创意工作台：对话式创作流 / 全球创意分析 */
+.err { color: #c0392b; font-size: 13px; margin-top: 8px; }
+.prompt-box { white-space: pre-wrap; word-break: break-word; background: #f7fafd;
+  border: 1px solid var(--border, #e2e8f0); border-radius: 8px; padding: 8px 10px;
+  font-size: 12px; line-height: 1.6; color: var(--text); max-height: 160px; overflow: auto; margin: 0; }
+.chat { display: flex; flex-direction: column; gap: 10px; }
+.bubble { border-radius: 10px; padding: 10px 12px; max-width: 100%; }
+.bubble.user { background: var(--primary); color: #fff; align-self: flex-end; }
+.bubble.system { background: #f4f7fb; border: 1px solid var(--border, #e2e8f0); }
+.bubble .who { font-size: 11px; opacity: .7; margin-bottom: 4px; }
+.bubble .txt { font-size: 13px; line-height: 1.65; }
+.kv { display: grid; grid-template-columns: 64px 1fr; gap: 6px 10px; font-size: 13px; }
+.kv > div { display: contents; }
+.kv span { color: var(--muted); }
+.kv b { font-weight: 600; }
+.asset { border: 1px solid var(--border, #e2e8f0); border-radius: 8px; overflow: hidden; background: #fff; }
+.asset img { width: 100%; height: 110px; object-fit: cover; display: block; }
+.asset-bar { display: flex; gap: 6px; padding: 6px; }
+.reserved { padding: 10px 12px; border-radius: 8px; background: #fff7ed; border: 1px dashed #f0b27a;
+  font-size: 12.5px; color: #a35b00; line-height: 1.6; }
+.btn.tiny { padding: 3px 9px; font-size: 12px; }
 @media (max-width: 720px) {
   .ac-grid { grid-template-columns: 1fr; }
   .ac-panel { padding: 16px; }

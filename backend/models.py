@@ -202,3 +202,19 @@ class CreationPlan(Base):
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
+
+# ----------------------------- V4.50 创意工作台：全球创意分析 -----------------------------
+class CreativeAnalysis(Base):
+    """「创意工作台 · 全球创意分析」：对参考素材（链接/文本）调用大模型归类的创意风格/类型，
+    并产出可复用的图片/视频提示词模板。结果落库，可「存入提示词库」复用。"""
+    __tablename__ = "creative_analyses"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    owner_name = Column(String(64), nullable=True)
+    title = Column(String(255), nullable=True)          # 用户给的分析标题
+    inputs_json = Column(JSON, nullable=True)           # {urls:[], text:""}
+    result_json = Column(JSON, nullable=True)           # LLM 结构化结果（summary/categories/model_info）
+    model_info = Column(JSON, nullable=True)            # 本次实际调用模型快照
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+

@@ -1790,3 +1790,39 @@
 **说明 / 默认约定**
 - 「新版通知」现在以随代码发布的 `release_notes_data.py` 为权威来源，彻底摆脱对部署环境 CHANGELOG.md / git 的依赖；CHANGELOG.md 仍是人类可读的完整归档。
 - 四种状态分开记录：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。
+
+## V4.50 创意工作台：独立自动化创意创作中枢
+
+**发布日期**：2026-11-11
+**变更类型**：新增
+**涉及模块**：创意工作台、全球创意分析、前端导航、后端接口、提示词体系
+**变更摘要**：新增独立的一级模块「创意工作台」，面向落地页 / 官网 / 应用的自动化创意素材创作。包含「创意工作台」（对话式自动创作：输入链接或产品信息 → 选择媒体平台 → 大模型分析产品并总结框架 → 自动生成推广图片 → 放大查阅与下载）与「全球创意分析」（参考素材 → 大模型归类创意风格/类型 → 产出可复用图片/视频提示词模板）。与现有「素材创作平台」并存，不替换。
+
+**更新要点**
+- 新增一级菜单「创意工作台」（与「素材创作平台」并列），含「创意工作台」「全球创意分析」两个子模块；权限沿用编辑/管理角色，且保持「素材创作」常驻挂载的既有会话持久化不变。
+- 创意工作台采用对话式自动创作流：用户输入模块 + 对话/调整区 + 成果区；产品分析调用既有 `POST /api/landing-analysis`（LLM 8 字段推理），媒体规格沿用既有 `media-rules` / `media-platforms`，图片生成复用 `POST /api/generation-jobs`（服务端持久任务，含历史落库与打包下载）。
+- 全球创意分析为本期新增的 LLM 驱动子模块：新增 `POST /api/creative-analysis`（参考链接/文本 → 大模型归类创意类型并产出可复用提示词模板，结果落库）、`GET /api/creative-analysis`（列表）、`GET /api/creative-analysis/{id}`（详情）；提示词可复制沉淀到「素材提示词」库复用。
+- 视频生成按既定决策本期预留为「下期待生成」节点，不阻断图片主流程（用户已确认：图片优先、视频预留）。
+
+**本次优化与更改的功能 / 模块**
+- 【新增】后端模型：`backend/models.py` 新增 `CreativeAnalysis` 表（creative_analyses：owner/title/inputs_json/result_json/model_info）。
+- 【新增】后端端点：`backend/routers.py` 新增 `/api/creative-analysis`（POST 分析+落库、GET 列表、GET 详情），复用 `providers.get_llm_with_info` 调用已配置大模型并回传实际模型快照。
+- 【新增】前端页面：`frontend/src/pages/CreativeWorkbench.tsx`（对话式自动创作）、`frontend/src/pages/CreativeAnalysis.tsx`（全球创意分析）。
+- 【优化】前端导航：`frontend/src/App.tsx` 新增「创意工作台」分组（compass/atom 图标）与两个 Tab，与「素材创作平台」「系统设置」并存。
+- 【优化】系统版本：`backend/version.py` 升 `APP_VERSION = "4.50.0"`；`frontend/src/api.ts` 新增 `creativeAnalyze / creativeAnalyses / creativeAnalysis`。
+- 【新增】回归测试：`tests/test_creative_analysis.py`（5 项：分析落库、列表、详情、缺参拦截、鉴权）。
+
+**影响范围**
+- 前端：新增 2 个页面与 1 个一级菜单，既有「素材创作平台」「系统设置」不受影响。
+- 后端：新增 1 张表（随 `ensure_schema` 幂等建表）、3 个端点；有效 `/api` 路径数 +3；图片生成仍走既有 generation-jobs，不新增外部依赖。
+- 部署：新增表随 `ensure_schema()` 自动创建，旧库无需手动迁移；发布数据随 `--sync` 重建。
+
+**验证**
+- `python3 tests/run_all.py`：运行 141 项，失败 0、错误 0、跳过 0（含新增 5 项创意分析用例）。
+- `python3 scripts/prepare_release.py --check`：发布数据最新版本 V4.50 == 系统版本 V4.50，校验通过。
+- 后端 `import main` 通过，运行版本 `4.50.0`；前端 `tsc --noEmit` 通过；`vite build` 47 模块 / 297.28 kB JS / 58.39 kB CSS。
+
+**说明 / 默认约定**
+- 创意工作台复用既有「落地页分析 / 媒体规则 / 生成任务 / 素材历史 / 提示词」能力，是统一创作中枢而非重复实现；全自动对话式创作沿用既有大模型配置，所有分析/生成均调用已配置模型。
+- 视频生成节点本期预留，下期接入文生视频模型后打通；媒体规格数值以各平台上架政策为准。
+- 四种状态分开记录：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。

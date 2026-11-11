@@ -960,6 +960,14 @@ export const api = {
     analysis: LandingAnalysis; platform?: string; lang?: string; source_id?: number
   }) =>
     req<CreationHistory>('/api/creation-history', { method: 'POST', body: JSON.stringify(payload) }),
+  // V4.50 创意工作台 · 全球创意分析（参考素材 → 大模型归类创意风格/类型 → 可复用提示词模板）
+  creativeAnalyze: (payload: { urls?: string[]; text?: string; title?: string }) =>
+    req<any>('/api/creative-analysis', { method: 'POST', body: JSON.stringify(payload) }),
+  creativeAnalyses: (params: { limit?: number; offset?: number } = {}) =>
+    req<{ items: any[]; total: number; limit: number; offset: number }>(
+      `/api/creative-analysis${qs(params)}`),
+  creativeAnalysis: (id: number) =>
+    req<any>(`/api/creative-analysis/${id}`),
   updateCreationHistory: (id: number, payload: {
     // V4.38：copy 允许附带 selected_copy / copy_variants，记录本次选用的创意文案
     platform?: string; lang?: string; copy?: any

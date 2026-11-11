@@ -214,6 +214,32 @@ class MediaImageRequest(BaseModel):
     spec_version: str = ""
     total_pixels: Optional[int] = None
 
+# ----------------------------- V4.50 创意工作台：全球创意分析 -----------------------------
+class CreativeAnalysisRequest(BaseModel):
+    """全球创意分析请求：给参考素材链接，或直接给参考文案/描述。"""
+    urls: List[str] = []          # 参考素材链接（广告/落地页/竞品创意）
+    text: str = ""                # 或直接粘贴参考文案 / 素材描述
+    title: Optional[str] = None   # 用户自定义分析标题
+
+class CreativeCategory(BaseModel):
+    """LLM 归类出的一种创意风格/类型，附带可复用提示词模板。"""
+    name: str = ""                # 创意类型/风格名，如「极简产品特写」
+    description: str = ""         # 该类型的定义与适用场景
+    traits: List[str] = []        # 关键特征（构图/色调/情绪/文案语气…）
+    examples: List[str] = []      # 典型应用场景 / 示例
+    image_prompt: str = ""        # 可复用的图片提示词模板
+    video_prompt: str = ""        # 可复用的视频提示词模板（本期预留，可空）
+
+class CreativeAnalysisResult(BaseModel):
+    """全球创意分析结果：整体洞察 + 归类创意类型 + 实际调用模型快照。"""
+    model_config = {"protected_namespaces": ()}   # 允许字段名 model_info 不被 "model_" 保护前缀拦截
+    id: Optional[int] = None      # 落库记录 id
+    title: str = ""
+    summary: str = ""             # 对参考素材的整体洞察与可借鉴点
+    categories: List[CreativeCategory] = []
+    model_info: ModelInfo = ModelInfo()
+    source: str = "local"         # llm / mock / local
+
 class LoginRequest(BaseModel):
     email: str
     password: str

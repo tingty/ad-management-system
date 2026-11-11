@@ -11,23 +11,40 @@ import LLMSettings from './pages/LLMSettings'
 import Accounts from './pages/Accounts'
 import Logs from './pages/Logs'
 import ReleaseNotes from './pages/ReleaseNotes'
+import CreativeWorkbench from './pages/CreativeWorkbench'
+import CreativeAnalysis from './pages/CreativeAnalysis'
 
 /* V4.37：移除「素材管理」（创作工作台 / 批量生成 / 素材库 / 规格库）
    与系统设置中的「提示词管理」；保留「素材创作平台」与必要的系统设置。 */
 type Tab = 'creation' | 'matprompts' | 'history'
+  | 'workbench' | 'creativeanalysis'
   | 'llm' | 'accounts' | 'logs' | 'releasenotes'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['creation', 'matprompts', 'history', 'llm', 'accounts', 'logs', 'releasenotes']
+const TABS: Tab[] = ['creation', 'matprompts', 'history', 'workbench', 'creativeanalysis',
+  'llm', 'accounts', 'logs', 'releasenotes']
 const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
 
 type NavItem = { key: Tab; label: string; desc: string; icon: string }
 type NavGroup = { name: string; icon: string; items: NavItem[] }
+
+/* V4.50 创意工作台：自动化创意素材创作中枢（与「素材创作平台」并存，不替换）。
+   包含「创意工作台」（对话式自动创作）与「全球创意分析」（参考素材 → LLM 归类 → 可复用提示词）。 */
+const GROUP_WORKBENCH: NavGroup = {
+  name: '创意工作台',
+  icon: 'compass',
+  items: [
+    { key: 'workbench', label: '创意工作台', icon: 'compass',
+      desc: '自动化创意素材创作：输入落地页 / 应用链接或产品信息，选择推广媒体，剩余由大模型自动分析产品、规划创意路线并生成推广图片；视频节点下期待生成。对话式流程，人工仅介入必要输入与重要决策。' },
+    { key: 'creativeanalysis', label: '全球创意分析', icon: 'atom',
+      desc: '分析 Facebook / Google / Unity / Adsterra 等大媒体上最具创意与转化效果的素材，归类创意风格与类型，并产出可直接调用的图片 / 视频提示词模板，沉淀到「素材提示词」复用。' },
+  ],
+}
 
 const GROUP_CREATION: NavGroup = {
   name: '素材创作平台',
@@ -79,6 +96,8 @@ const PATHS: Record<string, ReactNode> = {
   tags: <><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0l-7.2-7.2A2 2 0 0 1 3 11.8V5a2 2 0 0 1 2-2h6.8a2 2 0 0 1 1.4.6l7.4 7.4a2 2 0 0 1 0 2.8z" /><circle cx="7.5" cy="7.5" r="1.5" /></>,
   bell: <><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>,
   history: <><path d="M3.2 8A9 9 0 1 1 3 12" /><path d="M3 3v5h5" /><path d="M12 7v5l3.2 2" /></>,
+  compass: <><circle cx="12" cy="12" r="9" /><path d="M15.5 8.5 11 11l-2.5 4.5L13 13z" /></>,
+  atom: <><circle cx="12" cy="12" r="1.6" /><ellipse cx="12" cy="12" rx="10" ry="4.2" /><ellipse cx="12" cy="12" rx="10" ry="4.2" transform="rotate(60 12 12)" /><ellipse cx="12" cy="12" rx="10" ry="4.2" transform="rotate(120 12 12)" /></>,
 }
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -100,7 +119,7 @@ function tabFromHash(): Tab | null {
 function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   return [
-    ...(canEdit ? (['creation', 'matprompts', 'history'] as Tab[]) : []),
+    ...(canEdit ? (['creation', 'matprompts', 'history', 'workbench', 'creativeanalysis'] as Tab[]) : []),
     ...(user.role === 'admin' ? (['llm', 'accounts', 'logs'] as Tab[]) : []),
     // 「新版通知」对所有角色开放，方便用户随时查阅每次优化与变更的版本内容
     'releasenotes',
@@ -119,7 +138,7 @@ export default function App() {
   const [booting, setBooting] = useState(true)
   const [tab, setTab] = useState<Tab>(() => tabFromHash() || 'creation')
   const [collapsed, setCollapsed] = useState<boolean>(readCollapsed)
-  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ creation: true, system: true })
+  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ creation: true, workbench: true, system: true })
   // 版本发布「新版通知」红点：记录最新版本号 + 已读事件触发重算
   const [releaseLatest, setReleaseLatest] = useState<string | null>(null)
   const [seenTick, setSeenTick] = useState(0)
@@ -209,11 +228,11 @@ export default function App() {
   const isEditor = !!user && ['admin', 'manager', 'editor'].includes(user.role)
   const isAdmin = user?.role === 'admin'
 
-  const visibleGroups: NavGroup[] = [GROUP_CREATION, GROUP_SYSTEM]
+  const visibleGroups: NavGroup[] = [GROUP_CREATION, GROUP_WORKBENCH, GROUP_SYSTEM]
     .map(g => ({
       ...g,
       items: g.items.filter(it =>
-        it.key === 'releasenotes' ? true : (g === GROUP_CREATION ? isEditor : isAdmin)),
+        it.key === 'releasenotes' ? true : (g === GROUP_CREATION || g === GROUP_WORKBENCH ? isEditor : isAdmin)),
     }))
     .filter(g => g.items.length > 0)
   const allItems: NavItem[] = visibleGroups.flatMap(g => g.items)
@@ -274,7 +293,8 @@ export default function App() {
 
         <nav className="sb-nav">
           {visibleGroups.map((g, i) => {
-            const openKey = g === GROUP_CREATION ? 'creation' : 'system'
+            const openKey = g === GROUP_CREATION ? 'creation'
+              : g === GROUP_WORKBENCH ? 'workbench' : 'system'
             return (
               <Fragment key={openKey}>
                 {i > 0 && <div className="sb-sep" />}
@@ -316,7 +336,7 @@ export default function App() {
         <div className="main-inner">
           <header className="page-head">
             <div className="ph-left">
-              <div className="page-kicker">{curGroup?.name || '素材创作平台'}</div>
+              <div className="page-kicker">{curGroup?.name || '广告管理系统'}</div>
               <h1 className="page-title">{cur.label}</h1>
               <p className="page-desc">{cur.desc}</p>
             </div>
@@ -340,6 +360,8 @@ export default function App() {
           )}
           {tab === 'matprompts' && isEditor && <MaterialPromptLibrary isAdmin={isAdmin} />}
           {tab === 'history' && isEditor && <MaterialHistory />}
+          {tab === 'workbench' && isEditor && <CreativeWorkbench />}
+          {tab === 'creativeanalysis' && isEditor && <CreativeAnalysis />}
           {tab === 'llm' && isAdmin && <LLMSettings />}
           {tab === 'accounts' && isAdmin && <Accounts />}
           {tab === 'logs' && isAdmin && <Logs />}

@@ -3,17 +3,19 @@ from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import Optional
-import os, time, re
+import os, time, re, json
 
 from database import get_db
 from models import (ModelConfig, User, AuditLog, LoginLog, PromptConfig, SystemState,
-                    CreationHistory, GenerationJob, CreativeAsset, utcnow)
+                    CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, utcnow)
 from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LoginRequest, UserOut, UserCreate, UserUpdate,
                      PromptOut, PromptUpdate, PromptDefaultIn,
-                     LandingAnalysisRequest, LandingAnalysis, MediaCopyRequest, MediaImageRequest)
+                     LandingAnalysisRequest, LandingAnalysis, MediaCopyRequest, MediaImageRequest,
+                     CreativeAnalysisRequest, CreativeAnalysisResult)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
+from providers import get_llm_with_info, finalize_invocation, parse_json
 from presets import creative_presets_payload
 from prompt_catalog import (library_dimensions, library_entries,
                             get_practice, target_key_for_kind, KINDS, FUNC_TYPES,
@@ -157,6 +159,102 @@ async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depend
 # ===========================================================================
 # V4.42 / F06 + F12：供应商尺寸能力、服务端持久任务与不可变资产
 # ===========================================================================
+
+# ===========================================================================
+# V4.50 创意工作台：全球创意分析（参考素材 → LLM 归类创意风格/类型 → 可复用提示词模板）
+# ===========================================================================
+_CREATIVE_ANALYSIS_SYS = (
+    "你是全球效果广告创意研究专家，长期跟踪 Facebook、Google、Unity、Adsterra 等大媒体上"
+    "最具创意、最具吸引力、流量效应与转化效果最好的广告素材。"
+    "用户会给你若干参考素材（落地页 / 广告 / 竞品创意的链接或文本）。"
+    "请从中总结、归类出可复用的「创意类型 / 风格」，并给出可直接用于文生图 / 文生视频的提示词模板。"
+    "只返回 JSON，结构如下："
+    "{\"title\": \"分析主题\","
+    " \"summary\": \"对参考素材的整体洞察（为何有效、可借鉴点）\","
+    " \"categories\": ["
+    "   {\"name\": \"创意类型名\", \"description\": \"定义与适用场景\","
+    "    \"traits\": [\"关键特征1\"],"
+    "    \"examples\": [\"示例场景1\"],"
+    "    \"image_prompt\": \"可直接用于文生图的提示词模板（含构图/色调/情绪/主体/文案占位）\","
+    "    \"video_prompt\": \"可直接用于文生视频的提示词模板（含镜头/节奏/转场/时长建议）；若无法给出可留空\"}"
+    " ]}"
+    "要求：categories 不超过 8 条；image_prompt 必须具体、可直接调用模型；"
+    "不要编造数据；如参考信息不足，可在 summary 中说明并给出通用建议。"
+)
+
+
+def _ca_to_dict(r: "CreativeAnalysis") -> dict:
+    return {
+        "id": r.id,
+        "owner_id": r.owner_id,
+        "owner_name": r.owner_name,
+        "title": r.title,
+        "inputs": r.inputs_json or {},
+        "result": r.result_json or {},
+        "model_info": r.model_info or {},
+        "created_at": r.created_at.isoformat() if r.created_at else "",
+    }
+
+
+@router.post("/creative-analysis", response_model=CreativeAnalysisResult)
+async def api_creative_analysis(req: CreativeAnalysisRequest, db: Session = Depends(get_db),
+                                user: User = Depends(require_roles(*CAN_EDIT))):
+    """创意工作台·全球创意分析：参考素材 → 大模型归类创意风格/类型 → 可复用提示词模板；结果落库。"""
+    urls = [str(u).strip() for u in (req.urls or []) if str(u).strip()]
+    text = (req.text or "").strip()
+    if not urls and not text:
+        raise HTTPException(400, "请提供参考素材链接或文本")
+    llm, info = get_llm_with_info(db, "analysis")
+    user_prompt = json.dumps({"reference_urls": urls, "reference_text": text}, ensure_ascii=False)
+    try:
+        resp = await llm.chat(_CREATIVE_ANALYSIS_SYS, user_prompt)
+        parsed = parse_json(resp) or {}
+        info = finalize_invocation(info, llm, bool(parsed))
+    except Exception:
+        parsed, info = {}, finalize_invocation(info, llm, False)
+    cats = []
+    for c in (parsed.get("categories") or [])[:8]:
+        if isinstance(c, dict):
+            cats.append({
+                "name": str(c.get("name") or "").strip(),
+                "description": str(c.get("description") or "").strip(),
+                "traits": [str(t) for t in (c.get("traits") or []) if str(t).strip()][:8],
+                "examples": [str(e) for e in (c.get("examples") or []) if str(e).strip()][:6],
+                "image_prompt": str(c.get("image_prompt") or "").strip(),
+                "video_prompt": str(c.get("video_prompt") or "").strip(),
+            })
+    result = {
+        "title": (req.title or parsed.get("title") or "全球创意分析"),
+        "summary": str(parsed.get("summary") or "").strip(),
+        "categories": cats,
+        "model_info": info,
+        "source": info.get("source", "local"),
+    }
+    rec = CreativeAnalysis(owner_id=user.id, owner_name=user.username,
+                          title=result["title"], inputs_json={"urls": urls, "text": text},
+                          result_json=result, model_info=info)
+    db.add(rec); db.commit(); db.refresh(rec)
+    result["id"] = rec.id
+    return CreativeAnalysisResult(**result)
+
+
+@router.get("/creative-analysis")
+def list_creative_analysis(limit: int = 50, offset: int = 0, db: Session = Depends(get_db),
+                           _: User = Depends(require_roles(*CAN_EDIT))):
+    q = db.query(CreativeAnalysis).order_by(CreativeAnalysis.id.desc())
+    lim = max(1, min(int(limit or 50), 200)); off = max(0, int(offset or 0))
+    rows = q.offset(off).limit(lim).all()
+    return {"items": [_ca_to_dict(r) for r in rows], "total": q.count(), "limit": lim, "offset": off}
+
+
+@router.get("/creative-analysis/{cid}")
+def get_creative_analysis(cid: int, db: Session = Depends(get_db),
+                          _: User = Depends(require_roles(*CAN_EDIT))):
+    r = db.query(CreativeAnalysis).filter_by(id=cid).first()
+    if not r:
+        raise HTTPException(404, "分析记录不存在")
+    return _ca_to_dict(r)
+
 
 @router.get("/image-capabilities")
 async def api_image_capabilities(_: User = Depends(require_roles(*CAN_EDIT))):
