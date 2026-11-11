@@ -1540,3 +1540,74 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
   .ac-studio-bar { flex-direction: column; align-items: flex-start; }
   .ac-kv { grid-template-columns: 80px 1fr; }
 }
+
+/* ===================== V4.54 创意工作台：标题化头部 + 常驻输入 + 滑出面板 + 灯箱 ===================== */
+
+/* ① 顶部仅保留菜单标题，去除自动保存 / AI COPILOT 等文案 */
+.cwb-top { display: block; margin-bottom: 16px; }
+.cwb-title-only { font-size: 22px; font-weight: 700; margin: 0; color: var(--text, #1f2937); letter-spacing: .01em; }
+
+/* ② 输入模块常驻：链接 / 产品信息始终可见 */
+.cwb-input-card { background: var(--card, #fff); border: 1px solid var(--border, #e5e7eb); border-radius: 14px; padding: 14px; box-shadow: 0 1px 3px rgba(15,23,42,.05); }
+.cwb-input-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.cwb-strategy-btn { background: #eef6f1; color: #15803d; border: 1px solid #bfe6cd; padding: 7px 13px; border-radius: 9px; font-size: 12.5px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.cwb-strategy-btn:hover { background: #e2f2e9; border-color: #16a34a; }
+.cwb-strategy-btn.ready { background: #16a34a; color: #fff; border-color: #16a34a; }
+.cwb-strategy-btn .cwb-badge { font-size: 8px; line-height: 1; }
+.cwb-ghost-btn { background: var(--card, #fff); color: var(--text, #1f2937); border: 1px solid var(--border, #e5e7eb); padding: 7px 13px; border-radius: 9px; font-size: 12.5px; cursor: pointer; }
+.cwb-ghost-btn:hover { border-color: #16a34a; color: #15803d; }
+
+/* ④ 生成成果：输入框下方 */
+.cwb-results { margin-top: 16px; }
+.cwb-results-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.cwb-results-title .cwb-sub { margin: 0; }
+.cwb-results-title .cwb-reco-note { margin: 4px 0 0; }
+.cwb-results-empty { border: 1px dashed var(--border, #e5e7eb); border-radius: 14px; padding: 34px 20px; text-align: center; color: var(--muted, #6b7280); font-size: 13px; line-height: 1.6; }
+
+/* 资产卡：文案内容 + 放大 / 下载 */
+.cwb-asset-img { cursor: zoom-in; }
+.cwb-asset-img video { width: 100%; height: 100%; object-fit: cover; background: #000; }
+.cwb-copy { margin-top: 8px; padding: 8px 10px; background: #f8fafc; border: 1px solid var(--border, #f1f5f9); border-radius: 9px; }
+.cwb-copy-h { font-size: 12.5px; color: var(--text, #1f2937); font-weight: 600; line-height: 1.4; }
+.cwb-copy-s { font-size: 12px; color: #475569; line-height: 1.5; margin-top: 3px; }
+.cwb-copy-c { font-size: 11.5px; color: #15803d; margin-top: 3px; font-weight: 600; }
+.cwb-asset-foot { display: flex; }
+.cwb-asset-foot button { flex: 1; border: none; border-top: 1px solid var(--border, #f1f5f9); background: #f8fafc; color: #374151; padding: 9px; font-size: 12.5px; cursor: pointer; }
+.cwb-asset-foot button:hover { background: #eef2f7; }
+.cwb-asset-zoom { border-right: 1px solid var(--border, #f1f5f9) !important; color: #15803d !important; font-weight: 600; }
+
+/* ③ 右侧滑出面板：产品分析 + 创意策略 */
+.cwb-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.32); z-index: 70; opacity: 0; pointer-events: none; transition: opacity .2s ease; }
+.cwb-backdrop.show { opacity: 1; pointer-events: auto; }
+.cwb-drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(420px, 92vw); background: var(--card, #fff); box-shadow: -16px 0 48px rgba(15,23,42,.16); z-index: 80; transform: translateX(100%); transition: transform .26s cubic-bezier(.4,0,.2,1); display: flex; flex-direction: column; }
+.cwb-drawer.open { transform: translateX(0); }
+.cwb-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border, #eef2f7); }
+.cwb-drawer-head b { font-size: 15px; color: var(--text, #1f2937); }
+.cwb-drawer-x { border: none; background: transparent; font-size: 22px; cursor: pointer; color: var(--muted, #6b7280); line-height: 1; }
+.cwb-drawer-body { padding: 16px 18px 28px; overflow: auto; flex: 1; }
+.cwb-drawer-empty { text-align: center; padding: 50px 24px; color: var(--muted, #6b7280); }
+.cwb-drawer-empty .cwb-empty-ic { margin: 0 auto 14px; }
+.cwb-drawer-empty p { font-size: 13px; line-height: 1.6; max-width: 280px; margin: 0 auto; }
+/* 简报（推广目标 / 目标受众 / 核心卖点）收进面板 */
+.cwb-brief-extra { margin-top: 14px; border-top: 1px solid var(--border, #f1f5f9); padding-top: 6px; }
+.cwb-brief-extra .cwb-brief-row { padding: 10px 0; border-top: 1px solid var(--border, #f1f5f9); }
+.cwb-brief-extra .cwb-brief-row:first-child { border-top: none; }
+
+/* ⑤ 单独放大查阅（灯箱） */
+.cwb-lightbox { position: fixed; inset: 0; background: rgba(15,23,42,.82); z-index: 95; display: grid; place-items: center; padding: 28px; }
+.cwb-lightbox-inner { position: relative; display: flex; gap: 22px; background: var(--card, #fff); border-radius: 16px; max-width: 1040px; width: 100%; max-height: 88vh; overflow: hidden; }
+.cwb-lightbox-x { position: absolute; top: 10px; right: 12px; z-index: 2; border: none; background: rgba(17,24,39,.55); color: #fff; width: 32px; height: 32px; border-radius: 8px; font-size: 20px; cursor: pointer; }
+.cwb-lightbox-media { flex: 1.4; min-width: 0; background: #0f172a; display: grid; place-items: center; }
+.cwb-lightbox-media img, .cwb-lightbox-media video { max-width: 100%; max-height: 88vh; object-fit: contain; }
+.cwb-lightbox-info { flex: 1; min-width: 280px; padding: 22px 22px 22px 4px; overflow: auto; }
+.cwb-lightbox-info > b { font-size: 16px; color: var(--text, #1f2937); display: block; margin-bottom: 10px; }
+.cwb-lightbox-info .cwb-asset-spec { margin-bottom: 14px; }
+.cwb-lightbox-info .cwb-copy { margin-bottom: 16px; }
+.cwb-lightbox-info .cwb-gen-btn { width: 100%; }
+
+@media (max-width: 980px) {
+  .cwb-drawer { width: min(440px, 100vw); }
+  .cwb-lightbox-inner { flex-direction: column; max-height: 92vh; overflow: auto; }
+  .cwb-lightbox-media { flex: none; }
+  .cwb-lightbox-info { min-width: 0; padding: 16px 20px 22px; }
+}

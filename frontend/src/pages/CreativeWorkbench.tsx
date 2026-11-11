@@ -44,6 +44,10 @@ function statusClass(s: string) {
   return 'off'
 }
 function isUrl(s: string) { return /^https?:\/\//i.test(s.trim()) }
+function isVideo(a: any) {
+  const u = a?.url || a?.file || ''
+  return a?.type === 'video' || /\.(mp4|webm|mov|m4v)$/i.test(u)
+}
 function brandOf(platform: string, placement?: string) {
   if (placement) return placement
   const p = (platform || '').toLowerCase()
@@ -73,11 +77,18 @@ function specOf(img: any): { dim: string; ratio: string; fmt: string } {
   if (img?.size) return { dim: `${img.size.replace('x', ' × ')} px`, ratio, fmt: 'JPG / PNG · ≤ 30 MB' }
   return { dim: '自适应', ratio, fmt: 'JPG / PNG · ≤ 30 MB' }
 }
+function copyOf(a: any): { headline: string; sub: string; cta: string } | null {
+  const c = a?.copy || a?.meta?.copy
+  if (!c) return null
+  const has = c.headline || c.sub || c.cta
+  return has ? c : null
+}
 
 /**
- * 创意工作台 · V4.53（按 Figma 设计稿重建：双栏布局 + 三步流程 + 项目简报）
- * ① 输入产品链接 → ② 解析产品 + 规划创意（3 条路线）→ ③ 批量生成素材
- * 右侧固定「项目简报」面板；核心分析 / 路线 / 生成均由已配置大模型驱动。
+ * 创意工作台 · V4.54（按用户 5 项优化重构）
+ * ① 顶部仅保留菜单标题；② 输入模块常驻展示链接 / 产品信息；
+ * ③ 产品分析 → 创意策略 收进右侧滑出面板，按需查阅；④ 生成成果（图片 / 视频 + 尺寸规格 + 文案）展示在输入框下方；
+ * ⑤ 素材可批量下载，也可单独放大查阅（灯箱）。
  */
 export default function CreativeWorkbench() {
   const [platforms, setPlatforms] = useState<string[]>([])
@@ -106,11 +117,24 @@ export default function CreativeWorkbench() {
   const [histOpen, setHistOpen] = useState(false)
   const [history, setHistory] = useState<any[]>([])
 
+  // V4.54 新增：右侧滑出面板 + 单独放大查阅（灯箱）
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [lightbox, setLightbox] = useState<any>(null)
+
   useEffect(() => {
     api.mediaPlatforms().then((d: any) => {
       const names = (d?.platforms || []).map((p: any) => p.platform).filter(Boolean)
       if (names.length) { setPlatforms(names); setSelected(names.slice(0, 1)) }
     }).catch(() => {})
+  }, [])
+
+  // 滑出面板 / 灯箱 的 ESC 关闭
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') { setDrawerOpen(false); setLightbox(null) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [])
 
   function showToast(m: string) {
@@ -127,7 +151,8 @@ export default function CreativeWorkbench() {
     setError(''); const val = input.trim()
     if (!val) { setError('请输入落地页 / 应用链接或产品信息'); return }
     if (!selected.length) { setError('请至少选择一个媒体平台'); return }
-    setRunning(true); setView('analyzing'); setProgressPct(8); setProgressText('正在解析产品页面…')
+    setRunning(true); setDrawerOpen(true)        // 分析进度在滑出面板中展示
+    setView('analyzing'); setProgressPct(8); setProgressText('正在解析产品页面…')
     try {
       const cwRes: any = await api.cwAnalyze({ url: isUrl(val) ? val : '', text: isUrl(val) ? '' : val, platforms: selected })
       setCw(cwRes); setPlanId(cwRes?.id ?? null)
@@ -227,8 +252,13 @@ export default function CreativeWorkbench() {
 
   function download(file: string) { window.open(api.mediaFileDownloadUrl(file), '_blank') }
   function selectedFiles() { return assets.filter(a => checked[a.file]).map(a => a.file) }
+  const selectedCount = selectedFiles().length
   function downloadSelected() {
     const f = selectedFiles(); if (f.length) window.open(api.mediaZipUrl(f, '创意工作台素材'), '_blank')
+  }
+  function toggleSelectAll() {
+    if (selectedCount > 0) setChecked({})
+    else setChecked(Object.fromEntries(assets.map(a => [a.file, true])))
   }
   function resetAll() {
     setView('input'); setCw(null); setLanding(null); setRoutes([]); setPlanId(null); setAssets([]); setJobs([])
@@ -245,42 +275,30 @@ export default function CreativeWorkbench() {
     setSelected((item.platforms || []).slice())
     setRoutes((item.routes || []).map((r: any) => ({ ...r, selected: r.selected !== false })))
     setPlanId(item.id)
-    setHistOpen(false); setView('plan')
+    setHistOpen(false); setDrawerOpen(true); setView('plan')
   }
 
   const activeStep = view === 'input' || view === 'analyzing' ? 1 : view === 'plan' ? 2 : 3
   const briefBoxes = cw?.boxes || {}
   const brief = cw?.brief || {}
-  const aiNoteTags = routes.filter(r => r.selected).flatMap(r => r.tags || []).slice(0, 2)
 
   return (
     <div className="cwb">
+      {/* ① 顶部仅保留菜单标题，其他文案已删除 */}
       <div className="cwb-top">
-        <div className="cwb-title">
-          <h2>创意工作台</h2>
-          <span className="cwb-live"><i className="dot" /> 自动保存</span>
-        </div>
-        <div className="cwb-top-actions">
-          <button className="cwb-icon" title="搜索">⌕</button>
-          <button className="cwb-new" onClick={resetAll}>+ 新建项目</button>
-          <button className="cwb-hist-btn" onClick={openHistory}>历史</button>
-        </div>
+        <h2 className="cwb-title-only">创意工作台</h2>
       </div>
 
       <div className="cwb-body">
         <div className="cwb-main">
-          <div className="cwb-copilot">
-            <span className="cwb-dash" /> AI CREATIVE COPILOT
-            <span className="cwb-helper">输入产品链接，AI 将完成策略分析、创意规划与多平台素材生成。</span>
-          </div>
-
+          {/* ② 输入模块常驻：展示用户链接 / 产品信息 */}
           <div className="cwb-input-card">
             <div className="cwb-url">
               <span className="cwb-link-ic">🔗</span>
               <input value={input} onChange={e => setInput(e.target.value)} placeholder="https://soundora.com/products/air-pro"
                 onKeyDown={e => { if (e.key === 'Enter' && !running) analyze() }} />
               <button className="cwb-start" onClick={analyze} disabled={running}>
-                {running ? '分析中…' : '开始分析 →'}
+                {running ? '分析中…' : (cw ? '重新分析 →' : '开始分析 →')}
               </button>
             </div>
             <div className="cwb-platforms">
@@ -297,27 +315,119 @@ export default function CreativeWorkbench() {
                 </>
               )}
             </div>
+            <div className="cwb-input-actions">
+              <button className={`cwb-strategy-btn ${cw ? 'ready' : ''}`} onClick={() => setDrawerOpen(true)}>
+                分析 &amp; 创意策略 {cw && <span className="cwb-badge">●</span>}
+              </button>
+              <button className="cwb-ghost-btn" onClick={openHistory}>历史</button>
+              <button className="cwb-ghost-btn" onClick={resetAll}>新建项目</button>
+            </div>
           </div>
 
-          <ol className="cwb-steps">
-            {STEPS.map((s, i) => (
-              <li key={s.n} className={`${activeStep >= s.n ? 'on' : ''} ${activeStep === s.n ? 'cur' : ''}`}>
-                <span className="n">0{s.n}</span>
-                <div className="st-txt"><b>{s.label}</b><small>{s.sub}</small></div>
-                {i < STEPS.length - 1 && <span className="chev">›</span>}
-              </li>
-            ))}
-          </ol>
-
-          {/* 内容区：按状态切换 */}
-          {view === 'input' && (
-            <div className="cwb-empty">
-              <div className="cwb-empty-ic"><span className="spark" /></div>
-              <h3>从一个链接开始</h3>
-              <p>我们会自动识别产品定位与受众，规划适合每个媒体的创意方向。</p>
+          {/* ④ 生成成果：展示在输入框下方（图片 / 视频 + 尺寸规格 + 文案内容） */}
+          <section className="cwb-results">
+            <div className="cwb-results-head">
+              <div className="cwb-results-title">
+                {view === 'result' && <h3 className="cwb-sub ok">首批素材已完成</h3>}
+                {view === 'generating' && <h3 className="cwb-sub">正在生成素材…</h3>}
+                {assets.length > 0 && (
+                  <p className="cwb-reco-note">
+                    已生成 {assets.length} 份素材{view === 'result' ? '，通过平台合规预检' : ''}
+                  </p>
+                )}
+              </div>
+              {assets.length > 0 && (
+                <div className="cwb-result-actions">
+                  <button className="cwb-link-btn" onClick={toggleSelectAll}>
+                    {selectedCount > 0 ? '取消全选' : '全选'}
+                  </button>
+                  <button className="cwb-gen-btn sm" onClick={downloadSelected} disabled={!selectedCount}>
+                    下载已选（{selectedCount}）
+                  </button>
+                </div>
+              )}
             </div>
-          )}
 
+            {view === 'generating' && (
+              <div className="cwb-bar"><div className="cwb-bar-fill" style={{ width: `${progressPct}%` }} /></div>
+            )}
+
+            <div className="cwb-grid">
+              {assets.map((a, i) => {
+                const sp = specOf(a); const rt = a.__route; const cp = copyOf(a); const vid = isVideo(a)
+                return (
+                  <div className="cwb-asset" key={a.file || i}>
+                    <div className="cwb-asset-badge">{sp.ratio}</div>
+                    <div className="cwb-asset-img" onClick={() => setLightbox(a)} title="点击放大">
+                      {vid
+                        ? <video src={api.fileUrl(a.url || a.file)} controls preload="metadata" />
+                        : <img src={api.fileUrl(a.url || a.file)} alt="" loading="lazy" />}
+                    </div>
+                    <div className="cwb-asset-body">
+                      <b>{rt?.name || a.__platform || '创意素材'}</b>
+                      <p>{(rt?.tags || []).join('·') || '推广素材'}</p>
+                      <div className="cwb-asset-meta">
+                        <span>{brandOf(a.__platform, a.placement)}</span>
+                        <span className="cwb-type">{vid ? '视频' : '图片'}</span>
+                      </div>
+                      <div className="cwb-asset-spec">
+                        <span>推荐尺寸 {sp.dim}</span><span>画面比例 {sp.ratio}</span><span>{sp.fmt}</span>
+                      </div>
+                      {cp && (
+                        <div className="cwb-copy">
+                          {cp.headline && <div className="cwb-copy-h">{cp.headline}</div>}
+                          {cp.sub && <div className="cwb-copy-s">{cp.sub}</div>}
+                          {cp.cta && <div className="cwb-copy-c">CTA：{cp.cta}</div>}
+                        </div>
+                      )}
+                    </div>
+                    <label className="cwb-asset-check">
+                      <input type="checkbox" checked={!!checked[a.file]} onChange={e => setChecked(c => ({ ...c, [a.file]: e.target.checked }))} /> 选择
+                    </label>
+                    <div className="cwb-asset-foot">
+                      <button className="cwb-asset-zoom" onClick={() => setLightbox(a)}>放大</button>
+                      <button className="cwb-asset-dl" onClick={() => download(a.file)}>下载</button>
+                    </div>
+                  </div>
+                )
+              })}
+              {assets.length === 0 && (
+                <div className="cwb-results-empty">
+                  {view === 'analyzing' && '正在分析产品，请稍候…'}
+                  {view === 'generating' && '正在生成素材，请稍候…'}
+                  {!['analyzing', 'generating'].includes(view) &&
+                    '输入产品链接并选择媒体平台，点击「开始分析」后，生成的图片 / 视频素材将展示在这里。'}
+                </div>
+              )}
+            </div>
+
+            {jobs.filter(j => j.status === 'failed').length > 0 && (
+              <div className="err" style={{ marginTop: 10 }}>
+                {jobs.filter(j => j.status === 'failed').map(j => `${j.platform}：${j.error}`).join('；')}
+              </div>
+            )}
+
+            {view === 'result' && assets.length > 0 && (
+              <div className="cwb-confirm">
+                <button className="cwb-link-btn" onClick={resetAll}>新的创作</button>
+                <button className="cwb-gen-btn sm" onClick={downloadSelected}>打包下载全部</button>
+              </div>
+            )}
+          </section>
+
+          {error && <div className="err" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+      </div>
+
+      {/* ③ 右侧滑出面板：产品分析 → 创意策略（按需查阅） */}
+      <div className={`cwb-backdrop ${drawerOpen ? 'show' : ''}`} onClick={() => setDrawerOpen(false)} />
+      <aside className={`cwb-drawer ${drawerOpen ? 'open' : ''}`}>
+        <div className="cwb-drawer-head">
+          <b>分析 &amp; 创意策略</b>
+          <button className="cwb-drawer-x" onClick={() => setDrawerOpen(false)}>×</button>
+        </div>
+        <div className="cwb-drawer-body">
+          {/* 分析中进度 */}
           {view === 'analyzing' && (
             <div className="cwb-progress-card">
               <div className="cwb-ai-ic"><span className="spark" /></div>
@@ -328,7 +438,8 @@ export default function CreativeWorkbench() {
             </div>
           )}
 
-          {view === 'plan' && cw && (
+          {/* 产品分析 + 创意策略 */}
+          {cw && view !== 'analyzing' && (
             <>
               <section className="cwb-section">
                 <h3 className="cwb-sub">产品分析完成</h3>
@@ -336,8 +447,23 @@ export default function CreativeWorkbench() {
                 <div className="cwb-boxes">
                   {[['行业', briefBoxes.industry], ['核心人群', briefBoxes.coreAudience],
                     ['购买动机', briefBoxes.purchaseMotivation], ['价格带', briefBoxes.priceBand]].map(([k, v]) => (
-                    <div className="cwb-box" key={k}><span>{k}</span><b>{v || '—'}</b></div>
+                    <div className="cwb-box" key={k as string}><span>{k as string}</span><b>{v || '—'}</b></div>
                   ))}
+                </div>
+                <div className="cwb-brief-extra">
+                  <div className="cwb-brief-row"><div className="cwb-brief-label">推广目标</div><div className="cwb-brief-val">{brief.promotionGoal || '—'}</div></div>
+                  <div className="cwb-brief-row"><div className="cwb-brief-label">目标受众</div>
+                    <div className="cwb-brief-chips">
+                      {(brief.targetAudience && brief.targetAudience.length) ? brief.targetAudience.map((t: string, i: number) => (
+                        <span key={i} className="cwb-bchip">{t}</span>
+                      )) : <span className="muted">—</span>}
+                    </div></div>
+                  <div className="cwb-brief-row"><div className="cwb-brief-label">核心卖点</div>
+                    <ol className="cwb-sell">
+                      {(brief.sellingPoints && brief.sellingPoints.length) ? brief.sellingPoints.map((s: string, i: number) => (
+                        <li key={i}><span>{String(i + 1).padStart(2, '0')}</span> {s}</li>
+                      )) : <li className="muted">—</li>}
+                    </ol></div>
                 </div>
               </section>
 
@@ -372,121 +498,47 @@ export default function CreativeWorkbench() {
             </>
           )}
 
-          {(view === 'generating' || view === 'result') && (
-            <section className="cwb-section">
-              {view === 'result' && (
-                <div className="cwb-result-head">
-                  <div><h3 className="cwb-sub ok">首批素材已完成</h3>
-                    <p className="cwb-reco-note">生成 {assets.length} 份素材，通过平台合规预检</p></div>
-                  <div className="cwb-result-actions">
-                    <button className="cwb-link-btn" onClick={() => setChecked(Object.fromEntries(assets.map(a => [a.file, false])))}>
-                      {assets.every(a => !checked[a.file]) ? '全选' : '取消全选'}
-                    </button>
-                    <button className="cwb-gen-btn sm" onClick={downloadSelected} disabled={!selectedFiles().length}>
-                      下载已选（{selectedFiles().length}）
-                    </button>
-                  </div>
-                </div>
-              )}
-              {view === 'generating' && <div className="cwb-bar"><div className="cwb-bar-fill" style={{ width: `${progressPct}%` }} /></div>}
-
-              <div className="cwb-grid">
-                {assets.map((a, i) => {
-                  const sp = specOf(a); const rt = a.__route
-                  return (
-                    <div className="cwb-asset" key={i}>
-                      <div className="cwb-asset-badge">{sp.ratio}</div>
-                      <div className="cwb-asset-img"><img src={api.fileUrl(a.url || a.file)} alt="" loading="lazy" /></div>
-                      <div className="cwb-asset-body">
-                        <b>{rt?.name || a.__platform || '创意素材'}</b>
-                        <p>{(rt?.tags || []).join('·') || '推广素材'}</p>
-                        <div className="cwb-asset-meta">
-                          <span>{brandOf(a.__platform, a.placement)}</span>
-                          <span className="cwb-type">图片</span>
-                        </div>
-                        <div className="cwb-asset-spec">
-                          <span>推荐尺寸 {sp.dim}</span><span>画面比例 {sp.ratio}</span><span>{sp.fmt}</span>
-                        </div>
-                      </div>
-                      <label className="cwb-asset-check">
-                        <input type="checkbox" checked={!!checked[a.file]} onChange={e => setChecked(c => ({ ...c, [a.file]: e.target.checked }))} /> 选择
-                      </label>
-                      <button className="cwb-asset-dl" onClick={() => download(a.file)}>下载</button>
-                    </div>
-                  )
-                })}
-                {view === 'result' && assets.length === 0 && <div className="muted">本次未生成素材（可返回调整媒体后重试）。</div>}
-              </div>
-
-              {jobs.filter(j => j.status === 'failed').length > 0 && (
-                <div className="err" style={{ marginTop: 10 }}>
-                  {jobs.filter(j => j.status === 'failed').map(j => `${j.platform}：${j.error}`).join('；')}
-                </div>
-              )}
-
-              {view === 'result' && (
-                <div className="cwb-confirm">
-                  <button className="cwb-link-btn" onClick={resetAll}>新的创作</button>
-                  {assets.length > 0 && <button className="cwb-gen-btn sm" onClick={downloadSelected}>打包下载全部</button>}
-                </div>
-              )}
-            </section>
+          {/* 未分析占位 */}
+          {!cw && view !== 'analyzing' && (
+            <div className="cwb-drawer-empty">
+              <div className="cwb-empty-ic"><span className="spark" /></div>
+              <p>尚未开始分析。在上方输入产品链接并点击「开始分析」后，这里将展示产品分析与创意路线。</p>
+            </div>
           )}
-
-          {error && <div className="err" style={{ marginTop: 12 }}>{error}</div>}
         </div>
+      </aside>
 
-        {/* 右侧：项目简报 */}
-        <aside className="cwb-brief">
-          <div className="cwb-brief-head">
-            <b>项目简报</b><span className="cwb-dots">⋯</span><span className="cwb-chev">›</span>
-          </div>
-          <div className="cwb-brief-card">
-            <div className="cwb-thumb">{cw?.title ? cw.title.slice(0, 1) : '🎧'}</div>
-            <div className="cwb-brief-card-txt">
-              <span className="cwb-cur">当前项目</span>
-              <b>{cw?.title || '未命名项目'}</b>
-              <small>{briefBoxes.industry || (cw ? '待分析' : '等待分析')}</small>
+      {/* ⑤ 单独放大查阅（灯箱） */}
+      {lightbox && (
+        <div className="cwb-lightbox" onClick={() => setLightbox(null)}>
+          <div className="cwb-lightbox-inner" onClick={e => e.stopPropagation()}>
+            <button className="cwb-lightbox-x" onClick={() => setLightbox(null)}>×</button>
+            <div className="cwb-lightbox-media">
+              {isVideo(lightbox)
+                ? <video src={api.fileUrl(lightbox.url || lightbox.file)} controls autoPlay />
+                : <img src={api.fileUrl(lightbox.url || lightbox.file)} alt="" />}
+            </div>
+            <div className="cwb-lightbox-info">
+              <b>{lightbox.__route?.name || lightbox.__platform || '创意素材'}</b>
+              <div className="cwb-asset-spec">
+                {(() => { const sp = specOf(lightbox); return (<>
+                  <span>推荐尺寸 {sp.dim}</span><span>画面比例 {sp.ratio}</span><span>{sp.fmt}</span>
+                  <span>媒体 {brandOf(lightbox.__platform, lightbox.placement)}</span>
+                  <span>类型 {isVideo(lightbox) ? '视频' : '图片'}</span>
+                </>) })()}
+              </div>
+              {(() => { const cp = copyOf(lightbox); return cp ? (
+                <div className="cwb-copy">
+                  {cp.headline && <div className="cwb-copy-h">{cp.headline}</div>}
+                  {cp.sub && <div className="cwb-copy-s">{cp.sub}</div>}
+                  {cp.cta && <div className="cwb-copy-c">CTA：{cp.cta}</div>}
+                </div>
+              ) : null })()}
+              <button className="cwb-gen-btn sm" onClick={() => download(lightbox.file)}>下载该素材</button>
             </div>
           </div>
-
-          <div className="cwb-brief-row">
-            <div className="cwb-brief-label">推广目标 <span className="cwb-pen">✎</span></div>
-            <div className="cwb-brief-val">{brief.promotionGoal || '—'}</div>
-          </div>
-
-          <div className="cwb-brief-row">
-            <div className="cwb-brief-label">目标受众</div>
-            <div className="cwb-brief-chips">
-              {(brief.targetAudience && brief.targetAudience.length) ? brief.targetAudience.map((t: string, i: number) => (
-                <span key={i} className="cwb-bchip">{t}</span>
-              )) : <span className="muted">—</span>}
-            </div>
-          </div>
-
-          <div className="cwb-brief-row">
-            <div className="cwb-brief-label">核心卖点</div>
-            <ol className="cwb-sell">
-              {(brief.sellingPoints && brief.sellingPoints.length) ? brief.sellingPoints.map((s: string, i: number) => (
-                <li key={i}><span>{String(i + 1).padStart(2, '0')}</span> {s}</li>
-              )) : <li className="muted">—</li>}
-            </ol>
-          </div>
-
-          <div className="cwb-brief-row">
-            <div className="cwb-brief-label">生成计划</div>
-            <div className="cwb-brief-plan">
-              <div><span>图片素材</span><b>{planImageCount()} 张</b></div>
-              <div><span>短视频</span><b>0 条 <small>（下期待生成）</small></b></div>
-            </div>
-          </div>
-
-          <div className="cwb-brief-note">
-            <span className="cwb-note-ic" /> AI 将优先测试
-            {aiNoteTags.length ? ` ${aiNoteTags.join(' 和 ')}` : ' 已规划'} 两类创意方向。
-          </div>
-        </aside>
-      </div>
+        </div>
+      )}
 
       {/* 历史弹窗 */}
       {histOpen && (
