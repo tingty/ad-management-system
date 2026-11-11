@@ -1,7 +1,7 @@
-# 广告管理系统（在线营销素材管理平台 V4.46）
+# 广告管理系统（在线营销素材管理平台 V4.47）
 
 对应方案文档：《在线营销素材管理平台方案.docx》；开发节奏见《在线营销素材管理平台-版本开发规划.docx》。
-**当前版本：V4.46（2026-11-10）**。完整发版归档见 [CHANGELOG.md](CHANGELOG.md)；
+**当前版本：V4.47（2026-11-11）**。完整发版归档见 [CHANGELOG.md](CHANGELOG.md)；
 系统内「系统设置 → 新版通知」**按系统运行版本自动同步**，从最新版本开始只展示「版本号 + 总结式更新要点」，
 不再展示功能细节、前因后果、改造进度、影响范围与验证结果（AI 改造 **12 / 12** 已收官，进度见追踪表）。
 
@@ -33,6 +33,12 @@ D4–D6（媒体全覆盖计划 / PromptBundle / 多阶段持久任务 / 逐图�
 `backend/prompt_compiler.py` 编译 `PromptBundle`，按资产角色决定文字 / Logo / CTA 烘焙，软件真实 UI 不烘焙文字或 CTA 避免 no UI 误删产品界面；
 `backend/creation_plan_service.py` 提供 `CreationPlan` 持久编排（状态机 + 版本冻结 + 幂等 + 质检 + 可恢复），新增 5 条 `/api/creation-plans*` 路径（灰度开关 `ENABLE_AUTO_CREATION_PLAN` 默认开启，回滚不删列）；
 A09–A20 全部落成 `tests/test_d4_d5_d6.py`（32 项断言）。仍只完成工程路径与模拟回归，真实模型与真实投放验证未执行。
+
+**V4.47 系统日志 · 账号登录日志（2026-11-11）**：修复「日志」模块此前完全不记录登录的问题，补全全部账号的登录日志。「系统设置 → 日志」拆为「审计日志」与「登录日志」两个标签页：
+登录日志按需求记录**登陆账号名称、登陆 IP 地址、登陆时间**三项，成功与失败尝试均落库（失败记录尝试输入的账号）；
+IP 优先取 `X-Forwarded-For` 第一段（适配 Cloudflare Tunnel / Caddy 反向代理），回退 `X-Real-IP` 与直连地址；仅管理员可读。
+后端新增 `backend/models.py::LoginLog`（表 `login_logs`）、`routers.py` 的 `_log_login` / `_client_ip` 与 `GET /api/login-logs`，`POST /api/auth/login` 在成功与失败分支均写入登录日志；
+前端 `api.ts` 新增 `LoginLog` 接口与 `loginLogs` 方法，`pages/Logs.tsx` 增加标签页与「仅成功 / 仅失败」筛选。回归 `tests/test_login_logs.py`（5 项）。
 
 **V4.44 新版验收整改第 1 期（D0）**：依据《素材创作平台新版验收与自动化创作改造实施方案》v2.0，
 问题映射与分期见 [docs/ACCEPTANCE_TRACKER.md](docs/ACCEPTANCE_TRACKER.md)。本版修复 N01 / N02 / N04 / N05 / N06：
@@ -286,7 +292,7 @@ npm run dev          # http://localhost:5173
 6. **规格库**：7 平台尺寸/视频/字数红线/关键词逻辑；管理员与经理可在线编辑，改动即时影响生成与校验。
 7. **设置（管理员）**：按用途配置模型（analysis/copy/image/video）+ 连通性测试 + 用户与角色 + 审计日志。
 
-## 关键 API（V4.46 当前有效接口，共 56 条路径）
+## 关键 API（V4.47 当前有效接口，共 57 条路径）
 
 | 分组 | 接口 |
 |---|---|

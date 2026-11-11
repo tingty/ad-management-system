@@ -51,7 +51,7 @@ const GROUP_SYSTEM: NavGroup = {
     { key: 'accounts', label: '账号', icon: 'user',
       desc: '创建与管理账号、分配角色权限；创建或编辑在弹窗中完成' },
     { key: 'logs', label: '日志', icon: 'filetext',
-      desc: '审计日志：登录、配置变更、账号操作、提示词修改等关键动作可追溯' },
+      desc: '审计日志与登录日志：配置变更、账号操作、提示词修改，以及全部账号的登录（账号 / IP / 时间）可追溯' },
     { key: 'releasenotes', label: '新版通知', icon: 'bell',
       desc: '每次系统更新后自动同步：显示版本号与总结式更新要点，按版本从新到旧查阅；存在未读新版本时菜单项显示红点提示' },
   ],

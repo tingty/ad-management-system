@@ -1714,3 +1714,42 @@
 **说明 / 默认约定**
 - `SPEC_VERIFIED_ON` 与 `size_verified_on` 仍为空，按文档边界**不得宣称符合平台官方规范**；本版 `ASSET_ROLE_RENDER` 的「不烘焙文字 / CTA」仅保护软件真实 UI 不被 no UI 误删，不构成官方规格核验。
 - 四种状态分开记录：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。
+
+## V4.47 系统日志 · 账号登录日志（登录账号 / IP / 时间全量记录）
+
+**发布日期**：2026-11-11
+**变更类型**：新增 / 修复 / 优化
+**涉及模块**：系统设置（日志）、后端鉴权与接口、数据模型、前端页面、发版流程、工程文档
+**变更摘要**：排查并修复「系统设置 → 日志」模块的既有问题——此前登录动作**完全没有被记录**，审计日志只覆盖配置变更 / 账号操作 / 提示词修改，且不含任何账号登录或 IP 信息。本版补全全部账号的登录日志：成功与失败尝试均落库，每条记录**登陆账号名称、登陆 IP 地址、登陆时间**三项，并在前端「日志」页拆分为「审计日志 / 登录日志」两个标签页。
+
+**更新要点**
+- 修复既有缺陷：原 `POST /api/auth/login` 只返回 token，不写任何日志，导致「全部账号的登录」无从追溯；现成功与失败分支均写入登录日志。
+- 登录日志字段与需求一一对应：`username`=登陆账号名称（成功为系统内 username，失败为尝试输入的邮箱 / 用户名）、`ip`=登陆 IP 地址、`created_at`=登陆时间；另存 `user_agent` 与 `success` / `detail`（失败原因）。
+- 真实客户端 IP 取值顺序：`X-Forwarded-For` 第一段 → `X-Real-IP` → 直连 socket（适配 Cloudflare Tunnel + Caddy 反向代理场景，避免只记录网关内网地址）。
+- 「日志」页拆分为「审计日志」与「登录日志」标签页：登录日志表头为「登陆时间 / 登陆账号名称 / 登陆 IP 地址 / 状态 / 详情」，并提供「仅成功 / 仅失败」筛选；审计日志保留原样。
+- 登录日志仅管理员可读（`GET /api/login-logs` 复用 `require_roles("admin")`），与审计日志权限一致；失败登录同样记入，便于安全排查与暴力破解识别。
+
+**本次优化与更改的功能 / 模块**
+- 【新增】数据模型：`backend/models.py` 新增 `LoginLog`（`login_logs` 表：id / username / ip / user_agent / success / detail / created_at，username 与 ip 建索引）；`ensure_schema()` 通过 `Base.metadata.create_all` 幂等建表，旧库不重建、不丢数据。
+- 【新增】后端登录日志：`backend/routers.py` 新增 `_client_ip(request)`（取真实客户端 IP）与 `_log_login(db, username, request, success, detail)`（异常不阻断登录主流程）；`login()` 改为接收 `Request`，在成功与失败分支各调用一次 `_log_login`。
+- 【新增】后端接口：`backend/routers.py` 新增 `GET /api/login-logs`（admin 可读，支持 `limit` 与 `success` 过滤，上限 2000 防滥用）；同时对既有 `GET /api/audit-logs` 增加 `limit` 上限（1–2000）加固。
+- 【优化】前端类型与接口：`frontend/src/api.ts` 新增 `LoginLog` 接口与 `loginLogs(limit, success?)` 方法。
+- 【优化】前端页面：`frontend/src/pages/Logs.tsx` 重写为标签页式（审计 / 登录），登录日志表含账号 / IP / 状态（成功绿标、失败红标）/ 详情，支持关键词（账号 / IP）与「仅成功 / 仅失败」筛选；`frontend/src/App.tsx` 日志菜单描述同步更新。
+- 【新增】回归测试：`tests/test_login_logs.py`（5 项断言）覆盖成功登录含账号 / IP / 时间、失败登录记录、匿名访问 401、X-Forwarded-For 取真实 IP、停用账号尝试亦记录。
+
+**影响范围**
+- 前端：「系统设置 → 日志」新增「登录日志」标签页；旧审计日志功能不受影响。
+- 后端：新增 `LoginLog` 模型与 1 条 `/api` 路径（有效 `/api` 路径由 56 条增至 57 条）；`routers.py` 改动登录逻辑；`ensure_schema()` 自动建 `login_logs` 表，旧库不重建、不丢数据。
+- 数据：登录日志独立落库，不写入审计日志、不改写用户表；回滚时该表保留。
+- 权限与部署：沿用既有登录角色与鉴权；无需数据库迁移脚本（自描述建表），无需管理员轮换口令。
+
+**验证**
+- `python3 tests/run_all.py`：**133 项断言全部通过**（V4.46 既有 128 项 + 本版 5 项），0 失败 0 错误 0 跳过。
+- 后端 `compileall -q backend scripts tests` 通过；`import main` 通过，运行版本 `4.47.0`、有效 `/api` 路径 57 条。
+- 前端 `tsc --noEmit` 通过；`vite build` 45 模块 / 284.79 kB JS / 57.21 kB CSS。
+- `python3 scripts/prepare_release.py --check` 通过（系统版本 == CHANGELOG 最新版本且含「更新要点」）。
+- 所有回归在临时 SQLite 与 TestClient 上执行，强制清空 `DEFAULT_LLM_API_KEY`；未修改生产数据、未产生真实付费模型调用。
+
+**说明 / 默认约定**
+- 登录日志覆盖「账号 + IP + 时间」三项，满足本需求的追溯与合规要求；更细的会话级行为（登出、超时、操作轨迹）属后续增强。
+- 四种状态分开记录：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌。

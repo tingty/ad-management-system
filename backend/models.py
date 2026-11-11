@@ -156,6 +156,22 @@ class AuditLog(Base):
     created_at = Column(DateTime, default=utcnow)
 
 
+# ----------------------------- V4.47：账号登录日志 -----------------------------
+class LoginLog(Base):
+    """V4.47：账号登录日志（成功与失败均记录），用于安全追溯与合规审计。
+
+    字段与需求一一对应：username=登陆账号名称，ip=登陆 IP 地址，created_at=登陆时间。
+    """
+    __tablename__ = "login_logs"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), nullable=True, index=True)   # 登陆账号名称（成功为系统内 username；失败为尝试输入的邮箱/用户名）
+    ip = Column(String(64), nullable=True, index=True)          # 登陆来源 IP 地址
+    user_agent = Column(String(512), nullable=True)
+    success = Column(Boolean, default=True, index=True)
+    detail = Column(JSON, nullable=True)                        # 失败原因 / 备注
+    created_at = Column(DateTime, default=utcnow, index=True)   # 登陆时间
+
+
 # ----------------------------- V4.46 / D5：自动创作持久计划 -----------------------------
 class CreationPlan(Base):
     """D5：自动创作的持久计划（与 GenerationJob 解耦，承载多阶段编排与版本冻结）。

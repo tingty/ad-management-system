@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, 
 from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 from datetime import datetime
+from typing import Optional
 import os, time, re
 
 from database import get_db
-from models import (ModelConfig, User, AuditLog, PromptConfig, SystemState,
+from models import (ModelConfig, User, AuditLog, LoginLog, PromptConfig, SystemState,
                     CreationHistory, GenerationJob, CreativeAsset, utcnow)
 from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LoginRequest, UserOut, UserCreate, UserUpdate,
@@ -1006,11 +1007,40 @@ def _audit(db: Session, user, action: str, target: str = None, detail: dict = No
                     target=target, detail=detail))
     db.commit()
 
+
+def _client_ip(request: Request) -> Optional[str]:
+    """取真实客户端 IP：优先 X-Forwarded-For 第一段（Cloudflare Tunnel / Caddy 反向代理场景），
+    其次 X-Real-IP，最后回退到直连 socket 地址。"""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip() or None
+    xri = request.headers.get("x-real-ip")
+    if xri:
+        return xri.strip() or None
+    return request.client.host if request.client else None
+
+
+def _log_login(db: Session, username: Optional[str], request: Request,
+               success: bool = True, detail: dict = None):
+    """V4.47：记录一次登录尝试（成功与失败均记录）。异常不阻断登录主流程。"""
+    try:
+        db.add(LoginLog(username=username, ip=_client_ip(request),
+                        user_agent=request.headers.get("user-agent"),
+                        success=success, detail=detail))
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 @router.post("/auth/login")
-def login(req: LoginRequest, db: Session = Depends(get_db)):
+def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     u = db.query(User).filter((User.email == req.email) | (User.username == req.email)).first()
     if not u or not u.active or not verify_password(req.password, u.password_hash, u.salt):
+        _log_login(db, req.email, request, success=False,
+                   detail={"reason": "invalid_credentials" if (u and u.active) else "no_user_or_inactive",
+                           "attempt": req.email})
         raise HTTPException(401, "邮箱或密码错误")
+    _log_login(db, u.username, request, success=True)
     return create_token(u)
 
 @router.get("/auth/me")
@@ -1095,8 +1125,24 @@ def delete_user(uid: int, db: Session = Depends(get_db),
 @router.get("/audit-logs")
 def audit_logs(limit: int = 50, db: Session = Depends(get_db),
                _: User = Depends(require_roles("admin"))):
+    limit = min(max(int(limit), 1), 2000)
     rows = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(limit).all()
     return [{"id": r.id, "username": r.username, "action": r.action, "target": r.target,
+             "detail": r.detail, "created_at": r.created_at} for r in rows]
+
+
+@router.get("/login-logs")
+def login_logs(limit: int = 100, success: Optional[bool] = None,
+               db: Session = Depends(get_db),
+               _: User = Depends(require_roles("admin"))):
+    """V4.47：账号登录日志（admin 可见）。可选 success 过滤（true=成功 / false=失败）。"""
+    limit = min(max(int(limit), 1), 2000)
+    q = db.query(LoginLog)
+    if success is not None:
+        q = q.filter_by(success=success)
+    rows = q.order_by(LoginLog.id.desc()).limit(limit).all()
+    return [{"id": r.id, "username": r.username, "ip": r.ip,
+             "user_agent": r.user_agent, "success": bool(r.success),
              "detail": r.detail, "created_at": r.created_at} for r in rows]
 
 

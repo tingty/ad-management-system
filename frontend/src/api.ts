@@ -826,6 +826,16 @@ export interface User {
   active: boolean
 }
 
+export interface LoginLog {
+  id: number
+  username: string | null
+  ip: string | null
+  user_agent: string | null
+  success: boolean
+  detail: any | null
+  created_at: string
+}
+
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken()
   const res = await fetch(API_BASE + path, {
@@ -873,6 +883,8 @@ export const api = {
     req<User>(`/api/users/${id}`, { method: 'PUT', body: JSON.stringify(u) }),
   deactivateUser: (id: number) => req<any>(`/api/users/${id}`, { method: 'DELETE' }),
   auditLogs: (limit = 100) => req<any[]>(`/api/audit-logs?limit=${limit}`),
+  loginLogs: (limit = 100, success?: boolean) =>
+    req<LoginLog[]>(`/api/login-logs?limit=${limit}${success === undefined ? '' : `&success=${success}`}`),
   landingAnalysis: (payload: { url?: string; text?: string }) =>
     req<LandingAnalysis>('/api/landing-analysis', { method: 'POST', body: JSON.stringify(payload) }),
   // 素材创作：营销推广的媒体平台设置 —— 平台规格目录
