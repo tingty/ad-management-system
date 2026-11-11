@@ -6,8 +6,6 @@ import CreationTaskDock from './CreationTaskDock'
 import MaterialCreation from './pages/MaterialCreation'
 import MaterialPromptLibrary from './pages/MaterialPromptLibrary'
 import MaterialHistory from './pages/MaterialHistory'
-import CreativeWorkbench from './pages/CreativeWorkbench'
-import MediaSpecs from './pages/MediaSpecs'
 import Login from './pages/Login'
 import LLMSettings from './pages/LLMSettings'
 import Accounts from './pages/Accounts'
@@ -15,15 +13,15 @@ import Logs from './pages/Logs'
 import ReleaseNotes from './pages/ReleaseNotes'
 
 /* V4.37：移除「素材管理」（创作工作台 / 批量生成 / 素材库 / 规格库）
-   与系统设置中的「提示词管理」；保留创意相关模块，并升级为「创意工作台」统一入口。 */
-type Tab = 'workbench' | 'creation' | 'mediaspec' | 'matprompts' | 'history'
+   与系统设置中的「提示词管理」；保留「素材创作平台」与必要的系统设置。 */
+type Tab = 'creation' | 'matprompts' | 'history'
   | 'llm' | 'accounts' | 'logs' | 'releasenotes'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['workbench', 'creation', 'mediaspec', 'matprompts', 'history', 'llm', 'accounts', 'logs', 'releasenotes']
+const TABS: Tab[] = ['creation', 'matprompts', 'history', 'llm', 'accounts', 'logs', 'releasenotes']
 const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
@@ -31,20 +29,16 @@ const SB_KEY = 'admb_sidebar'
 type NavItem = { key: Tab; label: string; desc: string; icon: string }
 type NavGroup = { name: string; icon: string; items: NavItem[] }
 
-const GROUP_WORKBENCH: NavGroup = {
-  name: '创意工作台',
-  icon: 'compass',
+const GROUP_CREATION: NavGroup = {
+  name: '素材创作平台',
+  icon: 'wand',
   items: [
-    { key: 'workbench', label: '创意工作台', icon: 'compass',
-      desc: '面向落地页 / 官网 / 应用的创意素材与视频创作中枢：产品智能分析、媒体规格、提示词体系、全自动对话式创作与历史素材库的总览与设计说明。' },
-    { key: 'creation', label: '创意创作', icon: 'wand',
-      desc: '输入落地页链接或正文，调用已配置的大模型推理，输出 8 项关键分析并标注实际调用模型；分析完成后，直接在本模块内基于分析结论进行营销推广设置（选平台 → 文案 → 生成推广图片 / 视频）' },
-    { key: 'mediaspec', label: '媒体规格', icon: 'ruler',
-      desc: '主流大媒体（Facebook / Google Search / Unity / Adsterra 及应用广告位、激励视频）的广告素材规格与要求，作为创意创作的上架依据。' },
-    { key: 'matprompts', label: '创意提示词', icon: 'tags',
-      desc: '集中管理创意提示词：按功能 / 风格 / 场景 / 覆盖对象分类检索与编辑；内置广告文案与图片的优秀提示词总结库，可选择系统默认，保存即生效' },
-    { key: 'history', label: '创意素材库', icon: 'history',
-      desc: '归档已分析整理的网站、广告文案、推广图片与视频；可放大查阅、单张或打包再下载，复用分析结论继续创作，并支持局部修改优化后再下载' },
+    { key: 'creation', label: '素材创作', icon: 'sparkles',
+      desc: '输入落地页链接或正文，调用已配置的大模型推理，输出 8 项关键分析并标注实际调用模型；分析完成后，直接在本模块内基于分析结论进行营销推广设置（选平台 → 文案 → 生成推广图片）' },
+    { key: 'matprompts', label: '素材提示词', icon: 'tags',
+      desc: '集中管理「素材创作」全部提示词：按功能类型 / 使用类型分类检索与编辑；内置广告推广文案与推广图片的优秀提示词总结库，可按类型 / 风格 / 场景 / 覆盖对象四维筛选并选择系统默认，保存即生效' },
+    { key: 'history', label: '素材历史', icon: 'history',
+      desc: '归档已分析整理的网站、广告文案与推广图片；可放大查阅、单张或打包再下载，复用分析结论继续创作以避免重复生成，并支持批量删除历史信息' },
   ],
 }
 
@@ -85,8 +79,6 @@ const PATHS: Record<string, ReactNode> = {
   tags: <><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0l-7.2-7.2A2 2 0 0 1 3 11.8V5a2 2 0 0 1 2-2h6.8a2 2 0 0 1 1.4.6l7.4 7.4a2 2 0 0 1 0 2.8z" /><circle cx="7.5" cy="7.5" r="1.5" /></>,
   bell: <><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>,
   history: <><path d="M3.2 8A9 9 0 1 1 3 12" /><path d="M3 3v5h5" /><path d="M12 7v5l3.2 2" /></>,
-  compass: <><circle cx="12" cy="12" r="9" /><path d="M15.5 8.5 13 13l-2.5 2.5L11 11z" /></>,
-  ruler: <><path d="M3 17 17 3l4 4L7 21z" /><path d="M8 8l2 2M11 5l2 2M5 11l2 2" /></>,
 }
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -108,7 +100,7 @@ function tabFromHash(): Tab | null {
 function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   return [
-    ...(canEdit ? (['workbench', 'creation', 'mediaspec', 'matprompts', 'history'] as Tab[]) : []),
+    ...(canEdit ? (['creation', 'matprompts', 'history'] as Tab[]) : []),
     ...(user.role === 'admin' ? (['llm', 'accounts', 'logs'] as Tab[]) : []),
     // 「新版通知」对所有角色开放，方便用户随时查阅每次优化与变更的版本内容
     'releasenotes',
@@ -125,9 +117,9 @@ function readCollapsed(): boolean {
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [booting, setBooting] = useState(true)
-  const [tab, setTab] = useState<Tab>(() => tabFromHash() || 'workbench')
+  const [tab, setTab] = useState<Tab>(() => tabFromHash() || 'creation')
   const [collapsed, setCollapsed] = useState<boolean>(readCollapsed)
-  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ workbench: true, system: true })
+  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ creation: true, system: true })
   // 版本发布「新版通知」红点：记录最新版本号 + 已读事件触发重算
   const [releaseLatest, setReleaseLatest] = useState<string | null>(null)
   const [seenTick, setSeenTick] = useState(0)
@@ -217,15 +209,15 @@ export default function App() {
   const isEditor = !!user && ['admin', 'manager', 'editor'].includes(user.role)
   const isAdmin = user?.role === 'admin'
 
-  const visibleGroups: NavGroup[] = [GROUP_WORKBENCH, GROUP_SYSTEM]
+  const visibleGroups: NavGroup[] = [GROUP_CREATION, GROUP_SYSTEM]
     .map(g => ({
       ...g,
       items: g.items.filter(it =>
-        it.key === 'releasenotes' ? true : (g === GROUP_WORKBENCH ? isEditor : isAdmin)),
+        it.key === 'releasenotes' ? true : (g === GROUP_CREATION ? isEditor : isAdmin)),
     }))
     .filter(g => g.items.length > 0)
   const allItems: NavItem[] = visibleGroups.flatMap(g => g.items)
-  const cur: NavItem = allItems.find(i => i.key === tab) || allItems[0] || GROUP_WORKBENCH.items[0]
+  const cur: NavItem = allItems.find(i => i.key === tab) || allItems[0] || GROUP_CREATION.items[0]
   const curGroup = visibleGroups.find(g => g.items.some(i => i.key === tab))
 
   useEffect(() => {
@@ -282,7 +274,7 @@ export default function App() {
 
         <nav className="sb-nav">
           {visibleGroups.map((g, i) => {
-            const openKey = g === GROUP_WORKBENCH ? 'workbench' : 'system'
+            const openKey = g === GROUP_CREATION ? 'creation' : 'system'
             return (
               <Fragment key={openKey}>
                 {i > 0 && <div className="sb-sep" />}
@@ -324,7 +316,7 @@ export default function App() {
         <div className="main-inner">
           <header className="page-head">
             <div className="ph-left">
-              <div className="page-kicker">{curGroup?.name || '创意工作台'}</div>
+              <div className="page-kicker">{curGroup?.name || '素材创作平台'}</div>
               <h1 className="page-title">{cur.label}</h1>
               <p className="page-desc">{cur.desc}</p>
             </div>
@@ -346,8 +338,6 @@ export default function App() {
               <MaterialCreation />
             </div>
           )}
-          {tab === 'workbench' && isEditor && <CreativeWorkbench />}
-          {tab === 'mediaspec' && isEditor && <MediaSpecs />}
           {tab === 'matprompts' && isEditor && <MaterialPromptLibrary isAdmin={isAdmin} />}
           {tab === 'history' && isEditor && <MaterialHistory />}
           {tab === 'llm' && isAdmin && <LLMSettings />}
