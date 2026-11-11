@@ -304,3 +304,53 @@ class CreativePlanResult(BaseModel):
     history_id: Optional[int] = None
     model_info: ModelInfo = ModelInfo()
     source: str = "local"
+
+
+
+# ----------------------------- V4.53 创意工作台：设计对齐的产品分析 + 3 条创意路线 -----------------------------
+class CWAnalyzeRequest(BaseModel):
+    """创意工作台·产品分析请求：产品链接 / 文本 + 所选媒体平台 → 大模型产出产品定位与项目简报。"""
+    url: str = ""
+    text: str = ""
+    platforms: List[str] = []
+
+
+class CWAnalysisResult(BaseModel):
+    """产品分析结果：一句话定位 + 4 个分析盒 + 项目简报（推广目标 / 目标受众 / 核心卖点）。"""
+    model_config = {"protected_namespaces": ()}
+    id: Optional[int] = None
+    title: str = ""
+    summary: str = ""
+    boxes: dict = {}                 # {industry, coreAudience, purchaseMotivation, priceBand}
+    brief: dict = {}                 # {promotionGoal, targetAudience:[], sellingPoints:[]}
+    recommendedPlatforms: List[str] = []
+    model_info: ModelInfo = ModelInfo()
+    source: str = "local"
+
+
+class CWRoutesRequest(BaseModel):
+    """创意工作台·创意路线请求：产品分析 + 所选平台 + 项目简报 → 大模型规划 3 条创意概念路线。"""
+    plan_id: Optional[int] = None
+    analysis: dict = {}
+    platforms: List[str] = []
+    brief: dict = {}
+
+
+class CWRoute(BaseModel):
+    """单条创意路线（概念级，非逐平台）。"""
+    key: str = ""                    # A / B / C
+    name: str = ""
+    description: str = ""
+    tags: List[str] = []
+    angle: str = ""
+    selected: bool = True
+
+
+class CWRoutesResult(BaseModel):
+    """3 条创意路线结果。"""
+    model_config = {"protected_namespaces": ()}
+    id: Optional[int] = None
+    title: str = ""
+    routes: List[CWRoute] = []
+    model_info: ModelInfo = ModelInfo()
+    source: str = "local"

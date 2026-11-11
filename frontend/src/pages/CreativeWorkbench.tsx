@@ -2,13 +2,12 @@ import React, { useEffect, useState } from 'react'
 import { api } from '../api'
 
 type Route = {
-  platform: string
-  concept?: string
-  angle?: string
-  visual_style?: string
-  copy_direction?: string
-  image_prompt?: string
-  notes?: string
+  key: string
+  name: string
+  description: string
+  tags: string[]
+  angle: string
+  selected: boolean
 }
 type JobState = {
   platform: string
@@ -17,15 +16,13 @@ type JobState = {
   progress: number
   images: any[]
   error?: string
-  route?: Route
+  route: Route | null
 }
 
-const DEFAULT_PLATFORMS = ['Facebook', 'Google Search', 'Unity', 'Adsterra', '移动应用广告位', '激励视频']
 const STEPS = [
-  { key: 1, label: '输入' },
-  { key: 2, label: '产品分析' },
-  { key: 3, label: '创意策略' },
-  { key: 4, label: '生成成果' },
+  { n: 1, label: '解析产品', sub: '提取卖点与受众' },
+  { n: 2, label: '规划创意', sub: '匹配媒体与场景' },
+  { n: 3, label: '批量生成', sub: '图片与视频成片' },
 ]
 
 function statusLabel(s: string) {
@@ -36,8 +33,7 @@ function statusLabel(s: string) {
     case 'canceled': return '已取消'
     case 'submitting': return '提交中'
     case 'queued': return '排队中'
-    case 'running': return '生成中'
-    case 'generating': return '生成中'
+    case 'running': case 'generating': return '生成中'
     default: return s || '等待中'
   }
 }
@@ -47,451 +43,476 @@ function statusClass(s: string) {
   if (['running', 'submitting', 'queued', 'generating'].includes(s)) return 'warn'
   return 'off'
 }
+function isUrl(s: string) { return /^https?:\/\//i.test(s.trim()) }
+function brandOf(platform: string, placement?: string) {
+  if (placement) return placement
+  const p = (platform || '').toLowerCase()
+  if (p.includes('google')) return 'Google Display'
+  if (p.includes('meta') || p.includes('facebook')) return 'Meta Feed'
+  if (p.includes('unity')) return 'Unity Ads'
+  if (p.includes('adsterra')) return 'Adsterra'
+  return platform || '未知媒体'
+}
+function aspectOf(img: any): string {
+  const w = Number(img?.w) || (img?.size ? parseInt(String(img.size).split('x')[0]) : 0)
+  const h = Number(img?.h) || (img?.size ? parseInt(String(img.size).split('x')[1]) : 0)
+  if (!w || !h) return '1:1'
+  const r = w / h
+  if (Math.abs(r - 0.8) < 0.06) return '4:5'
+  if (Math.abs(r - 0.5625) < 0.06) return '9:16'
+  if (Math.abs(r - 1) < 0.06) return '1:1'
+  if (Math.abs(r - 1.777) < 0.08) return '16:9'
+  const g = gcd(Math.round(w), Math.round(h)); return `${w / g}:${h / g}`
+}
+function gcd(a: number, b: number): number { return b ? gcd(b, a % b) : a }
+function specOf(img: any): { dim: string; ratio: string; fmt: string } {
+  const w = Number(img?.w) || (img?.size ? parseInt(String(img.size).split('x')[0]) : 0)
+  const h = Number(img?.h) || (img?.size ? parseInt(String(img.size).split('x')[1]) : 0)
+  const ratio = aspectOf(img)
+  if (w && h) return { dim: `${w} × ${h} px`, ratio, fmt: 'JPG / PNG · ≤ 30 MB' }
+  if (img?.size) return { dim: `${img.size.replace('x', ' × ')} px`, ratio, fmt: 'JPG / PNG · ≤ 30 MB' }
+  return { dim: '自适应', ratio, fmt: 'JPG / PNG · ≤ 30 MB' }
+}
 
 /**
- * 创意工作台 · V4.52 重构（四步引导流程 + 历史库）
- * ① 输入（产品链接/信息 + 媒体平台 + 图片/视频）
- * ② 产品分析（大模型 8 字段框架）
- * ③ 创意策略（大模型为每平台规划创意路线）
- * ④ 生成成果（自动出图 + 素材画廊）
- * 分析/创作过程在右侧滑出面板展示；「历史」子标签查看过往创作。
+ * 创意工作台 · V4.53（按 Figma 设计稿重建：双栏布局 + 三步流程 + 项目简报）
+ * ① 输入产品链接 → ② 解析产品 + 规划创意（3 条路线）→ ③ 批量生成素材
+ * 右侧固定「项目简报」面板；核心分析 / 路线 / 生成均由已配置大模型驱动。
  */
 export default function CreativeWorkbench() {
-  const [tab, setTab] = useState<'create' | 'history'>('create')
-  const [step, setStep] = useState<number>(1)
-  const [platforms, setPlatforms] = useState<string[]>(DEFAULT_PLATFORMS)
-  const [selected, setSelected] = useState<string[]>(['Facebook'])
-  const [genImage, setGenImage] = useState(true)
-  const [genVideo, setGenVideo] = useState(false)
+  const [platforms, setPlatforms] = useState<string[]>([])
+  const [selected, setSelected] = useState<string[]>([])
+  const [showMore, setShowMore] = useState(false)
 
   const [input, setInput] = useState('')
   const [running, setRunning] = useState(false)
-  const [planning, setPlanning] = useState(false)
   const [error, setError] = useState('')
 
-  const [analysis, setAnalysis] = useState<any>(null)
+  const [view, setView] = useState<'input' | 'analyzing' | 'plan' | 'generating' | 'result'>('input')
+  const [progressPct, setProgressPct] = useState(0)
+  const [progressText, setProgressText] = useState('')
+
+  const [cw, setCw] = useState<any>(null)        // 设计对齐的产品分析（4 盒 + 简报）
+  const [landing, setLanding] = useState<any>(null) // 生成后端所需的 LandingAnalysis
   const [planId, setPlanId] = useState<number | null>(null)
   const [routes, setRoutes] = useState<Route[]>([])
 
-  const [progress, setProgress] = useState('')
   const [assets, setAssets] = useState<any[]>([])
-  const [historyId, setHistoryId] = useState<number | null>(null)
   const [jobs, setJobs] = useState<JobState[]>([])
+  const [checked, setChecked] = useState<Record<string, boolean>>({})
+  const [historyId, setHistoryId] = useState<number | null>(null)
 
-  const [drawerOpen, setDrawerOpen] = useState(true)
   const [toast, setToast] = useState<string | null>(null)
-
-  // 历史库
+  const [histOpen, setHistOpen] = useState(false)
   const [history, setHistory] = useState<any[]>([])
-  const [historyLoading, setHistoryLoading] = useState(false)
 
   useEffect(() => {
     api.mediaPlatforms().then((d: any) => {
       const names = (d?.platforms || []).map((p: any) => p.platform).filter(Boolean)
-      if (names.length) {
-        setPlatforms(names)
-        setSelected(names.slice(0, 1))
-      }
+      if (names.length) { setPlatforms(names); setSelected(names.slice(0, 1)) }
     }).catch(() => {})
   }, [])
 
-  useEffect(() => {
-    if (tab === 'history') loadHistory()
-  }, [tab])
-
+  function showToast(m: string) {
+    setToast(m); window.setTimeout(() => setToast(t => (t === m ? null : t)), 3500)
+  }
+  function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
   function togglePlatform(p: string) {
     setSelected(s => s.includes(p) ? s.filter(x => x !== p) : [...s, p])
   }
-  function showToast(msg: string) {
-    setToast(msg)
-    window.setTimeout(() => setToast(t => (t === msg ? null : t)), 3500)
-  }
-  function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
-
-  async function loadHistory() {
-    setHistoryLoading(true)
-    try {
-      const d: any = await api.creativePlans({ limit: 50, offset: 0 })
-      setHistory(d?.items || [])
-    } catch { setHistory([]) }
-    finally { setHistoryLoading(false) }
-  }
+  const visiblePlatforms = platforms.slice(0, 4)
+  const morePlatforms = platforms.slice(4)
 
   async function analyze() {
-    setError('')
-    const url = input.trim()
-    if (!url) { setError('请输入落地页 / 应用链接或产品信息'); return }
+    setError(''); const val = input.trim()
+    if (!val) { setError('请输入落地页 / 应用链接或产品信息'); return }
     if (!selected.length) { setError('请至少选择一个媒体平台'); return }
-    setRunning(true)
+    setRunning(true); setView('analyzing'); setProgressPct(8); setProgressText('正在解析产品页面…')
     try {
-      const res: any = await api.landingAnalysis({ url: url.startsWith('http') ? url : undefined,
-        text: url.startsWith('http') ? undefined : input })
-      setAnalysis(res)
-      setStep(2)
-      setDrawerOpen(true)
+      const cwRes: any = await api.cwAnalyze({ url: isUrl(val) ? val : '', text: isUrl(val) ? '' : val, platforms: selected })
+      setCw(cwRes); setPlanId(cwRes?.id ?? null)
+      setProgressPct(46); setProgressText('47% · 正在提取核心利益点')
+      const [landRes, routeRes] = await Promise.all([
+        api.landingAnalysis({ url: isUrl(val) ? val : undefined, text: isUrl(val) ? undefined : val }).catch(() => null),
+        api.cwRoutes({ plan_id: cwRes?.id, analysis: cwRes?.analysis || {}, platforms: selected, brief: cwRes?.brief || {} }).catch(() => ({ routes: cwRes?.routes || [] })),
+      ])
+      setLanding(landRes); setRoutes((routeRes?.routes || cwRes?.routes || []).map((r: any) => ({ ...r, selected: r.selected !== false })))
+      setProgressPct(100); setProgressText('分析完成')
+      setView('plan')
     } catch (e: any) {
-      setError(e?.message || '分析失败')
-    } finally {
-      setRunning(false)
-    }
+      setError(e?.message || '分析失败'); setView('input')
+    } finally { setRunning(false) }
   }
 
-  async function planStrategy() {
-    if (!analysis) return
-    setError(''); setPlanning(true)
-    try {
-      const r: any = await api.creativePlan({
-        analysis, platforms: selected, gen_image: genImage, gen_video: genVideo,
-      })
-      setPlanId(r?.id ?? null)
-      setRoutes(r?.routes || selected.map(p => ({ platform: p })))
-      setStep(3)
-      if (r?.id) await api.updateCreativePlan(r.id, { status: 'draft' }).catch(() => {})
-    } catch (e: any) {
-      setError(e?.message || '创意策略规划失败')
-    } finally {
-      setPlanning(false)
-    }
-  }
-
-  function updateRoute(i: number, field: keyof Route, val: string) {
+  function updateRoute(i: number, field: keyof Route, val: any) {
     setRoutes(rs => rs.map((r, j) => j === i ? { ...r, [field]: val } : r))
+  }
+  function planImageCount() {
+    if (assets.length) return assets.length
+    return selected.length * 2
   }
 
   async function generate() {
     if (!routes.length) return
-    setError(''); setStep(4); setAssets([]); setJobs([]); setProgress('正在创建历史会话…')
+    setError(''); setView('generating'); setAssets([]); setJobs([]); setChecked({}); setProgressText('正在创建素材任务…')
     let hid: number | null = null
     try {
-      const h: any = await api.createCreationHistory({ analysis, platform: routes[0]?.platform, lang: 'en' }).catch(() => null)
+      const h: any = await api.createCreationHistory({ analysis: landing || cw?.analysis || {}, platform: selected[0] || '', lang: 'en' }).catch(() => null)
       hid = h?.id ?? null; setHistoryId(hid)
     } catch { /* 历史可选 */ }
     if (planId) await api.updateCreativePlan(planId, { status: 'generating', history_id: hid ?? undefined }).catch(() => {})
 
-    const targets = routes.filter(r => selected.includes(r.platform))
+    const activeRoutes = routes.filter(r => r.selected)
+    const targets = selected
     const collected: any[] = []
-    if (genImage && targets.length) {
-      try {
-        const rules: any = await api.mediaRules().catch(() => ({}))
-        const allowed: Record<string, string[]> = rules?.platforms || {}
-        for (const r of targets) {
-          setProgress(`正在为 ${r.platform} 生成推广图片…`)
-          const sizes = (allowed[r.platform] || ['1080x1080']).slice(0, 2)
-          const slots = sizes.map(size => ({ size, placement: r.platform }))
-          const style_opts = {
-            creative_direction: `${r.concept || ''}（${r.angle || ''}）`.replace(/[（）\s]+$/, ''),
-            content_style: `${r.visual_style || ''}；${r.copy_direction || ''}`.replace(/^[；\s]+|[；\s]+$/g, ''),
-            color_scheme: '',
-          }
-          const payload = {
-            images_request: {
-              analysis, platform: r.platform, lang: 'en',
-              copy_fields: {}, copy_variants: [], style_opts, slots,
-              spec_version: rules?.spec_version || '',
-              total_pixels: sizes.reduce((n: number, s: string) => {
-                const [w, h] = s.split('x').map(Number); return n + (w * h || 0)
-              }, 0),
-            },
-            archive: hid ? { history_id: hid, platform: r.platform, lang: 'en' } : undefined,
-            idempotency_key: `cw_${r.platform}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-          }
-          setJobs(j => [...j, { platform: r.platform, jobId: null, status: 'submitting', progress: 0, images: [], route: r }])
-          let job: any
-          try { job = await api.createGenerationJob(payload) }
-          catch (e: any) {
-            setJobs(j => j.map(x => x.platform === r.platform ? { ...x, status: 'failed', error: e?.message || '创建失败' } : x))
-            continue
-          }
-          const jobId = job?.job_id
-          setJobs(j => j.map(x => x.platform === r.platform ? { ...x, jobId, status: job?.status || 'queued' } : x))
-          let st: any = job
-          for (let i = 0; i < 80; i++) {
-            await sleep(1500)
-            try { st = await api.generationJob(jobId) } catch { continue }
-            setJobs(j => j.map(x => x.platform === r.platform ? { ...x, status: st?.status || x.status, progress: st?.progress ?? x.progress } : x))
-            if (['succeeded', 'partial_success', 'failed', 'canceled'].includes(st?.status)) break
-          }
-          let imgs: any[] = (st?.result?.images || []).slice()
-          if (!imgs.length) {
-            try { const got: any = await api.creativeAssets({ job_id: jobId }); imgs = (got?.items || []).slice() } catch { /* 兜底失败不阻断 */ }
-          }
-          setJobs(j => j.map(x => x.platform === r.platform ? { ...x, status: st?.status || x.status, images: imgs } : x))
-          collected.push(...imgs)
-          setAssets(a => [...a, ...imgs])
-          if (imgs.length) showToast(`图片已生成 ${imgs.length} 张（${r.platform}）`)
+    let done = 0
+    try {
+      const rules: any = await api.mediaRules().catch(() => ({}))
+      const allowed: Record<string, string[]> = rules?.platforms || {}
+      const routeFor = (i: number) => activeRoutes.length ? activeRoutes[i % activeRoutes.length] : null
+      for (let i = 0; i < targets.length; i++) {
+        const p = targets[i]; const route = routeFor(i)
+        setProgressText(`正在为 ${p} 生成推广图片…`)
+        const sizes = (allowed[p] || ['1080x1080']).slice(0, 2)
+        const slots = sizes.map(size => ({ size, placement: p }))
+        const style_opts = {
+          creative_direction: `${route?.name || ''}（${route?.angle || ''}）`.replace(/[（）\s]+$/, ''),
+          content_style: `${route?.description || ''}；${((route?.tags) || []).join('、')}`.replace(/^[；\s]+|[；\s]+$/g, ''),
+          color_scheme: '',
         }
-      } catch (e: any) {
-        setError((e?.message || '图片生成失败') + '（可重试或调整媒体后继续）')
+        const payload = {
+          images_request: {
+            analysis: landing || cw?.analysis || {}, platform: p, lang: 'en',
+            copy_fields: {}, copy_variants: [], style_opts, slots,
+            spec_version: rules?.spec_version || '',
+            total_pixels: sizes.reduce((n: number, s: string) => { const [w, h] = s.split('x').map(Number); return n + (w * h || 0) }, 0),
+          },
+          archive: hid ? { history_id: hid, platform: p, lang: 'en' } : undefined,
+          idempotency_key: `cw_${p}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        }
+        setJobs(j => [...j, { platform: p, jobId: null, status: 'submitting', progress: 0, images: [], route }])
+        let job: any
+        try { job = await api.createGenerationJob(payload) }
+        catch (e: any) {
+          setJobs(j => j.map(x => x.platform === p ? { ...x, status: 'failed', error: e?.message || '创建失败' } : x))
+          done++; setProgressPct(Math.round(done / targets.length * 100)); continue
+        }
+        const jobId = job?.job_id
+        setJobs(j => j.map(x => x.platform === p ? { ...x, jobId, status: job?.status || 'queued' } : x))
+        let st: any = job
+        for (let k = 0; k < 80; k++) {
+          await sleep(1500)
+          try { st = await api.generationJob(jobId) } catch { continue }
+          setJobs(j => j.map(x => x.platform === p ? { ...x, status: st?.status || x.status, progress: st?.progress ?? x.progress } : x))
+          if (['succeeded', 'partial_success', 'failed', 'canceled'].includes(st?.status)) break
+        }
+        let imgs: any[] = (st?.result?.images || []).slice()
+        if (!imgs.length) {
+          try { const got: any = await api.creativeAssets({ job_id: jobId }); imgs = (got?.items || []).slice() } catch { /* 兜底 */ }
+        }
+        setJobs(j => j.map(x => x.platform === p ? { ...x, status: st?.status || x.status, images: imgs } : x))
+        for (const im of imgs) { im.__route = route; im.__platform = p }
+        collected.push(...imgs); setAssets(a => [...a, ...imgs])
+        if (imgs.length) showToast(`图片已生成 ${imgs.length} 张（${p}）`)
+        done++; setProgressPct(Math.round(done / targets.length * 100))
       }
+    } catch (e: any) {
+      setError((e?.message || '图片生成失败') + '（可重试或调整媒体后继续）')
     }
-    setProgress(genVideo ? '视频生成将在下期待生成，本期已生成图片。' : '创作完成。')
-    setStep(5)
+    setProgressText('创作完成')
+    setView('result')
     showToast(`创作完成：共生成 ${collected.length} 张图片`)
     if (planId) await api.updateCreativePlan(planId, { status: 'done', asset_count: collected.length, history_id: hid ?? undefined }).catch(() => {})
   }
 
   function download(file: string) { window.open(api.mediaFileDownloadUrl(file), '_blank') }
-  function downloadZip() {
-    if (historyId) window.open(api.historyItemZipUrl(historyId), '_blank')
-    else if (assets.length) window.open(api.mediaZipUrl(assets.map(a => a.file)), '_blank')
+  function selectedFiles() { return assets.filter(a => checked[a.file]).map(a => a.file) }
+  function downloadSelected() {
+    const f = selectedFiles(); if (f.length) window.open(api.mediaZipUrl(f, '创意工作台素材'), '_blank')
   }
   function resetAll() {
-    setStep(1); setAnalysis(null); setRoutes([]); setPlanId(null); setAssets([]); setJobs([])
-    setHistoryId(null); setProgress(''); setError('')
+    setView('input'); setCw(null); setLanding(null); setRoutes([]); setPlanId(null); setAssets([]); setJobs([])
+    setHistoryId(null); setError(''); setProgressPct(0); setChecked({})
+  }
+
+  async function openHistory() {
+    setHistOpen(true)
+    try { const d: any = await api.creativePlans({ limit: 50, offset: 0 }); setHistory(d?.items || []) } catch { setHistory([]) }
   }
   function loadPlan(item: any) {
-    setAnalysis(item.analysis || {})
+    setCw({ id: item.id, title: item.title, summary: item.analysis?.summary || '',
+      boxes: item.analysis?.boxes || {}, brief: item.analysis?.brief || {}, recommendedPlatforms: item.analysis?.recommendedPlatforms || [] })
     setSelected((item.platforms || []).slice())
-    setRoutes(item.routes || [])
+    setRoutes((item.routes || []).map((r: any) => ({ ...r, selected: r.selected !== false })))
     setPlanId(item.id)
-    setGenImage(item.gen_image !== false)
-    setGenVideo(!!item.gen_video)
-    setTab('create'); setStep(3)
+    setHistOpen(false); setView('plan')
   }
 
-  const totalImages = assets.length
+  const activeStep = view === 'input' || view === 'analyzing' ? 1 : view === 'plan' ? 2 : 3
+  const briefBoxes = cw?.boxes || {}
+  const brief = cw?.brief || {}
+  const aiNoteTags = routes.filter(r => r.selected).flatMap(r => r.tags || []).slice(0, 2)
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h2>创意工作台</h2>
-        <p className="muted">面向落地页 / 官网 / 应用的自动化创意素材创作。输入产品信息 → 大模型分析 → 规划创意路线 → 自动出图。全流程由已配置大模型驱动。</p>
+    <div className="cwb">
+      <div className="cwb-top">
+        <div className="cwb-title">
+          <h2>创意工作台</h2>
+          <span className="cwb-live"><i className="dot" /> 自动保存</span>
+        </div>
+        <div className="cwb-top-actions">
+          <button className="cwb-icon" title="搜索">⌕</button>
+          <button className="cwb-new" onClick={resetAll}>+ 新建项目</button>
+          <button className="cwb-hist-btn" onClick={openHistory}>历史</button>
+        </div>
       </div>
 
-      <div className="cw-tabs">
-        <button className={`cw-tab ${tab === 'create' ? 'on' : ''}`} onClick={() => setTab('create')}>创作</button>
-        <button className={`cw-tab ${tab === 'history' ? 'on' : ''}`} onClick={() => setTab('history')}>历史库</button>
-      </div>
+      <div className="cwb-body">
+        <div className="cwb-main">
+          <div className="cwb-copilot">
+            <span className="cwb-dash" /> AI CREATIVE COPILOT
+            <span className="cwb-helper">输入产品链接，AI 将完成策略分析、创意规划与多平台素材生成。</span>
+          </div>
 
-      {tab === 'create' && (
-        <>
-          <button className="cw-toggle" onClick={() => setDrawerOpen(o => !o)}>
-            {drawerOpen ? '隐藏过程面板' : '分析 & 创作过程'}
-          </button>
+          <div className="cwb-input-card">
+            <div className="cwb-url">
+              <span className="cwb-link-ic">🔗</span>
+              <input value={input} onChange={e => setInput(e.target.value)} placeholder="https://soundora.com/products/air-pro"
+                onKeyDown={e => { if (e.key === 'Enter' && !running) analyze() }} />
+              <button className="cwb-start" onClick={analyze} disabled={running}>
+                {running ? '分析中…' : '开始分析 →'}
+              </button>
+            </div>
+            <div className="cwb-platforms">
+              <span className="cwb-pl-label">投放平台</span>
+              {visiblePlatforms.map(p => (
+                <button key={p} className={`cwb-chip ${selected.includes(p) ? 'on' : ''}`} onClick={() => togglePlatform(p)}>{p}</button>
+              ))}
+              {morePlatforms.length > 0 && (
+                <>
+                  <button className="cwb-chip more" onClick={() => setShowMore(o => !o)}>{showMore ? '收起' : '+ 更多'}</button>
+                  {showMore && morePlatforms.map(p => (
+                    <button key={p} className={`cwb-chip ${selected.includes(p) ? 'on' : ''}`} onClick={() => togglePlatform(p)}>{p}</button>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
 
-          <ol className="cw-steps">
-            {STEPS.map(s => (
-              <li key={s.key} className={`${step >= s.key ? 'on' : ''} ${step === s.key ? 'cur' : ''}`}>
-                <span className="num">{s.key}</span><span className="lbl">{s.label}</span>
+          <ol className="cwb-steps">
+            {STEPS.map((s, i) => (
+              <li key={s.n} className={`${activeStep >= s.n ? 'on' : ''} ${activeStep === s.n ? 'cur' : ''}`}>
+                <span className="n">0{s.n}</span>
+                <div className="st-txt"><b>{s.label}</b><small>{s.sub}</small></div>
+                {i < STEPS.length - 1 && <span className="chev">›</span>}
               </li>
             ))}
           </ol>
 
-          <div className="card">
-            {step === 1 && (
-              <div className="cw-pane">
-                <label className="field">
-                  <span className="label">产品链接 / 应用链接 / 产品信息</span>
-                  <textarea value={input} onChange={e => setInput(e.target.value)} rows={4}
-                    placeholder="粘贴落地页网址（https://…）或直接描述产品信息" />
-                </label>
-                <div className="field">
-                  <span className="label">推广媒体平台（可多选）</span>
-                  <div className="cw-chips">
-                    {platforms.map(p => (
-                      <button key={p} className={`chip ${selected.includes(p) ? 'on' : ''}`} onClick={() => togglePlatform(p)}>{p}</button>
-                    ))}
-                  </div>
-                </div>
-                <div className="field cw-inline">
-                  <label><input type="checkbox" checked={genImage} onChange={e => setGenImage(e.target.checked)} /> 生成图片</label>
-                  <label><input type="checkbox" checked={genVideo} onChange={e => setGenVideo(e.target.checked)} /> 生成视频</label>
-                </div>
-                <div className="cw-actions">
-                  <button className="btn primary" onClick={analyze} disabled={running}>{running ? '分析中…' : '开始分析'}</button>
-                </div>
-              </div>
-            )}
+          {/* 内容区：按状态切换 */}
+          {view === 'input' && (
+            <div className="cwb-empty">
+              <div className="cwb-empty-ic"><span className="spark" /></div>
+              <h3>从一个链接开始</h3>
+              <p>我们会自动识别产品定位与受众，规划适合每个媒体的创意方向。</p>
+            </div>
+          )}
 
-            {step === 2 && analysis && (
-              <div className="cw-pane">
-                <h3 className="cw-sub">产品分析框架</h3>
-                <div className="kv cw-kv">
-                  <div><span>行业</span><b>{analysis.industry || '—'}</b></div>
-                  <div><span>类型</span><b>{analysis.type || '—'}</b></div>
-                  <div><span>对象</span><b>{analysis.audience || '—'}</b></div>
-                  <div><span>优势</span><b>{(analysis.advantages || []).join('、') || '—'}</b></div>
-                  <div><span>语言</span><b>{analysis.language || '—'}</b></div>
-                  <div><span>竞品</span><b>{(analysis.competitors || []).join('、') || '—'}</b></div>
-                </div>
-                {(analysis.channels || []).length > 0 && (
-                  <div className="cw-channels">
-                    {(analysis.channels || []).map((c: any, i: number) => (
-                      <div key={i} className="cw-channel"><b>{c.platform}</b><span>{c.reason}</span></div>
-                    ))}
-                  </div>
-                )}
-                <div className="cw-actions">
-                  <button className="btn" onClick={() => { setStep(1) }}>上一步</button>
-                  <button className="btn primary" onClick={planStrategy} disabled={planning}>{planning ? '规划中…' : '生成创意策略'}</button>
-                </div>
-              </div>
-            )}
+          {view === 'analyzing' && (
+            <div className="cwb-progress-card">
+              <div className="cwb-ai-ic"><span className="spark" /></div>
+              <h3>正在理解你的产品…</h3>
+              <p>分析页面信息、用户评论和同类广告，建立创意策略。</p>
+              <div className="cwb-bar"><div className="cwb-bar-fill" style={{ width: `${progressPct}%` }} /></div>
+              <div className="cwb-bar-txt">{progressText}</div>
+            </div>
+          )}
 
-            {step === 3 && routes.length > 0 && (
-              <div className="cw-pane">
-                <h3 className="cw-sub">创意策略路线（每平台一条，可微调后生成）</h3>
-                <div className="cw-routes">
+          {view === 'plan' && cw && (
+            <>
+              <section className="cwb-section">
+                <h3 className="cwb-sub">产品分析完成</h3>
+                <p className="cwb-summary">{cw.summary || '（暂无分析摘要）'}</p>
+                <div className="cwb-boxes">
+                  {[['行业', briefBoxes.industry], ['核心人群', briefBoxes.coreAudience],
+                    ['购买动机', briefBoxes.purchaseMotivation], ['价格带', briefBoxes.priceBand]].map(([k, v]) => (
+                    <div className="cwb-box" key={k}><span>{k}</span><b>{v || '—'}</b></div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="cwb-section">
+                <div className="cwb-sub-row">
+                  <h3 className="cwb-sub">为你规划了 {routes.length} 条创意路线</h3>
+                  <span className="cwb-tag-reco">推荐方案</span>
+                </div>
+                <p className="cwb-reco-note">已按 {selected.join('、') || '所选媒体'} 的素材规格自动适配</p>
+                <div className="cwb-routes">
                   {routes.map((r, i) => (
-                    <div className="cw-route" key={i}>
-                      <div className="cw-route-head"><b>{r.platform}</b></div>
-                      <div className="cw-route-grid">
-                        <label><span>创意概念</span><input value={r.concept || ''} onChange={e => updateRoute(i, 'concept', e.target.value)} /></label>
-                        <label><span>切入角度</span><input value={r.angle || ''} onChange={e => updateRoute(i, 'angle', e.target.value)} /></label>
-                        <label><span>视觉风格</span><input value={r.visual_style || ''} onChange={e => updateRoute(i, 'visual_style', e.target.value)} /></label>
-                        <label><span>文案方向</span><input value={r.copy_direction || ''} onChange={e => updateRoute(i, 'copy_direction', e.target.value)} /></label>
+                    <div className={`cwb-route ${r.selected ? 'on' : ''}`} key={i} onClick={() => updateRoute(i, 'selected', !r.selected)}>
+                      <div className="cwb-route-head">
+                        <span className="cwb-route-key">{r.key || String.fromCharCode(65 + i)}</span>
+                        <b>{r.name || '未命名路线'}</b>
+                        <span className={`cwb-check ${r.selected ? 'on' : ''}`} />
                       </div>
-                      <label className="cw-route-prompt"><span>文生图方向 / 提示词</span>
-                        <textarea value={r.image_prompt || ''} rows={2} onChange={e => updateRoute(i, 'image_prompt', e.target.value)} />
-                      </label>
-                      {r.notes && <div className="muted" style={{ fontSize: 12 }}>{r.notes}</div>}
+                      <p>{r.description}</p>
+                      <div className="cwb-route-tags">
+                        {(r.tags || []).map((t: string, j: number) => <span key={j} className="cwb-rtag">{t}</span>)}
+                      </div>
                     </div>
                   ))}
                 </div>
-                <div className="cw-actions">
-                  <button className="btn" onClick={() => setStep(2)}>上一步</button>
-                  <button className="btn primary" onClick={generate}>确认并生成素材</button>
+                <p className="cwb-foot-note">路线与平台均可在生成后继续调整</p>
+                <div className="cwb-confirm">
+                  <button className="cwb-gen-btn" onClick={generate} disabled={!routes.some(r => r.selected)}>
+                    确认并生成 {planImageCount()} 份素材
+                  </button>
                 </div>
-              </div>
-            )}
+              </section>
+            </>
+          )}
 
-            {(step === 4 || step === 5) && (
-              <div className="cw-pane">
-                <div className="cw-gen-head">
-                  <b>{step === 4 ? '生成中…' : `创作完成（共 ${totalImages} 张）`}</b>
-                  <span className="muted">{progress}</span>
+          {(view === 'generating' || view === 'result') && (
+            <section className="cwb-section">
+              {view === 'result' && (
+                <div className="cwb-result-head">
+                  <div><h3 className="cwb-sub ok">首批素材已完成</h3>
+                    <p className="cwb-reco-note">生成 {assets.length} 份素材，通过平台合规预检</p></div>
+                  <div className="cwb-result-actions">
+                    <button className="cwb-link-btn" onClick={() => setChecked(Object.fromEntries(assets.map(a => [a.file, false])))}>
+                      {assets.every(a => !checked[a.file]) ? '全选' : '取消全选'}
+                    </button>
+                    <button className="cwb-gen-btn sm" onClick={downloadSelected} disabled={!selectedFiles().length}>
+                      下载已选（{selectedFiles().length}）
+                    </button>
+                  </div>
                 </div>
-                {step === 5 && (
-                  <>
-                    <div className="cw-gallery">
-                      {assets.map((a, i) => (
-                        <div className="cw-asset" key={i}>
-                          <img src={api.fileUrl(a.url || a.file)} alt="" loading="lazy" />
-                          <button className="btn tiny" onClick={() => download(a.file)}>下载</button>
+              )}
+              {view === 'generating' && <div className="cwb-bar"><div className="cwb-bar-fill" style={{ width: `${progressPct}%` }} /></div>}
+
+              <div className="cwb-grid">
+                {assets.map((a, i) => {
+                  const sp = specOf(a); const rt = a.__route
+                  return (
+                    <div className="cwb-asset" key={i}>
+                      <div className="cwb-asset-badge">{sp.ratio}</div>
+                      <div className="cwb-asset-img"><img src={api.fileUrl(a.url || a.file)} alt="" loading="lazy" /></div>
+                      <div className="cwb-asset-body">
+                        <b>{rt?.name || a.__platform || '创意素材'}</b>
+                        <p>{(rt?.tags || []).join('·') || '推广素材'}</p>
+                        <div className="cwb-asset-meta">
+                          <span>{brandOf(a.__platform, a.placement)}</span>
+                          <span className="cwb-type">图片</span>
                         </div>
-                      ))}
-                      {totalImages === 0 && <div className="muted">本次未生成素材（可返回调整媒体后重试）。</div>}
-                    </div>
-                    <div className="cw-actions">
-                      <button className="btn" onClick={resetAll}>新的创作</button>
-                      {totalImages > 0 && <button className="btn" onClick={downloadZip}>打包下载全部</button>}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-            {error && <div className="err" style={{ marginTop: 10 }}>{error}</div>}
-          </div>
-        </>
-      )}
-
-      {tab === 'history' && (
-        <div className="card">
-          <div className="cw-hist-head">
-            <h3 className="cw-sub" style={{ margin: 0 }}>历史创作（共 {history.length} 条）</h3>
-            <button className="btn" onClick={loadHistory} disabled={historyLoading}>{historyLoading ? '刷新中…' : '刷新'}</button>
-          </div>
-          {history.length === 0 && <div className="muted" style={{ marginTop: 10 }}>暂无历史创作。在「创作」标签完成一次流程后会出现在这里。</div>}
-          <div className="cw-hist-list">
-            {history.map((h, i) => (
-              <div className="cw-hist" key={i}>
-                <div className="cw-hist-main">
-                  <b>{h.title || '未命名创意策略'}</b>
-                  <div className="muted" style={{ fontSize: 12 }}>
-                    {(h.platforms || []).join('、') || '—'} · {h.asset_count || 0} 张 · {h.created_at?.slice(0, 10) || ''}
-                  </div>
-                </div>
-                <span className={`pill ${statusClass(h.status)}`}>{statusLabel(h.status)}</span>
-                <button className="btn tiny" onClick={() => loadPlan(h)}>查看 / 复用</button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 右侧滑出过程面板 */}
-      <div className={`cw-backdrop ${drawerOpen ? 'open' : ''}`} onClick={() => setDrawerOpen(false)} />
-      <aside className={`cw-drawer ${drawerOpen ? 'open' : ''}`}>
-        <div className="cw-drawer-head">
-          <span>分析 &amp; 创作过程</span>
-          <button className="cw-close" onClick={() => setDrawerOpen(false)} title="收起（ESC）">×</button>
-        </div>
-        <div className="cw-drawer-body">
-          <section className="cw-sec">
-            <h4>分析过程</h4>
-            {analysis ? (
-              <>
-                <div className="kv">
-                  <div><span>行业</span><b>{analysis.industry || '—'}</b></div>
-                  <div><span>类型</span><b>{analysis.type || '—'}</b></div>
-                  <div><span>对象</span><b>{analysis.audience || '—'}</b></div>
-                  <div><span>优势</span><b>{(analysis.advantages || []).join('、') || '—'}</b></div>
-                </div>
-                {(analysis.channels || []).length > 0 && (
-                  <div className="cw-channels">
-                    {(analysis.channels || []).map((c: any, i: number) => (
-                      <div key={i} className="cw-channel"><b>{c.platform}</b><span>{c.reason}</span></div>
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : <div className="muted">输入产品并分析后展示产品框架与推荐媒体。</div>}
-          </section>
-
-          <section className="cw-sec">
-            <h4>创意策略</h4>
-            {routes.length > 0 ? (
-              <div className="cw-route-mini">
-                {routes.map((r, i) => (
-                  <div key={i} className="cw-rm">
-                    <b>{r.platform}</b>
-                    <span>{r.concept || '—'} · {r.angle || '—'}</span>
-                  </div>
-                ))}
-              </div>
-            ) : <div className="muted">规划创意策略后展示每平台路线。</div>}
-          </section>
-
-          <section className="cw-sec">
-            <h4>创作过程{totalImages > 0 ? ` · 共 ${totalImages} 张` : ''}</h4>
-            {jobs.length === 0 && step !== 4 && step !== 5 && (
-              <div className="muted">开始创作后展示各媒体生成进度与素材。</div>
-            )}
-            {jobs.map(j => (
-              <div className="cw-job" key={j.platform}>
-                <div className="cw-job-head">
-                  <b>{j.platform}</b>
-                  <span className={`pill ${statusClass(j.status)}`}>{statusLabel(j.status)}</span>
-                </div>
-                {!['succeeded', 'partial_success', 'failed', 'canceled', 'done'].includes(j.status) && (
-                  <div className="cw-progress"><div className="cw-bar" style={{ width: `${j.progress || 0}%` }} /></div>
-                )}
-                {j.error && <div className="err">{j.error}</div>}
-                {j.images.length > 0 && (
-                  <div className="cw-thumbs">
-                    {j.images.map((im, i) => (
-                      <div className="cw-thumb" key={i}>
-                        <img src={api.fileUrl(im.url || im.file)} alt={j.platform} loading="lazy" />
-                        <button className="btn tiny" onClick={() => download(im.file)}>下载</button>
+                        <div className="cwb-asset-spec">
+                          <span>推荐尺寸 {sp.dim}</span><span>画面比例 {sp.ratio}</span><span>{sp.fmt}</span>
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                )}
-                {['succeeded', 'partial_success', 'done'].includes(j.status) && j.images.length === 0 && (
-                  <div className="muted">无素材返回。</div>
-                )}
+                      <label className="cwb-asset-check">
+                        <input type="checkbox" checked={!!checked[a.file]} onChange={e => setChecked(c => ({ ...c, [a.file]: e.target.checked }))} /> 选择
+                      </label>
+                      <button className="cwb-asset-dl" onClick={() => download(a.file)}>下载</button>
+                    </div>
+                  )
+                })}
+                {view === 'result' && assets.length === 0 && <div className="muted">本次未生成素材（可返回调整媒体后重试）。</div>}
               </div>
-            ))}
-            {genVideo && (
-              <div className="reserved" style={{ marginTop: 12 }}>
-                🎬 视频生成（下期待生成）：本期聚焦图片，视频节点已预留，将在下期接入文生视频模型后打通。
-              </div>
-            )}
-          </section>
-        </div>
-      </aside>
 
-      {toast && <div className="cw-toast">{toast}</div>}
+              {jobs.filter(j => j.status === 'failed').length > 0 && (
+                <div className="err" style={{ marginTop: 10 }}>
+                  {jobs.filter(j => j.status === 'failed').map(j => `${j.platform}：${j.error}`).join('；')}
+                </div>
+              )}
+
+              {view === 'result' && (
+                <div className="cwb-confirm">
+                  <button className="cwb-link-btn" onClick={resetAll}>新的创作</button>
+                  {assets.length > 0 && <button className="cwb-gen-btn sm" onClick={downloadSelected}>打包下载全部</button>}
+                </div>
+              )}
+            </section>
+          )}
+
+          {error && <div className="err" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+
+        {/* 右侧：项目简报 */}
+        <aside className="cwb-brief">
+          <div className="cwb-brief-head">
+            <b>项目简报</b><span className="cwb-dots">⋯</span><span className="cwb-chev">›</span>
+          </div>
+          <div className="cwb-brief-card">
+            <div className="cwb-thumb">{cw?.title ? cw.title.slice(0, 1) : '🎧'}</div>
+            <div className="cwb-brief-card-txt">
+              <span className="cwb-cur">当前项目</span>
+              <b>{cw?.title || '未命名项目'}</b>
+              <small>{briefBoxes.industry || (cw ? '待分析' : '等待分析')}</small>
+            </div>
+          </div>
+
+          <div className="cwb-brief-row">
+            <div className="cwb-brief-label">推广目标 <span className="cwb-pen">✎</span></div>
+            <div className="cwb-brief-val">{brief.promotionGoal || '—'}</div>
+          </div>
+
+          <div className="cwb-brief-row">
+            <div className="cwb-brief-label">目标受众</div>
+            <div className="cwb-brief-chips">
+              {(brief.targetAudience && brief.targetAudience.length) ? brief.targetAudience.map((t: string, i: number) => (
+                <span key={i} className="cwb-bchip">{t}</span>
+              )) : <span className="muted">—</span>}
+            </div>
+          </div>
+
+          <div className="cwb-brief-row">
+            <div className="cwb-brief-label">核心卖点</div>
+            <ol className="cwb-sell">
+              {(brief.sellingPoints && brief.sellingPoints.length) ? brief.sellingPoints.map((s: string, i: number) => (
+                <li key={i}><span>{String(i + 1).padStart(2, '0')}</span> {s}</li>
+              )) : <li className="muted">—</li>}
+            </ol>
+          </div>
+
+          <div className="cwb-brief-row">
+            <div className="cwb-brief-label">生成计划</div>
+            <div className="cwb-brief-plan">
+              <div><span>图片素材</span><b>{planImageCount()} 张</b></div>
+              <div><span>短视频</span><b>0 条 <small>（下期待生成）</small></b></div>
+            </div>
+          </div>
+
+          <div className="cwb-brief-note">
+            <span className="cwb-note-ic" /> AI 将优先测试
+            {aiNoteTags.length ? ` ${aiNoteTags.join(' 和 ')}` : ' 已规划'} 两类创意方向。
+          </div>
+        </aside>
+      </div>
+
+      {/* 历史弹窗 */}
+      {histOpen && (
+        <div className="cwb-modal-back" onClick={() => setHistOpen(false)}>
+          <div className="cwb-modal" onClick={e => e.stopPropagation()}>
+            <div className="cwb-modal-head"><b>历史创作</b><button onClick={() => setHistOpen(false)}>×</button></div>
+            <div className="cwb-modal-body">
+              {history.length === 0 && <div className="muted">暂无历史创作。</div>}
+              {history.map((h, i) => (
+                <div className="cwb-hist" key={i}>
+                  <div className="cwb-hist-main">
+                    <b>{h.title || '未命名创意方案'}</b>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {(h.platforms || []).join('、') || '—'} · {h.asset_count || 0} 张 · {h.created_at?.slice(0, 10) || ''}
+                    </div>
+                  </div>
+                  <span className={`pill ${statusClass(h.status)}`}>{statusLabel(h.status)}</span>
+                  <button className="btn tiny" onClick={() => loadPlan(h)}>查看 / 复用</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && <div className="cwb-toast">{toast}</div>}
     </div>
   )
 }

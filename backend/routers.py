@@ -13,7 +13,8 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      PromptOut, PromptUpdate, PromptDefaultIn,
                      LandingAnalysisRequest, LandingAnalysis, MediaCopyRequest, MediaImageRequest,
                      CreativeAnalysisRequest, CreativeAnalysisResult,
-                     CreativePlanRequest, CreativePlanResult, CreativeRoute)
+                     CreativePlanRequest, CreativePlanResult, CreativeRoute,
+                     CWAnalyzeRequest, CWAnalysisResult, CWRoutesRequest, CWRoute, CWRoutesResult)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import get_llm_with_info, finalize_invocation, parse_json
@@ -376,6 +377,132 @@ def patch_creative_plan(pid: int, payload: dict, db: Session = Depends(get_db),
             setattr(r, k, v)
     db.commit(); db.refresh(r)
     return _cp_to_dict(r)
+
+
+# ----------------------------- V4.53 创意工作台：设计对齐的「产品分析」+「3 条创意路线」 -----------------------------
+_CW_ANALYZE_SYS = (
+    "你是资深的出海效果广告创意策略师。用户会给你一个产品链接或产品描述，以及目标媒体平台列表。"
+    "请提炼产品定位与项目简报，只返回 JSON："
+    "{\"title\": \"产品名\","
+    " \"summary\": \"一句话产品定位描述（面向谁、解决什么、核心价值）\","
+    " \"boxes\": {\"industry\": \"行业\", \"coreAudience\": \"核心人群\", \"purchaseMotivation\": \"购买动机\", \"priceBand\": \"价格带\"},"
+    " \"brief\": {\"promotionGoal\": \"推广目标\", \"targetAudience\": [\"受众标签1\",\"受众标签2\"], \"sellingPoints\": [\"核心卖点1\",\"核心卖点2\",\"核心卖点3\"]},"
+    " \"recommendedPlatforms\": [\"平台名\"]}"
+    "要求：字段必须具体、贴合产品；recommendedPlatforms 从给定平台中选出最匹配的 1-3 个；"
+    "不要编造数据；信息不足时给出合理默认。"
+)
+
+_CW_ROUTES_SYS = (
+    "你是资深的出海效果广告创意策略师。基于产品分析结论、项目简报与目标媒体平台，"
+    "规划 3 条差异化的创意概念路线（概念级，不逐平台拆分）。只返回 JSON："
+    "{\"title\": \"本次创意路线主题\","
+    " \"routes\": ["
+    "   {\"key\": \"A\", \"name\": \"路线名\", \"description\": \"路线说明（切入方式与表达）\", \"tags\": [\"标签1\",\"标签2\"], \"angle\": \"切入角度\"},"
+    "   {\"key\": \"B\", ...},"
+    "   {\"key\": \"C\", ...}"
+    " ]}"
+    "要求：routes 恰为 3 条；key 依次为 A/B/C；每条路线要有清晰差异（如转化导向 / 生活方式 / 场景叙事）；"
+    "tags 2-3 个；不要编造数据。"
+)
+
+
+@router.post("/cw/analyze", response_model=CWAnalysisResult)
+async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
+                         user: User = Depends(require_roles(*CAN_EDIT))):
+    """创意工作台·产品分析：产品链接/文本 + 平台 → 大模型产出定位 + 4 分析盒 + 项目简报；落库为创意方案草稿。"""
+    url = (req.url or "").strip()
+    text = (req.text or "").strip()
+    platforms = [str(p).strip() for p in (req.platforms or []) if str(p).strip()]
+    if not url and not text:
+        raise HTTPException(400, "请提供产品链接或描述")
+    llm, info = get_llm_with_info(db, "analysis")
+    user_prompt = json.dumps({"url": url, "text": text, "platforms": platforms}, ensure_ascii=False)
+    try:
+        resp = await llm.chat(_CW_ANALYZE_SYS, user_prompt)
+        parsed = parse_json(resp) or {}
+        info = finalize_invocation(info, llm, bool(parsed))
+    except Exception:
+        parsed, info = {}, finalize_invocation(info, llm, False)
+    boxes = parsed.get("boxes") or {}
+    brief = parsed.get("brief") or {}
+    title = str(parsed.get("title") or "").strip() or (url or text)[:40]
+    summary = str(parsed.get("summary") or "").strip()
+    rec_plat = [str(p).strip() for p in (parsed.get("recommendedPlatforms") or []) if str(p).strip()]
+    # Mock / 解析失败兜底：给出可演示的默认结构，保证端到端流程可跑通（不标注为真实模型结论）
+    if not (boxes or brief or summary):
+        boxes = {"industry": "消费电子", "coreAudience": "城市效率人群",
+                 "purchaseMotivation": "专注与沉浸", "priceBand": "中高端"}
+        brief = {"promotionGoal": "提升购买转化",
+                 "targetAudience": ["18-35 岁", "城市通勤", "音乐爱好者", "效率人群"],
+                 "sellingPoints": ["自适应主动降噪", "40 小时超长续航", "沉浸式空间音频"]}
+        summary = "这是一款面向城市年轻人的中高端无线降噪耳机，用户的关键动机是隔绝环境干扰，并在通勤和工作中获得沉浸体验。"
+        rec_plat = platforms[:3] or ["Meta", "Google"]
+        title = title or "产品分析"
+    result = {
+        "title": title, "summary": summary, "boxes": boxes, "brief": brief,
+        "recommendedPlatforms": rec_plat, "model_info": info, "source": info.get("source", "local"),
+    }
+    rec = CreativePlan(owner_id=user.id, owner_name=user.username, title=title,
+                       analysis_json={"summary": summary, "boxes": boxes, "brief": brief,
+                                      "recommendedPlatforms": rec_plat},
+                       platforms=platforms, gen_image=True, gen_video=False,
+                       routes_json=[], status="draft", model_info=info)
+    db.add(rec); db.commit(); db.refresh(rec)
+    result["id"] = rec.id
+    return CWAnalysisResult(**result)
+
+
+@router.post("/cw/routes", response_model=CWRoutesResult)
+async def api_cw_routes(req: CWRoutesRequest, db: Session = Depends(get_db),
+                        user: User = Depends(require_roles(*CAN_EDIT))):
+    """创意工作台·创意路线：产品分析 + 简报 + 平台 → 大模型规划 3 条创意概念路线；写回创意方案。"""
+    plan_id = req.plan_id
+    platforms = [str(p).strip() for p in (req.platforms or []) if str(p).strip()]
+    analysis = req.analysis or {}
+    brief = req.brief or {}
+    llm, info = get_llm_with_info(db, "analysis")
+    user_prompt = json.dumps({"analysis": analysis, "brief": brief, "platforms": platforms}, ensure_ascii=False)
+    try:
+        resp = await llm.chat(_CW_ROUTES_SYS, user_prompt)
+        parsed = parse_json(resp) or {}
+        info = finalize_invocation(info, llm, bool(parsed))
+    except Exception:
+        parsed, info = {}, finalize_invocation(info, llm, False)
+    routes = []
+    for r in (parsed.get("routes") or [])[:3]:
+        if isinstance(r, dict):
+            routes.append({
+                "key": str(r.get("key") or "").strip(),
+                "name": str(r.get("name") or "").strip(),
+                "description": str(r.get("description") or "").strip(),
+                "tags": [str(t).strip() for t in (r.get("tags") or []) if str(t).strip()][:4],
+                "angle": str(r.get("angle") or "").strip(),
+                "selected": True,
+            })
+    keys = ["A", "B", "C"]
+    for i, r in enumerate(routes):
+        if not r["key"]:
+            r["key"] = keys[i] if i < 3 else chr(65 + i)
+    # Mock / 解析失败兜底
+    if not routes:
+        routes = [
+            {"key": "A", "name": "痛点对比实验", "description": "用强烈视觉对比演示使用前后差异，前三秒制造悬念。",
+             "tags": ["转化导向", "产品演示"], "angle": "前后对比", "selected": True},
+            {"key": "B", "name": "专注力超能力", "description": "将产品塑造成工作与生活中的效率装备。",
+             "tags": ["生活方式", "情绪价值"], "angle": "效率叙事", "selected": True},
+            {"key": "C", "name": "续航自由出发", "description": "通过连续场景证明续航，强化产品信任。",
+             "tags": ["场景叙事", "功能利益"], "angle": "场景证明", "selected": True},
+        ]
+    result = {"title": str(parsed.get("title") or "创意路线规划").strip(),
+              "routes": routes, "model_info": info, "source": info.get("source", "local")}
+    if plan_id:
+        r0 = db.query(CreativePlan).filter_by(id=plan_id).first()
+        if r0:
+            r0.routes_json = routes
+            r0.status = "draft"
+            db.commit(); db.refresh(r0)
+            result["id"] = r0.id
+    return CWRoutesResult(**result)
 
 
 @router.get("/image-capabilities")

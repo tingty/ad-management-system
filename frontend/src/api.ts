@@ -977,6 +977,11 @@ export const api = {
     req<{ items: any[]; total: number; limit: number; offset: number }>(`/api/creative-plan${qs(params)}`),
   creativePlanDetail: (id: number) =>
     req<any>(`/api/creative-plan/${id}`),
+  // V4.53 创意工作台：设计对齐的产品分析 + 3 条创意路线（复用 CreativePlan 存储）
+  cwAnalyze: (payload: { url?: string; text?: string; platforms: string[] }) =>
+    req<any>('/api/cw/analyze', { method: 'POST', body: JSON.stringify(payload) }),
+  cwRoutes: (payload: { plan_id?: number; analysis: any; platforms: string[]; brief: any }) =>
+    req<any>('/api/cw/routes', { method: 'POST', body: JSON.stringify(payload) }),
   updateCreationHistory: (id: number, payload: {
     // V4.38：copy 允许附带 selected_copy / copy_variants，记录本次选用的创意文案
     platform?: string; lang?: string; copy?: any
