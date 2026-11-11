@@ -1278,6 +1278,47 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .reserved { padding: 10px 12px; border-radius: 8px; background: #fff7ed; border: 1px dashed #f0b27a;
   font-size: 12.5px; color: #a35b00; line-height: 1.6; }
 .btn.tiny { padding: 3px 9px; font-size: 12px; }
+
+/* V4.50 创意工作台：右侧滑出过程面板（分析过程 / 创作过程） */
+.cw-toggle { position: fixed; top: 14px; right: 16px; z-index: 60;
+  padding: 7px 14px; border-radius: 20px; border: 1px solid var(--border, #e2e8f0);
+  background: var(--card, #fff); color: var(--primary, #2b6cb0); font-size: 13px; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.cw-toggle:hover { border-color: var(--primary); }
+.cw-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.28); z-index: 55;
+  opacity: 0; pointer-events: none; transition: opacity .2s; }
+.cw-backdrop.open { opacity: 1; pointer-events: auto; }
+.cw-drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(400px, 94vw);
+  background: var(--card, #fff); border-left: 1px solid var(--border, #e2e8f0);
+  box-shadow: -8px 0 24px rgba(0,0,0,.10); z-index: 56; transform: translateX(100%);
+  transition: transform .25s ease; display: flex; flex-direction: column; }
+.cw-drawer.open { transform: translateX(0); }
+.cw-drawer-head { display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--border, #e2e8f0); font-weight: 600; }
+.cw-close { border: none; background: transparent; font-size: 22px; line-height: 1; cursor: pointer; color: var(--muted); }
+.cw-close:hover { color: var(--text); }
+.cw-drawer-body { padding: 14px 16px 28px; overflow-y: auto; flex: 1; }
+.cw-sec { margin-bottom: 22px; }
+.cw-sec h4 { margin: 0 0 10px; font-size: 13.5px; color: var(--primary, #2b6cb0);
+  border-left: 3px solid var(--primary, #2b6cb0); padding-left: 8px; }
+.cw-channels { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.cw-channel { display: flex; gap: 8px; font-size: 12.5px; align-items: baseline; }
+.cw-channel b { color: var(--text); white-space: nowrap; }
+.cw-channel span { color: var(--muted); }
+.cw-job { border: 1px solid var(--border, #e2e8f0); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+.cw-job-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.cw-job-head b { font-size: 13px; }
+.cw-progress { height: 6px; border-radius: 4px; background: #eef2f7; overflow: hidden; margin: 4px 0 8px; }
+.cw-bar { height: 100%; background: var(--primary, #2b6cb0); transition: width .4s ease; }
+.cw-thumbs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 6px; }
+.cw-thumb { border: 1px solid var(--border, #e2e8f0); border-radius: 6px; overflow: hidden; background: #fff; }
+.cw-thumb img { width: 100%; height: 96px; object-fit: cover; display: block; }
+.cw-thumb .btn { width: 100%; border-radius: 0; }
+.cw-toast { position: fixed; right: 18px; bottom: 18px; z-index: 70;
+  background: #1f2937; color: #fff; padding: 10px 16px; border-radius: 8px; font-size: 13px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.25); animation: cwToastIn .25s ease; }
+@keyframes cwToastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
 @media (max-width: 720px) {
   .ac-grid { grid-template-columns: 1fr; }
   .ac-panel { padding: 16px; }
