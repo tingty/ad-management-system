@@ -43,6 +43,8 @@ function statusClass(s: string) {
   if (['running', 'submitting', 'queued', 'generating'].includes(s)) return 'warn'
   return 'off'
 }
+// 媒体平台兜底清单：当接口未返回（或返回结构异常）时，保证投放平台选择器始终可见
+const DEFAULT_PLATFORMS = ['Meta', 'Google', 'Unity', 'Adsterra']
 function isUrl(s: string) { return /^https?:\/\//i.test(s.trim()) }
 function isVideo(a: any) {
   const u = a?.url || a?.file || ''
@@ -122,10 +124,22 @@ export default function CreativeWorkbench() {
   const [lightbox, setLightbox] = useState<any>(null)
 
   useEffect(() => {
-    api.mediaPlatforms().then((d: any) => {
-      const names = (d?.platforms || []).map((p: any) => p.platform).filter(Boolean)
-      if (names.length) { setPlatforms(names); setSelected(names.slice(0, 1)) }
-    }).catch(() => {})
+    function applyNames(names: string[]) {
+      const list = names.length ? names : DEFAULT_PLATFORMS.slice()
+      setPlatforms(list)
+      // 默认预选第一个平台，避免空选触发「请至少选择一个媒体平台」
+      setSelected(s => (s.length ? s : list.slice(0, 1)))
+    }
+    api.mediaPlatforms()
+      .then((d: any) => {
+        // 接口返回的是平台数组（非 { platforms: [...] }），需兼容两种结构
+        const raw = Array.isArray(d) ? d : (d?.platforms || [])
+        const names = (raw || [])
+          .map((p: any) => (typeof p === 'string' ? p : p?.platform))
+          .filter(Boolean)
+        applyNames(names)
+      })
+      .catch(() => { applyNames([]) })
   }, [])
 
   // 滑出面板 / 灯箱 的 ESC 关闭
