@@ -1518,6 +1518,14 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cwb-brief-note { margin-top: 14px; background: #e8f5ee; border-radius: 10px; padding: 10px 12px; font-size: 12px; color: #15803d; line-height: 1.5; display: flex; gap: 7px; align-items: flex-start; }
 .cwb-note-ic { width: 14px; height: 14px; border-radius: 4px; background: linear-gradient(135deg, #16a34a, #4ade80); flex: none; margin-top: 2px; }
 
+/* V4.56 右侧「项目简报」面板（仅结果 / 可收缩；不展示进度 / 选项 / 操作） */
+.cwb-brief-body { display: flex; flex-direction: column; }
+.cwb-brief-pos { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: #475569; line-height: 1.5; }
+.cwb-brief-toggle { background: transparent; border: none; color: var(--muted, #9ca3af); font-size: 18px; line-height: 1; cursor: pointer; padding: 2px 7px; border-radius: 6px; }
+.cwb-brief-toggle:hover { background: #f1f5f9; color: var(--text, #1f2937); }
+.cwb-brief-tab { width: 36px; flex: none; align-self: flex-start; writing-mode: vertical-rl; text-orientation: mixed; background: var(--card, #fff); border: 1px solid var(--border, #e5e7eb); border-left: none; border-radius: 0 12px 12px 0; padding: 16px 7px; font-size: 12.5px; color: var(--muted, #6b7280); cursor: pointer; white-space: nowrap; letter-spacing: 1px; position: sticky; top: 16px; }
+.cwb-brief-tab:hover { color: var(--text, #1f2937); border-color: #cbd5e1; }
+
 .cwb-modal-back { position: fixed; inset: 0; background: rgba(15,23,42,.35); z-index: 80; display: grid; place-items: center; padding: 20px; }
 .cwb-modal { background: var(--card, #fff); border-radius: 14px; width: min(520px, 100%); max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
 .cwb-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border, #eef2f7); }

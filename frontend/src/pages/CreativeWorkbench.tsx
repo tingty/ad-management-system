@@ -87,11 +87,12 @@ function copyOf(a: any): { headline: string; sub: string; cta: string } | null {
 }
 
 /**
- * 创意工作台 · V4.55（分析结果 / 创意路线 / 素材成品 三段式正文流）
+ * 创意工作台 · V4.56（进度条归位 + 右侧「项目简报」结果面板）
  * ① 顶部仅保留菜单标题；② 输入模块常驻展示链接 / 产品信息；
- * ③ 产品分析「产品分析完成」+「为你规划了 N 条创意路线」收进正文，紧接输入框下方、素材上方，分析完成后一直显示，便于直观选择路线；
- * ④ 生成成果（图片 / 视频 + 尺寸规格 + 文案）展示在「创意路线」下方；
- * ⑤ 素材可批量下载，也可单独放大查阅（灯箱）。右侧滑出面板已移除，分析 / 策略集中在正文连续展示。
+ * ③ 分析进度条直接显示在输入框下方（不在任何面板内）；
+ * ④ 产品分析「产品分析完成」+「为你规划了 N 条创意路线」收进正文，紧接输入框下方、素材上方，分析完成后一直显示，便于直观选择路线；
+ * ⑤ 右侧「项目简报」面板仅展示分析结果（推广目标 / 目标受众 / 核心卖点 / 产品定位），可收缩，不展示进度 / 选项 / 操作；
+ * ⑥ 生成成果（图片 / 视频 + 尺寸规格 + 文案）展示在「创意路线」下方；⑦ 素材可批量下载，也可单独放大查阅（灯箱）。
  */
 export default function CreativeWorkbench() {
   const [platforms, setPlatforms] = useState<string[]>([])
@@ -122,6 +123,9 @@ export default function CreativeWorkbench() {
 
   // V4.55 新增：单独放大查阅（灯箱）
   const [lightbox, setLightbox] = useState<any>(null)
+
+  // V4.56 新增：右侧「项目简报」面板（仅展示分析结果 / 可收缩）
+  const [briefOpen, setBriefOpen] = useState(true)
 
   useEffect(() => {
     function applyNames(names: string[]) {
@@ -335,18 +339,19 @@ export default function CreativeWorkbench() {
             </div>
           </div>
 
+          {/* ① 分析进度条：直接显示在输入框下方（不在右侧面板，也不在正文路线区） */}
+          {view === 'analyzing' && (
+            <div className="cwb-progress-card">
+              <div className="cwb-ai-ic"><span className="spark" /></div>
+              <h3>正在理解你的产品…</h3>
+              <p>分析页面信息、用户评论和同类广告，建立创意策略。</p>
+              <div className="cwb-bar"><div className="cwb-bar-fill" style={{ width: `${progressPct}%` }} /></div>
+              <div className="cwb-bar-txt">{progressText}</div>
+            </div>
+          )}
+
           {/* 分析结果 + 创意路线：常驻展示在输入框下方，分析完成后一直显示，便于直观查看 分析 / 路线 / 成品 */}
           <div className="cwb-strategy">
-            {view === 'analyzing' && (
-              <div className="cwb-progress-card">
-                <div className="cwb-ai-ic"><span className="spark" /></div>
-                <h3>正在理解你的产品…</h3>
-                <p>分析页面信息、用户评论和同类广告，建立创意策略。</p>
-                <div className="cwb-bar"><div className="cwb-bar-fill" style={{ width: `${progressPct}%` }} /></div>
-                <div className="cwb-bar-txt">{progressText}</div>
-              </div>
-            )}
-
             {cw && view !== 'analyzing' && (
               <>
                 <section className="cwb-section">
@@ -357,21 +362,6 @@ export default function CreativeWorkbench() {
                       ['购买动机', briefBoxes.purchaseMotivation], ['价格带', briefBoxes.priceBand]].map(([k, v]) => (
                       <div className="cwb-box" key={k as string}><span>{k as string}</span><b>{v || '—'}</b></div>
                     ))}
-                  </div>
-                  <div className="cwb-brief-extra">
-                    <div className="cwb-brief-row"><div className="cwb-brief-label">推广目标</div><div className="cwb-brief-val">{brief.promotionGoal || '—'}</div></div>
-                    <div className="cwb-brief-row"><div className="cwb-brief-label">目标受众</div>
-                      <div className="cwb-brief-chips">
-                        {(brief.targetAudience && brief.targetAudience.length) ? brief.targetAudience.map((t: string, i: number) => (
-                          <span key={i} className="cwb-bchip">{t}</span>
-                        )) : <span className="muted">—</span>}
-                      </div></div>
-                    <div className="cwb-brief-row"><div className="cwb-brief-label">核心卖点</div>
-                      <ol className="cwb-sell">
-                        {(brief.sellingPoints && brief.sellingPoints.length) ? brief.sellingPoints.map((s: string, i: number) => (
-                          <li key={i}><span>{String(i + 1).padStart(2, '0')}</span> {s}</li>
-                        )) : <li className="muted">—</li>}
-                      </ol></div>
                   </div>
                 </section>
 
@@ -507,6 +497,56 @@ export default function CreativeWorkbench() {
 
           {error && <div className="err" style={{ marginTop: 12 }}>{error}</div>}
         </div>
+
+        {/* 右侧「项目简报」面板：仅展示分析结果（推广目标 / 受众 / 卖点 / 产品定位），可收缩；不展示进度 / 选项 / 操作 */}
+        {cw && (
+          briefOpen ? (
+            <aside className="cwb-brief">
+              <div className="cwb-brief-head">
+                <b>项目简报</b>
+                <button className="cwb-brief-toggle" onClick={() => setBriefOpen(false)} title="收起面板">›</button>
+              </div>
+              <div className="cwb-brief-body">
+                <div className="cwb-brief-card">
+                  <div className="cwb-brief-card-txt">
+                    <b>{cw.title || '未命名项目'}</b>
+                    <small>{view === 'analyzing' ? '分析中' : view === 'plan' ? '分析完成' : assets.length ? '素材已生成' : '已分析'}</small>
+                  </div>
+                </div>
+                <div className="cwb-brief-row">
+                  <div className="cwb-brief-label">推广目标</div>
+                  <div className="cwb-brief-val">{brief.promotionGoal || '—'}</div>
+                </div>
+                <div className="cwb-brief-row">
+                  <div className="cwb-brief-label">目标受众</div>
+                  <div className="cwb-brief-chips">
+                    {(brief.targetAudience && brief.targetAudience.length) ? brief.targetAudience.map((t: string, i: number) => (
+                      <span key={i} className="cwb-bchip">{t}</span>
+                    )) : <span className="muted">—</span>}
+                  </div>
+                </div>
+                <div className="cwb-brief-row">
+                  <div className="cwb-brief-label">核心卖点</div>
+                  <ol className="cwb-sell">
+                    {(brief.sellingPoints && brief.sellingPoints.length) ? brief.sellingPoints.map((s: string, i: number) => (
+                      <li key={i}><span>{String(i + 1).padStart(2, '0')}</span> {s}</li>
+                    )) : <li className="muted">—</li>}
+                  </ol>
+                </div>
+                <div className="cwb-brief-row">
+                  <div className="cwb-brief-label">产品定位</div>
+                  <div className="cwb-brief-pos">
+                    <span>行业：{briefBoxes.industry || '—'}</span>
+                    <span>价格带：{briefBoxes.priceBand || '—'}</span>
+                    <span>购买动机：{briefBoxes.purchaseMotivation || '—'}</span>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          ) : (
+            <button className="cwb-brief-tab" onClick={() => setBriefOpen(true)} title="展开项目简报">项目简报 ›</button>
+          )
+        )}
       </div>
 
       {/* ⑤ 单独放大查阅（灯箱） */}
