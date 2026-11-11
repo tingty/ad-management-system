@@ -267,3 +267,40 @@ class UserUpdate(BaseModel):
     active: Optional[bool] = None
     password: Optional[str] = None
 
+
+
+# ----------------------------- V4.52 创意工作台：创意策略 / 路线规划 -----------------------------
+class CreativeRoute(BaseModel):
+    """LLM 为单个媒体平台规划的创意路线。"""
+    platform: str = ""              # 媒体平台
+    concept: str = ""               # 创意概念
+    angle: str = ""                 # 切入角度
+    visual_style: str = ""          # 视觉风格
+    copy_direction: str = ""        # 文案方向
+    image_prompt: str = ""          # 用于文生图的创意方向 / 提示词
+    notes: str = ""                 # 补充说明
+
+
+class CreativePlanRequest(BaseModel):
+    """创意工作台·创意策略请求：产品分析结论 + 所选媒体平台 → 大模型规划每平台创意路线。"""
+    title: Optional[str] = None
+    analysis: dict = {}             # LandingAnalysis 结论（dict）
+    platforms: List[str] = []
+    gen_image: bool = True
+    gen_video: bool = False
+
+
+class CreativePlanResult(BaseModel):
+    """创意策略结果：每平台创意路线 + 实际调用模型快照。"""
+    model_config = {"protected_namespaces": ()}   # 允许字段名 model_info 不被 "model_" 保护前缀拦截
+    id: Optional[int] = None
+    title: str = ""
+    platforms: List[str] = []
+    gen_image: bool = True
+    gen_video: bool = False
+    routes: List[CreativeRoute] = []
+    status: str = "draft"
+    asset_count: int = 0
+    history_id: Optional[int] = None
+    model_info: ModelInfo = ModelInfo()
+    source: str = "local"

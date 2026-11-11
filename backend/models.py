@@ -218,3 +218,26 @@ class CreativeAnalysis(Base):
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
+
+
+# ----------------------------- V4.52 创意工作台：创意策略 / 路线规划 + 历史 -----------------------------
+class CreativePlan(Base):
+    """「创意工作台 · 创意策略」：基于产品分析结论 + 所选媒体平台，由大模型为每平台规划一条创意路线
+    （创意概念 / 切入角度 / 视觉风格 / 文案方向 / 文生图方向）。一次工作台创作会话落库一条，
+    生成完成后回填状态与素材数量，构成「历史库」。"""
+    __tablename__ = "creative_plans"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    owner_name = Column(String(64), nullable=True)
+    title = Column(String(255), nullable=True)
+    analysis_json = Column(JSON, nullable=True)          # 落页分析结论（LandingAnalysis dict）
+    platforms = Column(JSON, nullable=True)              # 所选平台列表
+    gen_image = Column(Boolean, default=True)
+    gen_video = Column(Boolean, default=False)
+    routes_json = Column(JSON, nullable=True)            # LLM 产出的创意路线列表
+    status = Column(String(24), default="draft")        # draft / generating / done / failed
+    asset_count = Column(Integer, default=0)
+    history_id = Column(Integer, nullable=True)          # 关联的素材历史会话 id
+    model_info = Column(JSON, nullable=True)             # 本次实际调用模型快照
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

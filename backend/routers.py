@@ -7,12 +7,13 @@ import os, time, re, json
 
 from database import get_db
 from models import (ModelConfig, User, AuditLog, LoginLog, PromptConfig, SystemState,
-                    CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, utcnow)
+                    CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, CreativePlan, utcnow)
 from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LoginRequest, UserOut, UserCreate, UserUpdate,
                      PromptOut, PromptUpdate, PromptDefaultIn,
                      LandingAnalysisRequest, LandingAnalysis, MediaCopyRequest, MediaImageRequest,
-                     CreativeAnalysisRequest, CreativeAnalysisResult)
+                     CreativeAnalysisRequest, CreativeAnalysisResult,
+                     CreativePlanRequest, CreativePlanResult, CreativeRoute)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import get_llm_with_info, finalize_invocation, parse_json
@@ -254,6 +255,127 @@ def get_creative_analysis(cid: int, db: Session = Depends(get_db),
     if not r:
         raise HTTPException(404, "分析记录不存在")
     return _ca_to_dict(r)
+
+
+# ----------------------------- V4.52 创意工作台：创意策略 / 路线规划 -----------------------------
+_CREATIVE_PLAN_SYS = (
+    "你是资深的出海效果广告创意策略师，长期跟踪 Facebook、Google、Unity、Adsterra 等大媒体的高转化素材。"
+    "基于给定的「产品分析结论」与「目标媒体平台」，为每一个平台规划一条创意路线。"
+    "每条路线需包含：创意概念（concept）、切入角度（angle）、视觉风格（visual_style）、"
+    "文案方向（copy_direction），以及一句可直接用于文生图的创意方向 / 提示词（image_prompt）。"
+    "只返回 JSON，结构如下："
+    "{\"title\": \"本次创意策略主题\","
+    " \"routes\": ["
+    "   {\"platform\": \"平台名\", \"concept\": \"创意概念\", \"angle\": \"切入角度\","
+    "    \"visual_style\": \"视觉风格\", \"copy_direction\": \"文案方向\","
+    "    \"image_prompt\": \"可直接用于文生图的创意方向 / 提示词\", \"notes\": \"补充说明\"}"
+    " ]}"
+    "要求：routes 数量须与给定平台数量一致（每个平台一条，platform 字段严格等于给定平台名）；"
+    "image_prompt 必须具体、可直接调用模型；不要编造数据；如产品信息不足可在 notes 中说明。"
+)
+
+
+def _cp_to_dict(r: "CreativePlan") -> dict:
+    return {
+        "id": r.id,
+        "owner_id": r.owner_id,
+        "owner_name": r.owner_name,
+        "title": r.title,
+        "analysis": r.analysis_json or {},
+        "platforms": r.platforms or [],
+        "gen_image": r.gen_image,
+        "gen_video": r.gen_video,
+        "routes": r.routes_json or [],
+        "status": r.status,
+        "asset_count": r.asset_count,
+        "history_id": r.history_id,
+        "model_info": r.model_info or {},
+        "created_at": r.created_at.isoformat() if r.created_at else "",
+        "updated_at": r.updated_at.isoformat() if r.updated_at else "",
+    }
+
+
+@router.post("/creative-plan", response_model=CreativePlanResult)
+async def api_creative_plan(req: CreativePlanRequest, db: Session = Depends(get_db),
+                            user: User = Depends(require_roles(*CAN_EDIT))):
+    """创意工作台·创意策略：产品分析 + 所选媒体平台 → 大模型规划每平台创意路线；结果落库。"""
+    platforms = [str(p).strip() for p in (req.platforms or []) if str(p).strip()]
+    analysis = req.analysis or {}
+    if not platforms:
+        raise HTTPException(400, "请至少选择一个媒体平台")
+    if not analysis:
+        raise HTTPException(400, "缺少产品分析结论（请先完成产品分析）")
+    llm, info = get_llm_with_info(db, "analysis")
+    user_prompt = json.dumps({"analysis": analysis, "platforms": platforms}, ensure_ascii=False)
+    try:
+        resp = await llm.chat(_CREATIVE_PLAN_SYS, user_prompt)
+        parsed = parse_json(resp) or {}
+        info = finalize_invocation(info, llm, bool(parsed))
+    except Exception:
+        parsed, info = {}, finalize_invocation(info, llm, False)
+    # 归一化每条路线，并补齐缺失平台（保证与所选平台一一对应）
+    route_map = {}
+    for r in (parsed.get("routes") or []):
+        if isinstance(r, dict) and str(r.get("platform") or "").strip():
+            route_map[str(r.get("platform")).strip()] = {
+                "platform": str(r.get("platform")).strip(),
+                "concept": str(r.get("concept") or "").strip(),
+                "angle": str(r.get("angle") or "").strip(),
+                "visual_style": str(r.get("visual_style") or "").strip(),
+                "copy_direction": str(r.get("copy_direction") or "").strip(),
+                "image_prompt": str(r.get("image_prompt") or "").strip(),
+                "notes": str(r.get("notes") or "").strip(),
+            }
+    routes = [route_map.get(p, {"platform": p}) for p in platforms]
+    result = {
+        "title": (req.title or parsed.get("title") or "创意策略规划"),
+        "platforms": platforms,
+        "gen_image": req.gen_image,
+        "gen_video": req.gen_video,
+        "routes": routes,
+        "status": "draft",
+        "model_info": info,
+        "source": info.get("source", "local"),
+    }
+    rec = CreativePlan(owner_id=user.id, owner_name=user.username,
+                      title=result["title"], analysis_json=analysis,
+                      platforms=platforms, gen_image=req.gen_image, gen_video=req.gen_video,
+                      routes_json=routes, status="draft", model_info=info)
+    db.add(rec); db.commit(); db.refresh(rec)
+    result["id"] = rec.id
+    return CreativePlanResult(**result)
+
+
+@router.get("/creative-plan")
+def list_creative_plan(limit: int = 50, offset: int = 0, db: Session = Depends(get_db),
+                       _: User = Depends(require_roles(*CAN_EDIT))):
+    q = db.query(CreativePlan).order_by(CreativePlan.id.desc())
+    lim = max(1, min(int(limit or 50), 200)); off = max(0, int(offset or 0))
+    rows = q.offset(off).limit(lim).all()
+    return {"items": [_cp_to_dict(r) for r in rows], "total": q.count(), "limit": lim, "offset": off}
+
+
+@router.get("/creative-plan/{pid}")
+def get_creative_plan(pid: int, db: Session = Depends(get_db),
+                     _: User = Depends(require_roles(*CAN_EDIT))):
+    r = db.query(CreativePlan).filter_by(id=pid).first()
+    if not r:
+        raise HTTPException(404, "创意策略记录不存在")
+    return _cp_to_dict(r)
+
+
+@router.patch("/creative-plan/{pid}")
+def patch_creative_plan(pid: int, payload: dict, db: Session = Depends(get_db),
+                        _: User = Depends(require_roles(*CAN_EDIT))):
+    r = db.query(CreativePlan).filter_by(id=pid).first()
+    if not r:
+        raise HTTPException(404, "创意策略记录不存在")
+    allowed = {"status", "asset_count", "history_id", "routes_json", "title"}
+    for k, v in (payload or {}).items():
+        if k in allowed:
+            setattr(r, k, v)
+    db.commit(); db.refresh(r)
+    return _cp_to_dict(r)
 
 
 @router.get("/image-capabilities")

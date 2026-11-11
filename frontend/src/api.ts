@@ -968,6 +968,15 @@ export const api = {
       `/api/creative-analysis${qs(params)}`),
   creativeAnalysis: (id: number) =>
     req<any>(`/api/creative-analysis/${id}`),
+  // V4.52 创意工作台 · 创意策略 / 路线规划 + 历史库
+  creativePlan: (payload: { title?: string; analysis: any; platforms: string[]; gen_image?: boolean; gen_video?: boolean }) =>
+    req<any>('/api/creative-plan', { method: 'POST', body: JSON.stringify(payload) }),
+  updateCreativePlan: (id: number, payload: { status?: string; asset_count?: number; history_id?: number; routes_json?: any[]; title?: string }) =>
+    req<any>(`/api/creative-plan/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  creativePlans: (params: { limit?: number; offset?: number } = {}) =>
+    req<{ items: any[]; total: number; limit: number; offset: number }>(`/api/creative-plan${qs(params)}`),
+  creativePlanDetail: (id: number) =>
+    req<any>(`/api/creative-plan/${id}`),
   updateCreationHistory: (id: number, payload: {
     // V4.38：copy 允许附带 selected_copy / copy_variants，记录本次选用的创意文案
     platform?: string; lang?: string; copy?: any
