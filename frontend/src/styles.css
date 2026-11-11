@@ -1558,6 +1558,8 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cwb-ghost-btn:hover { border-color: #16a34a; color: #15803d; }
 
 /* ④ 生成成果：输入框下方 */
+.cwb-strategy { margin-top: 18px; display: flex; flex-direction: column; gap: 14px; }
+.cwb-strategy > .cwb-section:first-child { margin-top: 0; }
 .cwb-results { margin-top: 16px; }
 .cwb-results-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .cwb-results-title .cwb-sub { margin: 0; }
