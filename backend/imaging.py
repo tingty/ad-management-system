@@ -360,11 +360,11 @@ def text_budget(width: int, height: int, layout: str = "",
         max_width = max(12, int(w * spec["w"]))
     else:
         max_width = w - margin * 2
-    fs = int(min(w, h) * 0.105)
+    fs = int(min(w, h) * 0.082)
     cpl = max(6, int(max_width / (fs * 0.55)))
-    sfs = max(12, int(fs * 0.40))
+    sfs = max(12, int(fs * 0.42))
     sub_cpl = max(8, int(max_width / (sfs * 0.55)))
-    cfs = max(12, int(fs * 0.42))
+    cfs = max(12, int(fs * 0.46))
     return {"layout": eff, "headline_chars": cpl * 3,
             "sub_chars": sub_cpl * 3,
             "cta_chars": max(6, int((w * 0.6) / (cfs * 0.55))),
@@ -459,6 +459,29 @@ def _apply_local_veil(img: Image.Image, pal: dict, layout: str,
     color = (248, 250, 252) if pal.get("light") else pal["bg1"]
     layer = Image.new("RGB", (w, h), color)
     return Image.composite(layer, img, mask)
+
+
+def _draw_scrim(img: Image.Image, box, radius: int, color: tuple,
+                alpha: int, feather: float = 0.0) -> Image.Image:
+    """V4.63：用半透明圆角遮罩替代「实心面板」，文字区可读的同时透出背景场景。
+
+    - 遮罩为半透明（alpha<255），背景图在遮罩区仍可见 → 解决「不透明背景遮住场景」；
+    - 边缘做高斯羽化，无生硬矩形硬边 → 解决「品牌 / 按钮落在面板与背景交界」；
+    - 遮罩区域由文字安全容器算出，品牌 / 标题 / 副标 / CTA 全部落在容器内 → 统一锚点。
+    """
+    w, h = img.size
+    x0, y0, x1, y1 = [int(v) for v in box]
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return img
+    rgba = img.convert("RGBA")
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    ld.rounded_rectangle([x0, y0, x1, y1], radius=max(1, int(radius)),
+                         fill=(color[0], color[1], color[2], int(alpha)))
+    if feather > 0:
+        a = layer.split()[3].filter(ImageFilter.GaussianBlur(int(feather)))
+        layer.putalpha(a)
+    return Image.alpha_composite(rgba, layer).convert("RGB")
 
 
 # V4.42 / F06：每种内容版式的「主体保护区 / 文字区」（目标画布相对坐标）。
@@ -606,9 +629,9 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
     img = _prepare_bg(w, h, bg_path, pal, eff, dim_ratio,
                       composition=composition, trace=trace)
     img = _composite_product(img, product_image_path, eff)
-    d = ImageDraw.Draw(img)
 
     if eff == "banner":
+        d = ImageDraw.Draw(img)
         # 小横幅：标题 | CTA | Logo 三段各自独立、按顺序预留，互不重叠（T07）
         fs = max(11, int(h * 0.34))
         pf = _primary_font(fs)
@@ -647,87 +670,117 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
         light_card = spec["panel"] == "card"
         fg_c, sub_c = (pal["on_accent"], pal["on_accent"]) if light_card else (pal["fg"], pal["sub"])
 
-        # 版面底色：只在文字区，主体区保留 AI 底图 / 商品原色
-        if spec["panel"] == "bottom":
-            d.rectangle([0, int(h * 0.55), w, h], fill=pal["bg1"])
-        elif spec["panel"] == "right":
-            d.rectangle([int(w * 0.52), 0, w, h], fill=pal["bg1"])
-        elif spec["panel"] == "center":
-            d.rounded_rectangle([int(w * 0.06), int(h * 0.27), int(w * 0.94), int(h * 0.83)],
-                                radius=int(min(w, h) * 0.04), fill=pal["bg1"])
-        elif light_card:
-            d.rounded_rectangle([int(w * 0.07), int(h * 0.32), int(w * 0.93), int(h * 0.84)],
-                                radius=int(min(w, h) * 0.035), fill=pal["card"])
-        if spec["band"] == "top":
-            d.rectangle([0, 0, w, max(2, int(h * 0.018))], fill=accent_c)
-
-        fs = int(min(w, h) * 0.105)
+        # ---- C. 字阶精修：基准 0.105 → 0.082，按行数 / 占用宽度自适应，避免过大突兀 ----
+        dm = ImageDraw.Draw(img)  # 仅用于文字测量，不落像素
+        fs = int(min(w, h) * 0.082)
         hf = _primary_font(fs)
-        lines = _wrap(d, headline, hf, text_w, 4)
-        while len(lines) > 3 and fs > 18:
-            fs = int(fs * 0.88)
+        lines = _wrap(dm, headline, hf, text_w, 4)
+        while len(lines) > 3 and fs > 16:
+            fs = int(fs * 0.9)
             hf = _primary_font(fs)
-            lines = _wrap(d, headline, hf, text_w, 4)
+            lines = _wrap(dm, headline, hf, text_w, 4)
         if strict_text:
-            lines = _wrap(d, headline, hf, text_w, 4, allow_ellipsis=False)
-        sfs = max(12, int(fs * 0.40))
+            lines = _wrap(dm, headline, hf, text_w, 4, allow_ellipsis=False)
+        # 单行 / 短标题不再被放大到突兀：实际占用宽度不足文字区 62% 时再收一档
+        _hw = max((dm.textlength(ln, font=hf) for ln in lines), default=0)
+        if _hw < text_w * 0.62 and fs > 16:
+            fs = int(fs * 0.9)
+            hf = _primary_font(fs)
+            lines = _wrap(dm, headline, hf, text_w, 4)
+        sfs = max(12, int(fs * 0.42))
         sf = _primary_font(sfs)
-        sub_lines = (_wrap(d, sub, sf, text_w, 3,
+        sub_lines = (_wrap(dm, sub, sf, text_w, 3,
                            allow_ellipsis=not strict_text) if sub else [])
-        cfs = max(12, int(fs * 0.42))
+        cfs = max(12, int(fs * 0.46))
         cf = _primary_font(cfs)
-        bh = int(cfs * 2.1)
-        bw = int(d.textlength(cta, font=cf) + cfs * 2.2) if cta else 0
+        bh = int(cfs * 2.0)
+        bw = int(dm.textlength(cta, font=cf) + cfs * 2.0) if cta else 0
         if strict_text and bw > text_w:
             raise TextOverflowError("CTA 超出该版式文字区宽度")
 
-        line_h = int(fs * 1.24)
-        block = len(lines) * line_h
+        # 行高精修：更紧凑的呼吸感
+        line_h = int(fs * 1.12)
+        brand_h = 0
+        if brand:
+            bf = max(11, int(h * 0.024))
+            brand_h = bf + int(fs * 0.45)
+        block = brand_h + len(lines) * line_h
         if sub_lines:
-            block += int(fs * 0.22) + len(sub_lines) * int(sfs * 1.34)
+            block += int(fs * 0.18) + len(sub_lines) * int(sfs * 1.20)
         if cta:
-            block += int(h * 0.055) + bh
+            block += int(h * 0.04) + bh
 
+        # ---- B. 安全容器：品牌 / 标题 / 副标 / CTA 整体落在画布安全区，CTA 永不越界 ----
+        container_bottom = h - margin
         top = int(h * spec["top"])
-        # Logo 在右上角时，文字块整体下移到 Logo 安全区之外
         if logo_box and pad + text_w > logo_box[0] - 4:
             if top < logo_box[1] + logo_box[3] + 6:
                 top = logo_box[1] + logo_box[3] + 6
-        if top + block > h - margin:
-            top = max(int(h * 0.05), h - margin - block)
+        top_max = container_bottom - block
+        if top_max < int(h * 0.04):
+            top_max = int(h * 0.04)
+        top = max(int(h * 0.04), min(top, top_max))
 
-        if brand:
-            bf = max(11, int(h * 0.026))
-            _draw_text(d, (pad, max(int(h * 0.03), top - int(h * 0.075))),
-                       brand, bf, sub_c)
-
-        # 强调元素随版式变化，不再所有图共用一条短黄线
+        # 品牌在上、标题 / 副标 / CTA 依次向下，统一锚点
+        brand_y = top
+        headline_y = top + brand_h
+        y = headline_y
         if spec["rule"] == "left":
-            d.rectangle([pad, top, pad + max(3, int(fs * 0.09)), top + block - 1],
-                        fill=accent_c)
+            accent_box = [pad, y, pad + max(3, int(fs * 0.09)), y + len(lines) * line_h - 1]
             text_x = pad + max(3, int(fs * 0.09)) + int(fs * 0.28)
         else:
             rx = pad if spec["rule"] == "top" else int((w - int(text_w * 0.14)) / 2)
-            d.rectangle([rx, top - int(fs * 0.30), rx + int(text_w * 0.14),
-                         top - int(fs * 0.23)], fill=accent_c)
+            accent_box = [rx, y - int(fs * 0.30), rx + int(text_w * 0.14), y - int(fs * 0.23)]
             text_x = pad
+        y_sub = y + len(lines) * line_h
+        if sub_lines:
+            y_sub += int(fs * 0.18)
+        cta_y = (y_sub + int(h * 0.04)) if cta else y_sub
+        cta_bottom = cta_y + bh if cta else cta_y
 
-        y = top
+        # 文字安全容器包围盒（用于半透明遮罩，确保文字区可读且场景透出）
+        sx0 = max(0, int(pad - pad * 0.6))
+        sy0 = max(0, int(min(brand_y, accent_box[1]) - fs * 0.6))
+        sx1 = min(w, int((pad + text_w) + pad * 0.6))
+        sy1 = min(h, int(cta_bottom + fs * 0.6))
+        scrim_color = pal["card"] if light_card else pal["bg1"]
+        scrim_alpha = 175 if light_card else 135
+        feather = min(w, h) * 0.025
+        img = _draw_scrim(img, [sx0, sy0, sx1, sy1],
+                          radius=max(2, int(min(w, h) * 0.035)),
+                          color=scrim_color, alpha=scrim_alpha, feather=feather)
+        d = ImageDraw.Draw(img)
+
+        if spec["band"] == "top":
+            d.rectangle([0, 0, w, max(2, int(h * 0.018))], fill=accent_c)
+
+        if brand:
+            _draw_text(d, (pad, brand_y), brand, bf, sub_c)
+        d.rectangle(accent_box, fill=accent_c)
+        y = headline_y
         for ln in lines:
             _draw_text(d, (text_x, y), ln, fs, fg_c)
             y += line_h
         if sub_lines:
-            y += int(fs * 0.22)
+            y = y_sub
             for ln in sub_lines:
                 _draw_text(d, (text_x, y), ln, sfs, sub_c)
-                y += int(sfs * 1.34)
+                y += int(sfs * 1.20)
         if cta:
-            by = y + int(h * 0.055)
             bx = text_x if spec["rule"] != "center" else int(pad + (text_w - bw) / 2)
-            d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=int(bh / 2),
+            d.rounded_rectangle([bx, cta_y, bx + bw, cta_y + bh], radius=int(bh / 2),
                                 fill=accent_c)
-            _draw_text(d, (bx + cfs * 1.1, by + bh / 2 - cfs * 0.66),
+            _draw_text(d, (bx + cfs * 1.0, cta_y + bh / 2 - cfs * 0.66),
                        cta, cfs, pal["on_accent"])
+
+        if trace is not None:
+            trace["render"] = {
+                "layout": eff, "headline_font": fs, "sub_font": sfs, "cta_font": cfs,
+                "text_container": [sx0, sy0, sx1, sy1],
+                "scrim_alpha": scrim_alpha,
+                "cta_box": ([bx, cta_y, bx + bw, cta_y + bh] if cta else None),
+                "type_scale": "V4.63",
+            }
 
     img = _composite_logo(img, logo_path, w, h, logo_box, remove_white_logo_bg)
     img.save(out_path, "PNG", optimize=True)
