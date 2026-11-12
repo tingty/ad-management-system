@@ -352,6 +352,70 @@ class TestCW(unittest.TestCase):
                         f"recommendedPlatforms 必须为规则内规范平台名：{rec}")
 
 
+    def test_17_placement_as_platform_name_falls_back_to_default(self):
+        # V4.62 修复回归：创意工作台出图链路把平台名当 placement 占位（placement="Meta"），
+        # 并非真正指定版位。规则引擎必须回退到平台默认版位并成功出图，而非整体 422 / failed。
+        from media_platforms import validate_task_matrix, canonical_platform
+        # 1) 直接校验：placement == 平台名 应通过，且回退到默认版位（带 warning）
+        out = validate_task_matrix("Meta", [{"size": "1080x1080", "placement": "Meta"}],
+                                  total_pixels=1080 * 1080)
+        self.assertEqual(out["meta"]["platform"], "Meta")
+        self.assertEqual(len(out["slots"]), 1, "Meta + placement=Meta 必须解析出 1 个有效任务")
+        self.assertTrue(out["meta"]["placement_warnings"],
+                        "placement=Meta 应产生回退 warning，而非静默通过或失败")
+        self.assertEqual(out["slots"][0]["placement_id"], "feed",
+                        "回退应落到 Meta 默认版位 feed")
+        # 2) 真正错误版位仍必须严格报错（N04 不被破坏）
+        with self.assertRaises(Exception):
+            validate_task_matrix("Meta", [{"size": "1080x1080", "placement": "not_a_real_placement"}])
+
+    def test_18_generation_job_with_platform_name_placement_succeeds(self):
+        # 端到端：前端发出的 placement=Meta 任务矩阵必须能落库并跑出图片（沙箱无文生图供应商时为模板兜底）。
+        a = self.client.post("/api/cw/analyze",
+                             json={"url": "https://x.com/p", "platforms": ["Meta"], "demo_mode": True},
+                             headers=self.auth).json()
+        analysis = a.get("analysis") or {}
+        analysis = {**analysis, "channels": [{"platform": p, "reason": ""}
+                                            for p in (analysis.get("recommendedPlatforms") or ["Meta"])]}
+        copy = self.client.post("/api/media-campaign/copy",
+                                json={"analysis": analysis, "platform": "Meta", "lang": "en"},
+                                headers=self.auth).json()
+        fields = copy.get("fields") or {}
+        first = lambda v: (v[0] if isinstance(v, list) else v) or ""
+        variant = {"headline": str(first(fields.get("headline") or fields.get("title")))[:200],
+                   "sub": str(first(fields.get("description") or fields.get("body") or fields.get("primary_text")))[:200],
+                   "cta": str(first(fields.get("cta")))[:80],
+                   "brand": str(first(copy.get("brand")))[:40], "label": "Meta"}
+        payload = {
+            "images_request": {
+                "analysis": analysis, "platform": "Meta", "lang": "en",
+                "copy_fields": {}, "copy_variants": [variant],
+                "style_opts": {"creative_direction": "D01"},
+                # 关键：placement 使用平台名（与旧前端契约一致）
+                "slots": [{"size": "1080x1080", "placement": "Meta"}],
+                "spec_version": "", "total_pixels": 1080 * 1080,
+            },
+            "idempotency_key": "cw_placement_fallback_e2e",
+        }
+        r = self.client.post("/api/generation-jobs", json=payload, headers=self.auth)
+        self.assertEqual(r.status_code, 202, r.text)
+        job_id = r.json().get("job_id")
+        self.assertIsNotNone(job_id)
+        from job_service import run_job
+        import asyncio
+        asyncio.run(run_job(job_id))
+        db = SessionLocal()
+        try:
+            from models import GenerationJob
+            job = db.query(GenerationJob).filter_by(job_id=job_id).first()
+            self.assertNotEqual(job.status, "failed", f"placement=Meta 不应导致任务失败：{job.error}")
+            res = job.result_json or {}
+            self.assertGreaterEqual(len(res.get("images") or []), 1,
+                                   "placement=Meta 必须产出至少 1 张图片")
+        finally:
+            db.close()
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()

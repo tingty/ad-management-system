@@ -2214,3 +2214,14 @@
 **本次统一**：将规则引擎**规范平台名改为 `Meta`**，`Facebook / fb / instagram / ig` 全部作为**兼容别名**（出图任务矩阵 / 文案 schema 仍解析为 Meta）。涉及 `media_platforms.py`（`MEDIA_PLATFORMS` / `PLACEMENT_RULES` / `MEDIA_COPY_SCHEMA` 主键 + 别名表）、`media_ad.py`（COPY_SCHEMA 主键与默认值）、`providers.py`（平台分析字典键）、`routers.py`（提示词文案 + `rec_plat` 兜底 `['Meta','Google']`）、`prompt_catalog.py` 平台列表、`frontend`（`DEFAULT_PLATFORMS` 与菜单描述）；并把 `SPEC_VERSION` 由 `2026-11-10.3` 升到 `2026-11-12.1` 标记该规则变更。旧数据/旧调用中的 `Facebook` 仍经别名解析为 `Meta`，不破坏历史记录。
 
 **验证**：`run_all.py` 163 项全过；`tsc` + `vite build` 通过；`prepare_release --check` 通过。
+
+### 热修复（2026-11-12）：出图任务因 placement 传平台名被整体拒绝（Meta: undefined）
+
+**根因**：创意工作台出图链路构造任务矩阵时 `slots = sizes.map(size => ({size, placement: p}))`，把**平台名 `"Meta"` 当作版位（placement）**传给后端。后端 `validate_task_matrix` 自 V4.44/N04 起严格执行「未知版位不静默降级」，`"Meta"` 不是合法版位（合法为 feed/stories/reels），于是整批校验失败 → 出图任务 `failed`；同时前端轮询只更新 `status/progress`，从不把后端返回的真实 `error` 写回 `jobs` 数组，失败任务 `error` 始终为 `undefined`，界面渲染成 `Meta: undefined`，掩盖了真实错误。
+
+**修复**
+- `backend/media_platforms.py`：新增 `default_placement(platform, size)`，取平台默认版位（优先 `default` 标记、且尺寸匹配者）；`validate_task_matrix` 在 `resolve_placement` 抛错且传入 `placement` 恰好等于平台名（即「用平台名当版位（placement）传入」）时，回退到默认版位并保留 warning，而非整体拒绝；真正写错版位（如 `"foobar"`）仍按 N04 严格报错。
+- `frontend/src/pages/CreativeWorkbench.tsx`：轮询任务状态时把后端返回的真实 `error` 写回 `jobs`；失败文案对 `undefined` 兜底为可读提示，不再显示 `Meta: undefined`。
+- `tests/test_cw.py`：新增 `test_17`（placement=平台名回退默认版位 feed + warning，真错版位仍报错）与 `test_18`（端到端：placement=Meta 任务矩阵落库并跑出图片）。
+
+**验证**：`run_all.py` 165 项全过（原 163 + 新增 2）；`tsc` + `vite build` 通过；`prepare_release --check` 通过。

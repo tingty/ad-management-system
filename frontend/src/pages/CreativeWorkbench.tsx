@@ -354,7 +354,7 @@ export default function CreativeWorkbench() {
           for (let k = 0; k < 80; k++) {
             await sleep(1500)
             try { st = await api.generationJob(jobId) } catch { continue }
-            setJobs(j => j.map(x => x.platform === p && x.route === route ? { ...x, status: st?.status || x.status, progress: st?.progress ?? x.progress } : x))
+            setJobs(j => j.map(x => x.platform === p && x.route === route ? { ...x, status: st?.status || x.status, progress: st?.progress ?? x.progress, error: st?.error || x.error } : x))
             if (['succeeded', 'partial_success', 'failed', 'canceled'].includes(st?.status)) break
           }
           let imgs: any[] = (st?.result?.images || []).slice()
@@ -770,7 +770,7 @@ export default function CreativeWorkbench() {
 
             {jobs.filter(j => j.status === 'failed').length > 0 && (
               <div className="err" style={{ marginTop: 10 }}>
-                {jobs.filter(j => j.status === 'failed').map(j => `${j.platform}：${j.error}`).join('；')}
+                {jobs.filter(j => j.status === 'failed').map(j => `${j.platform}：${j.error || '生成失败（无详细错误信息，请重试或联系管理员）'}`).join('；')}
               </div>
             )}
 

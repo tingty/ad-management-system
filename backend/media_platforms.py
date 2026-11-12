@@ -423,6 +423,33 @@ def match_placement(platform: str, placement: str = "", placement_id: str = "") 
     return {}
 
 
+def default_placement(platform: str, size: str = "") -> dict:
+    """返回平台的默认版位（优先 default 标记；给定 size 落在某版位尺寸内时优先返回该版位）。
+
+    用于「前端把平台名当 placement 占位」（如 placement="Meta"）的场景：此时并非真正指定了
+    某版位，应回退到平台默认版位，而不是整体拒绝生成。真正写错版位（如 "foobar"）不应走这里。
+    """
+    key = canonical_platform(platform)
+    spec = MEDIA_PLATFORM_MAP.get(key)
+    if not spec:
+        return {}
+    placements = spec.get("placements", [])
+    if not placements:
+        return {}
+    sz = (size or "").lower().replace("×", "x")
+    if sz:
+        for pl in placements:
+            if pl.get("default") and sz in {s.lower() for s in (pl.get("sizes") or [])}:
+                return {**pl, **placement_rule(key, pl["id"])}
+        for pl in placements:
+            if sz in {s.lower() for s in (pl.get("sizes") or [])}:
+                return {**pl, **placement_rule(key, pl["id"])}
+    for pl in placements:
+        if pl.get("default"):
+            return {**pl, **placement_rule(key, pl["id"])}
+    return {**placements[0], **placement_rule(key, placements[0]["id"])}
+
+
 def media_rules_payload() -> dict:
     """`GET /api/media-rules`：把规则版本与限制显式暴露给前端，避免前后端各写一套。"""
     from industry_profiles import list_profiles
@@ -493,8 +520,18 @@ def validate_task_matrix(platform: str, slots: list, total_pixels: int | None = 
                 pl = resolve_placement(key, slot.get("placement") or "",
                                        slot.get("placement_id") or "")
             except MediaRuleError as e:
-                errors.append(f"第 {i + 1} 个任务：" + "；".join(e.errors))
-                continue
+                # V4.62 修复：前端出图链路常把平台名当 placement 占位（如 placement="Meta"），
+                # 这并非真正指定了某版位。此类「未真正指定版位」回退到平台默认版位，避免整批拒绝。
+                # 真正写错版位（如 "foobar"）仍按 N04 严格报错。
+                pv = str(slot.get("placement") or "").strip()
+                if pv and canonical_platform(pv) == key:
+                    pl = default_placement(key, size)
+                    placement_warnings.append(
+                        f"第 {i + 1} 个任务 placement={pv!r} 视为未指定版位，"
+                        f"已回退到默认版位 {pl.get('id') or '（无）'}")
+                else:
+                    errors.append(f"第 {i + 1} 个任务：" + "；".join(e.errors))
+                    continue
             pl_sizes = {str(s).lower() for s in (pl.get("sizes") or [])}
             if size.lower().replace("×", "x") not in pl_sizes:
                 errors.append(
