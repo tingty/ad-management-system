@@ -2270,4 +2270,17 @@
 - **D. 统一强调元素**：短黄条 / 顶带 / 圆角半径沿用既有 `rule`/`band` 规则，仅清理冗余分支。
 - `render_ad_png` 新增 `trace["render"]`（layout / 各字号 / text_container / scrim_alpha / cta_box）供线上排障。
 
-**验证**：新增 `tests/test_imaging_render.py` 6 项断言（场景透出方差 > 100、CTA 在画布与容器内、标题字号 ≤ 0.09*min、trace 字段完整、长标题自适应收缩、banner 仍可用）；`run_all.py` **175 项全过**（169 + 6）；`prepare_release --check` 通过。`
+**验证**：新增 `tests/test_imaging_render.py` 6 项断言（场景透出方差 > 100、CTA 在画布与容器内、标题字号 ≤ 0.09*min、trace 字段完整、长标题自适应收缩、banner 仍可用）；`run_all.py` **175 项全过**（169 + 6）；`prepare_release --check` 通过。
+
+### 热修复（2026-11-12）：创意工作台选 Google 报「尺寸 160x600 与版位 display_mrec 不匹配」整批失败
+
+**目标**：用户在「创意工作台」输入落地页、选择 Google、选一条创意路线后，生成失败并提示「媒体规则校验未通过：第 2 个任务尺寸 160x600 与版位 display_mrec(展示广告 MREC) 不匹配；该版位仅支持 300x250、336x280」。
+
+**根因（类型级，非单页）**：前端为每个平台允许尺寸构造任务时统一填 `placement="Google"`（把平台名作为版位兜底值）；后端 `validate_task_matrix` 将 `"Google"` 视为「未真正指定版位」，回退调用 `default_placement("Google", size)`。而 `160x600` 当时在 Google 目录里**没有任何版位声明**（仅出现在 `image_sizes`，属孤儿尺寸；真实 Skyscraper 版位只登记在 Adsterra）。`default_placement` 在尺寸找不到对应版位时回退到第一个 default 版位 `display_mrec`，于是 160x600 与 display_mrec 不匹配 → 整批 `MediaRuleError` 被拒。该模式会在任意「允许尺寸含孤儿尺寸」的平台复现。
+
+**修复（类型级统一方案）**
+- **A. 补齐目录孤儿尺寸**：Google 新增版位 `display_skyscraper`（sizes=["160x600"]）并登记交付语义（ad_product / asset_role=display_banner / os=Web），使 `160x600` 成为可正确交付的 Google 尺寸。
+- **B. default_placement 信号化**：尺寸在目录中无任何版位支持时返回空字典 `{}` 作为「无法解析」信号，不再回退到不匹配的默认版位（旧逻辑返回首个 default 版位，正是本 bug 的直接成因）。
+- **C. validate_task_matrix 兜底改为丢弃告警**：`placement` 为平台名兜底、且 `default_placement` 返回空（孤儿尺寸）时，丢弃该任务并写入 `placement_warnings`，而非用不匹配版位导致整批失败；真正写错版位（如 "foobar"）仍按 N04 严格报错。
+
+**验证**：新增 `tests/test_media_rules_160600.py` 4 项断言（160x600 → display_skyscraper；全平台无孤儿尺寸自检；Google 全尺寸 + placement="Google" 整批通过且 160x600 正确落版位；default_placement 对真孤儿返回空）；复现原失败调用已 `VALIDATE OK`（10 个任务全部正确分配版位）；`160x600` 在 offer/banner/hero 三种版式均可正常渲染。

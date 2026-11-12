@@ -120,6 +120,7 @@ PLACEMENT_RULES: dict[str, dict[str, dict]] = {
         "display_leader": {"ad_product": "Google Display (上传式展示图)", "asset_role": "display_banner", "os": "Web"},
         "display_mobile": {"ad_product": "Google Display (上传式展示图)", "asset_role": "display_banner", "os": "Android/iOS Web"},
         "display_half": {"ad_product": "Google Display (上传式展示图)", "asset_role": "display_banner", "os": "Web"},
+        "display_skyscraper": {"ad_product": "Google Display (上传式展示图)", "asset_role": "display_banner", "os": "Web"},
         "uac": {"ad_product": "Google App Campaign (UAC)", "asset_role": "app_portrait", "os": "Android/iOS"},
     },
     "Unity": {
@@ -199,6 +200,8 @@ MEDIA_PLATFORMS = [
              "desc": "应用广告系列竖版大图", "default": True},
             {"id": "display_half", "name": "展示广告 半页", "sizes": ["300x600", "970x250"],
              "desc": "大尺寸高曝光", "default": False},
+            {"id": "display_skyscraper", "name": "展示广告 Skyscraper", "sizes": ["160x600"],
+             "desc": "竖条高曝光（Wide Skyscraper）", "default": False},
         ],
     },
     {
@@ -444,6 +447,10 @@ def default_placement(platform: str, size: str = "") -> dict:
         for pl in placements:
             if sz in {s.lower() for s in (pl.get("sizes") or [])}:
                 return {**pl, **placement_rule(key, pl["id"])}
+        # V4.62 修复：尺寸在目录中没有任何版位支持（孤儿尺寸，如补齐前 Google 的 160x600）
+        # 时，返回空字典作为「无法解析」信号，让调用方丢弃该任务而非回退到不匹配的默认版位
+        # （旧逻辑会返回第一个 default 版位，导致 尺寸/版位 不匹配被整批拒绝）。
+        return {}
     for pl in placements:
         if pl.get("default"):
             return {**pl, **placement_rule(key, pl["id"])}
@@ -526,9 +533,17 @@ def validate_task_matrix(platform: str, slots: list, total_pixels: int | None = 
                 pv = str(slot.get("placement") or "").strip()
                 if pv and canonical_platform(pv) == key:
                     pl = default_placement(key, size)
-                    placement_warnings.append(
-                        f"第 {i + 1} 个任务 placement={pv!r} 视为未指定版位，"
-                        f"已回退到默认版位 {pl.get('id') or '（无）'}")
+                    pl_sizes = {str(s).lower() for s in (pl.get("sizes") or [])}
+                    # 尺寸在目录中没有任何版位支持（孤儿尺寸）：丢弃该任务并告警，
+                    # 而不是用不匹配的默认版位导致整批失败（V4.62 类型级兜底）。
+                    if pl and size.lower().replace("×", "x") in pl_sizes:
+                        placement_warnings.append(
+                            f"第 {i + 1} 个任务 placement={pv!r} 视为未指定版位，"
+                            f"已回退到默认版位 {pl.get('id') or '（无）'}")
+                    else:
+                        placement_warnings.append(
+                            f"第 {i + 1} 个任务尺寸 {size} 在 {key} 无对应版位，已跳过该尺寸（不生成）")
+                        continue
                 else:
                     errors.append(f"第 {i + 1} 个任务：" + "；".join(e.errors))
                     continue
