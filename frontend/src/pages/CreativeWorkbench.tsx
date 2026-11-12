@@ -903,12 +903,10 @@ export default function CreativeWorkbench() {
                   </div>
                 )
               })}
-              {assets.length === 0 && (
+              {assets.length === 0 && (view === 'analyzing' || view === 'generating') && (
                 <div className="cwb-results-empty">
                   {view === 'analyzing' && '正在分析产品，请稍候…'}
                   {view === 'generating' && '正在生成素材，请稍候…'}
-                  {!['analyzing', 'generating'].includes(view) &&
-                    '输入产品链接并选择媒体平台，点击「开始分析」后，生成的图片 / 视频素材将展示在这里。'}
                 </div>
               )}
             </div>
