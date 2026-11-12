@@ -365,6 +365,46 @@ def archive_result(db: Session, job: GenerationJob, result: dict) -> dict:
                                  "images_json 仅为最近 80 张展示缓存，完整清单按 history_id 分页查询")}
 
 
+def _summarize_failed_error(result: dict) -> str:
+    """从生成结果汇总失败原因，写回 GenerationJob.error（Fix 3 / F6）。
+
+    优先级：逐图 task_results 的 reason/error（failed/needs_revision/invalid）
+            → issues[].message → result.note。
+    按出现顺序去重（大小写不敏感），并限制总长度，避免重复刷屏；
+    仅用于 failed 终态，succeeded / canceled 不受影响。不新增接口或数据库字段。
+    """
+    if not isinstance(result, dict):
+        return ""
+    reasons: list[str] = []
+    for tr in (result.get("task_results") or []):
+        if not isinstance(tr, dict):
+            continue
+        st = str(tr.get("status") or "")
+        if st in ("failed", "needs_revision", "invalid"):
+            msg = str(tr.get("reason") or tr.get("error") or "").strip()
+            if msg:
+                reasons.append(msg)
+    for it in (result.get("issues") or []):
+        if isinstance(it, dict):
+            msg = str(it.get("message") or it.get("error") or "").strip()
+        elif isinstance(it, str):
+            msg = it.strip()
+        else:
+            msg = ""
+        if msg:
+            reasons.append(msg)
+    seen, uniq = set(), []
+    for r in reasons:
+        k = r.lower()
+        if k not in seen:
+            seen.add(k)
+            uniq.append(r)
+    if not uniq:
+        note = str(result.get("note") or "").strip()
+        return note[:300]
+    return "；".join(uniq)[:300]
+
+
 async def run_job(job_id: str) -> None:
     """后台执行：规则校验 → 生成 → 服务端归档 → 定稿。任何异常都落库为 failed。"""
     await _set_status(job_id, status="running", progress=5)
@@ -437,10 +477,16 @@ async def run_job(job_id: str) -> None:
             s["vendor_request_id"] = tr.get("request_id") or tr.get("vendor_request_id")
             s["outcome_note"] = str(tr.get("reason") or tr.get("error") or "")[:200]
         subtasks = [by_idx[k] for k in sorted(by_idx)]
+        # Fix 3 / F6：failed 终态若后端未显式带 error（如逐图全部 needs_revision 被阻断），
+        # 从 task_results/issues/note 汇总真实原因写入 job.error，避免前端显示 undefined。
+        failed_error = ""
+        if status == "failed" and not canceled:
+            failed_error = _summarize_failed_error(result)
         await _set_status(
             job_id, status=status, progress=100, result_json=result,
             subtasks_json=subtasks,
-            error=("任务已取消；已生成部分仍完成归档，不丢素材" if canceled else ""),
+            error=(failed_error if failed_error
+                   else ("任务已取消；已生成部分仍完成归档，不丢素材" if canceled else "")),
             finished_at=utcnow())
     except Exception as e:
         # 生成阶段异常时已派发子任务结果未知，不得当作可安全重试的 failed

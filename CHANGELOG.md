@@ -2225,3 +2225,19 @@
 - `tests/test_cw.py`：新增 `test_17`（placement=平台名回退默认版位 feed + warning，真错版位仍报错）与 `test_18`（端到端：placement=Meta 任务矩阵落库并跑出图片）。
 
 **验证**：`run_all.py` 165 项全过（原 163 + 新增 2）；`tsc` + `vite build` 通过；`prepare_release --check` 通过。
+
+### 热修复（2026-11-12）：候选文案被拼接成超长文案 → 版位预算溢出 → 零图（Meta: undefined 的真实主因）
+
+**根因**（依据《创意工作台Meta生成失败原因与最小修复方案》，审查 `f266cac`）：上一轮把「Meta/Facebook 名称不一致」误判为本轮根因；真实且可复现的故障路径为——工作台在 `mediaCopy` 取得 Meta 的 headline 候选数组后，映射函数 `one(v)` 对数组执行 `filter(Boolean).join(" / ")`，把 3 个各 40 字符候选拼成 **126 字符单条图内文案**。该长度超过 Meta 各版位图内排版预算（如 1080×1080/1350/1920 仅 45 字符），`build_overlay_text` 将每个尺寸都记为 `needs_revision` 并跳过；所有尺寸均跳过时整批 `failed`、图片为空。此时 `job.status=failed` 但顶层 `error` 为空（后端未在 failed 时汇总原因），前端轮询只回写 `status/progress`、不写 `error`，失败任务 `error=undefined` → 界面显示 `Meta: undefined`，掩盖了真实原因。
+
+**修复（对应方案 Fix 1~4）**
+- `frontend/src/pages/CreativeWorkbench.tsx`：
+  - Fix 1：候选文案映射由「拼接」改为「取单个有效值」——新增 `firstNonEmpty`（数组取首个非空字符串、字符串保持原值、null 返回空）与 `pickFirstField`（在 description/body/primary_text 多个备选字段中取首个有效值，避免空数组阻断 body 回退）；`headline/sub/cta/brand` 均按单个值处理；全量候选仍保留在 `copiesByPlat[p].fields` 中，不删除已有文案；维持每路线一组 variants、**不增加任务数量**。
+  - Fix 1/F4：文案生成失败或 `validation.status==='invalid'` 时记录 `copyFailures[平台]`，**不提交该平台空文案出图任务**，并在结果区登记具体失败原因（不浪费生成额度）。
+  - Fix 2：轮询与最终回写均填充 `error`；失败列表渲染带 `route.name` 与 `jobId`；最外层零图汇总优先展示已捕获的具体错误，**不再用通用「调整媒体或重试」覆盖真实异常**。
+  - Fix 4：文案归档 `copiesByPlat[primary]` 判空（`primaryCopy ? ... : {}`），避免「全部文案失败 → 对象不存在 → TypeError」被末尾通用提示吞掉。
+- `backend/job_service.py`：Fix 3——新增 `_summarize_failed_error(result)`，在 `run_job` 的 `failed` 终态从 `task_results`（failed/needs_revision/invalid 的 reason/error）、`issues[].message`、`result.note` 汇总真实原因，去重并限长后写入 `job.error`；succeeded/canceled 不受影响，不新增接口或数据库字段。
+- `tests/test_cw.py`：新增 `test_19`（单值 40 字符标题正常出图、变体 headline 不含拼接）、`test_20`（复现 126 字符拼接超预算被阻断且 `job.error` 含预算原因）、`test_21`（`_summarize_failed_error` 单元：汇总/去重/限长/空结果）、`test_22`（空 copy_variants 任务不抛 500）。
+
+**验证**：`run_all.py` 169 项全过（原 165 + 新增 4）；`tsc` + `vite build` 通过；`prepare_release --check` 通过。
+**说明**：仅消除 `undefined` 不算修复完成；本次同时证明「正常单值文案能生成图片、异常文案能显示明确原因」。线上真实模型生成成功与生产部署需受控验证 F8（复用用户原产品/媒体/路线）后再行报告，未获真实输出不宣告生产验收。

@@ -259,23 +259,52 @@ export default function CreativeWorkbench() {
     const targets = selected
     const copiesByPlat: Record<string, any> = {}
     const variantsByPlat: Record<string, any[]> = {}
+    // 文案生成失败的平台及其原因（Fix 1 / F4：不提交空文案出图任务，但需登记原因以便页面展示）
+    const copyFailures: Record<string, string> = {}
+
+    // 候选文案取「单个有效值」；严禁把多个候选用 " / " 拼接成超长文案
+    // （拼接会使所有版位排版预算溢出被阻断 → 零图，见最小修复方案 F1/F4）
+    const firstNonEmpty = (v: any): string => {
+      if (Array.isArray(v)) {
+        const hit = v.find((x: any) => typeof x === 'string' && x.trim())
+        return (hit as string)?.trim() || ''
+      }
+      return typeof v === 'string' ? v.trim() : ''
+    }
+    // 在多个备选字段中取第一个含有效文案的字段，避免空数组阻止 body 回退
+    const pickFirstField = (...fields: any[]): string => {
+      for (const fld of fields) {
+        const v = firstNonEmpty(fld)
+        if (v) return v
+      }
+      return ''
+    }
+    // 仅当文案校验明确 invalid 时阻断出图；needs_revision 仍放行，由后端严格校验给出具体原因
+    const copyIsInvalid = (cr: any): boolean => !!(cr?.validation && cr.validation.status === 'invalid')
+
     for (const p of targets) {
       try {
         setProgressText(`正在为 ${p} 生成广告文案…`)
         const cr: any = await api.mediaCopy({ analysis, platform: p, lang: 'en' }).catch(() => null)
-        if (cr && cr.fields) {
+        if (cr && cr.fields && !copyIsInvalid(cr)) {
+          // 全量候选继续保留在 copiesByPlat[p].fields 中，不删除已有文案；出图仅取单个有效值
           copiesByPlat[p] = { fields: cr.fields, schema: cr.schema, brand: cr.brand, model_info: cr.model_info, validation: cr.validation }
           const f = cr.fields
-          const one = (v: any) => (Array.isArray(v) ? v.filter(Boolean).join(' / ') : (v == null ? '' : String(v)))
           variantsByPlat[p] = [{
-            headline: one(f.headline ?? f.title) || '',
-            sub: one(f.description ?? f.body ?? f.primary_text) || '',
-            cta: one(f.cta) || '',
-            brand: one(cr.brand) || '',
+            headline: firstNonEmpty(f.headline ?? f.title),
+            sub: pickFirstField(f.description, f.body, f.primary_text),
+            cta: firstNonEmpty(f.cta),
+            brand: firstNonEmpty(cr.brand),
             label: p,
           }]
+        } else {
+          copyFailures[p] = !cr
+            ? '文案生成失败（mediaCopy 未返回结果）'
+            : `文案校验未通过（${cr?.validation?.status || 'invalid'}）：${cr?.validation?.message || '请调整分析或文案后重试'}`
         }
-      } catch { /* 文案生成失败不阻断出图 */ }
+      } catch {
+        copyFailures[p] = '文案生成发生异常'
+      }
     }
     setCopiesByPlatform(copiesByPlat)
     // V4.61 / B4：把本次产出的品牌沉淀进素材库（去重键=品牌名）；含用户复用指定的品牌
@@ -306,6 +335,8 @@ export default function CreativeWorkbench() {
     const activeRoutes = routes.filter(r => r.selected)
     const collected: any[] = []
     const finalStates: string[] = []
+    // 收集本次各平台/路线失败的具体原因，用于页面展示（Fix 2/3：优先展示真实错误而非通用提示）
+    const capturedErrors: string[] = []
     // A2（V4.57）：总任务数 = 平台数 × 选中路线数，进度分母据此计算（不再按平台数）。
     const totalJobs = targets.length * Math.max(1, activeRoutes.length)
     let done = 0
@@ -321,6 +352,14 @@ export default function CreativeWorkbench() {
         // A2：每个平台 × 每条选中路线各生成一组，保证多选路线都被覆盖（单平台也不会只用第一条）。
         for (const route of routeList) {
           genIdx++
+          // F4：文案未就绪的平台不提交空文案出图任务，直接登记失败原因（文本原因已记录，不浪费生成额度）
+          if (copyFailures[p]) {
+            const reason = copyFailures[p]
+            const tag = `${p}${route?.name ? '·' + route.name : ''}`
+            capturedErrors.push(`${tag}：${reason}`)
+            setJobs(j => [...j, { platform: p, jobId: null, status: 'failed', progress: 0, images: [], route, error: reason }])
+            finalStates.push('failed'); done++; setProgressPct(Math.round(done / totalJobs * 100)); continue
+          }
           setProgressText(`正在为 ${p} · ${route?.name || '默认'} 生成推广图片…`)
           const slots = sizes.map(size => ({ size, placement: p }))
           const style_opts: any = {
@@ -345,7 +384,9 @@ export default function CreativeWorkbench() {
           let job: any
           try { job = await api.createGenerationJob(payload) }
           catch (e: any) {
-            setJobs(j => j.map(x => x.platform === p && x.route === route ? { ...x, status: 'failed', error: e?.message || '创建失败' } : x))
+            const msg = e?.message || '创建失败'
+            setJobs(j => j.map(x => x.platform === p && x.route === route ? { ...x, status: 'failed', error: msg } : x))
+            capturedErrors.push(`${p}${route?.name ? '·' + route.name : ''}：${msg}`)
             finalStates.push('failed'); done++; setProgressPct(Math.round(done / totalJobs * 100)); continue
           }
           const jobId = job?.job_id
@@ -358,6 +399,10 @@ export default function CreativeWorkbench() {
             if (['succeeded', 'partial_success', 'failed', 'canceled'].includes(st?.status)) break
           }
           let imgs: any[] = (st?.result?.images || []).slice()
+          // 轮询终态若 failed 且后端带回具体错误（Fix 3 汇总），记录以便页面优先展示
+          if (st?.status === 'failed' && st?.error) {
+            capturedErrors.push(`${p}${route?.name ? '·' + route.name : ''}：${st.error}`)
+          }
           if (!imgs.length) {
             try { const got: any = await api.creativeAssets({ job_id: jobId }); imgs = (got?.items || []).slice() } catch { /* 兜底 */ }
           }
@@ -372,14 +417,16 @@ export default function CreativeWorkbench() {
       // V4.60 / B3：把生成的文案落库（主平台字段供 copy_as_text 兼容，platform_copies 保留多平台全量）
       if (hid) {
         const primary = Object.keys(copiesByPlat)[0] || selected[0] || ''
+        // Fix 4：文案全部失败时 copiesByPlat[primary] 可能不存在，必须判空，禁止未定义属性读取
+        const primaryCopy = primary ? copiesByPlat[primary] : undefined
         const copyPayload: any = {
           platform: primary,
           lang: 'en',
-          fields: primary ? copiesByPlat[primary].fields : {},
-          schema: primary ? copiesByPlat[primary].schema : [],
-          brand: primary ? copiesByPlat[primary].brand : '',
-          model_info: primary ? copiesByPlat[primary].model_info : {},
-          copy_variants: primary ? variantsByPlat[primary] : [],
+          fields: primaryCopy ? primaryCopy.fields : {},
+          schema: primaryCopy ? primaryCopy.schema : [],
+          brand: primaryCopy ? primaryCopy.brand : '',
+          model_info: primaryCopy ? primaryCopy.model_info : {},
+          copy_variants: primaryCopy ? variantsByPlat[primary] : [],
           platform_copies: copiesByPlat,
         }
         await api.updateCreationHistory(hid, { copy: copyPayload }).catch(() => {})
@@ -397,8 +444,17 @@ export default function CreativeWorkbench() {
       if (planId) await api.updateCreativePlan(planId, { status: 'done', asset_count: okImages, history_id: hid ?? undefined }).catch(() => {})
     } else {
       // 零图 / 全失败：进入结果区以便重试，但不宣称完成、不写 status=done。
-      setError((anyFailed ? '本次生成失败（部分平台未返回素材）' : '本次生成超时或未返回素材')
-        + '，请调整媒体或重试（可重试或调整媒体后继续）')
+      // 优先展示已捕获的具体错误（Fix 2/3），仅当无任何具体原因时退回通用提示，避免覆盖真实异常。
+      const seen = new Set<string>()
+      const uniqErrs = capturedErrors.filter(Boolean).filter(e => {
+        const k = e.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true
+      })
+      if (uniqErrs.length) {
+        setError(uniqErrs.join('；'))
+      } else {
+        setError((anyFailed ? '本次生成失败（部分平台未返回素材）' : '本次生成超时或未返回素材')
+          + '，请调整媒体或重试（可重试或调整媒体后继续）')
+      }
       setView('result')
     }
   }
@@ -770,7 +826,11 @@ export default function CreativeWorkbench() {
 
             {jobs.filter(j => j.status === 'failed').length > 0 && (
               <div className="err" style={{ marginTop: 10 }}>
-                {jobs.filter(j => j.status === 'failed').map(j => `${j.platform}：${j.error || '生成失败（无详细错误信息，请重试或联系管理员）'}`).join('；')}
+                {jobs.filter(j => j.status === 'failed').map(j => {
+                  const tag = [j.platform, j.route?.name].filter(Boolean).join('·')
+                  const jid = j.jobId ? `(${j.jobId})` : ''
+                  return `${tag}${jid}：${j.error || '生成失败（无详细错误信息，请重试或联系管理员）'}`
+                }).join('；')}
               </div>
             )}
 
