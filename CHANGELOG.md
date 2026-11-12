@@ -2194,3 +2194,15 @@
 
 **验证**
 - 系统版本与 CHANGELOG 版本一致性由发版校验强制检查；该条目由本次改动文件自动归纳。
+
+### 热修复（2026-11-12）：落地页分析后无文案 / 无素材图片
+
+**根因**：创意工作台前端 `DEFAULT_PLATFORMS` 与后端 `analyze` 兜底均使用已弃用别名 `Meta`，但媒体规则引擎只认 `Facebook`。用户选择 Meta 后，`/api/media-campaign/copy` 与出图任务矩阵校验返回 422，被前端 `.catch(()=>null)` 静默吞掉，表现为「无分析结果 / 无文案 / 无素材图片」。
+
+**修复**
+- `backend/media_platforms.py`：`_PLATFORM_ALIASES` 增加 `Meta/fb/instagram/ig → Facebook` 历史别名兼容（治本，文案 + 出图同时修复）
+- `backend/routers.py`：`rec_plat` 兜底由 `['Meta','Google']` 改为 `['Facebook','Google']`；`_build_cw_result` 对 `recommendedPlatforms / channels` 做平台名归一（去重 + 别名收敛），杜绝弃用名外泄
+- `frontend/src/pages/CreativeWorkbench.tsx`：`DEFAULT_PLATFORMS` 由 `['Meta',...]` 改为规范名 `['Facebook',...]`
+- `tests/test_cw.py`：新增 `test_15`（Meta 别名端到端通过 mediaCopy / 出图）与 `test_16`（recommendedPlatforms 必为规范名）
+
+**验证**：`run_all.py` 163 项全过；`tsc` + `vite build` 通过；`prepare_release --check` 通过。
