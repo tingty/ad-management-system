@@ -408,8 +408,10 @@ export default function CreativeWorkbench() {
   function downloadSelected() {
     const f = selectedFiles(); if (f.length) window.open(api.mediaZipUrl(f, '创意工作台素材'), '_blank')
   }
-  // A5（V4.57）：独立「下载全部」，与「下载已选」解耦，未勾选也能打包全部素材。
+  // B5：优先用历史导出包（含图片/视频 + ad_copy.csv + delivery_notes.md + 文案/分析）；
+  // 仅在缺少 historyId 时回退到纯素材 ZIP（理论上 generate 后必有 historyId）。
   function downloadAll() {
+    if (historyId) { window.open(api.historyItemZipUrl(historyId), '_blank'); return }
     const f = assets.filter(a => a.file).map(a => a.file)
     if (f.length) window.open(api.mediaZipUrl(f, '创意工作台素材'), '_blank')
   }
@@ -774,7 +776,7 @@ export default function CreativeWorkbench() {
             {view === 'result' && assets.length > 0 && (
               <div className="cwb-confirm">
                 <button className="cwb-link-btn" onClick={resetAll}>新的创作</button>
-                <button className="cwb-gen-btn sm" onClick={downloadAll}>打包下载全部</button>
+                <button className="cwb-gen-btn sm" onClick={downloadAll}>导出交付包</button>
               </div>
             )}
           </section>

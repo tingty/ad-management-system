@@ -17,6 +17,7 @@ import json
 import mimetypes
 import os
 import re
+import csv
 import zipfile
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -364,8 +365,124 @@ def build_files_zip(files: list[str], metas: list[dict] | None = None,
     return buf
 
 
+# ----------------------------- B5：交付增强（ad_copy.csv + delivery_notes.md） -----------------------------
+
+def _flat(v) -> str:
+    """把字段值规整为单行字符串（列表用 / 连接）。"""
+    if v is None:
+        return ""
+    if isinstance(v, list):
+        return " / ".join(str(x) for x in v if x not in (None, ""))
+    return str(v)
+
+
+def _copy_rows(copy_json: dict, default_platform: str = "-") -> list:
+    """从 copy_json 提取多平台文案行：平台 / 版位 / 标题 / 副标题 / 行动号召 / 品牌。
+
+    优先取 platform_copies（B3 多平台主文案），再补充 copy_variants（出图组合），
+    最后回退顶层 fields（单平台）。
+    """
+    c = copy_json or {}
+    rows = []
+    pc = c.get("platform_copies")
+    if isinstance(pc, dict):
+        for plat, cv in pc.items():
+            cv = cv if isinstance(cv, dict) else {}
+            f = cv.get("fields") or {}
+            rows.append({
+                "platform": plat,
+                "label": "",
+                "headline": _flat(f.get("headline")),
+                "sub": _flat(f.get("sub")),
+                "cta": _flat(f.get("cta")),
+                "brand": _flat(cv.get("brand") or f.get("brand")),
+            })
+    vs = c.get("copy_variants") or []
+    if isinstance(vs, list):
+        for v in vs:
+            if not isinstance(v, dict):
+                continue
+            rows.append({
+                "platform": "组合",
+                "label": _flat(v.get("label")),
+                "headline": _flat(v.get("headline")),
+                "sub": _flat(v.get("sub")),
+                "cta": _flat(v.get("cta")),
+                "brand": _flat(v.get("brand")),
+            })
+    if not rows and isinstance(c.get("fields"), dict):
+        f = c["fields"]
+        rows.append({
+            "platform": default_platform,
+            "label": "",
+            "headline": _flat(f.get("headline")),
+            "sub": _flat(f.get("sub")),
+            "cta": _flat(f.get("cta")),
+            "brand": _flat(c.get("brand") or f.get("brand")),
+        })
+    return rows
+
+
+def _write_copy_csv(z: zipfile.ZipFile, base: str, rows: list) -> None:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["平台", "版位", "标题", "副标题", "行动号召", "品牌"])
+    for r in rows:
+        w.writerow([r["platform"], r["label"], r["headline"], r["sub"], r["cta"], r["brand"]])
+    # 加 BOM 以便 Excel 正确识别 UTF-8
+    z.writestr(f"{base}ad_copy.csv", "\ufeff" + buf.getvalue())
+
+
+def _delivery_notes(row) -> str:
+    """面向广告主 / 渠道的结构化交付说明：来源、模型、各平台文案、素材清单、引用追溯。"""
+    a = row.analysis_json or {}
+    snap = a.get("snapshot") or {}
+    mi = a.get("model_info") or {}
+    rows = _copy_rows(row.copy_json or {}, row.platform or "-")
+    src = snap.get("source") or "—"
+    if snap.get("fetched_at"):
+        src += f"（{snap.get('fetched_at')} 抓取）"
+    if snap.get("fetch_quality"):
+        src += f"，质量 {snap.get('fetch_quality')}"
+    lines = [
+        "# 创意素材交付说明",
+        "",
+        f"- 来源落地页：{row.url or '—'}",
+        f"- 产品/品牌：{snap.get('title') or row.title or '—'}",
+        f"- 数据来源：{src}",
+        f"- 分析模型：{mi.get('provider') or '—'}/{mi.get('model') or '—'}",
+        f"- 生成语言：{row.lang or '—'}，平台：{row.platform or '—'}",
+    ]
+    lines += ["", "## 各平台文案"]
+    if rows:
+        for r in rows:
+            tag = f"**{r['platform']}**"
+            if r["label"]:
+                tag += f" / {r['label']}"
+            lines.append(f"- {tag}：{r['headline']}｜{r['sub']}｜CTA {r['cta']}｜品牌 {r['brand']}")
+    else:
+        lines.append("（无文案记录）")
+    imgs = row.images_json if isinstance(row.images_json, list) else []
+    lines += ["", "## 素材清单"]
+    if imgs:
+        for i, im in enumerate(imgs, 1):
+            meta = im if isinstance(im, dict) else {}
+            f = meta.get("file") or os.path.basename(str(meta.get("url") or ""))
+            sz = meta.get("size") or ""
+            lines.append(f"{i}. {f}（{meta.get('placement') or '推广素材'}{('，' + sz) if sz else ''}）")
+    else:
+        lines.append("（无素材记录）")
+    brands = sorted({r["brand"] for r in rows if r["brand"]})
+    lines += ["", "## 引用与复用"]
+    lines.append("- 本次使用的参考图与产品已沉淀至「素材库」，可在创意工作台「从素材库引用 / 复用产品」一键复用（B4）。")
+    if brands:
+        lines.append(f"- 涉及品牌：{'、'.join(brands)}")
+    lines += ["", "> 注：内部整理规则与尺寸为系统参考，正式投放前须按平台官方文档复核。"]
+    return "\n".join(lines) + "\n"
+
+
 def build_history_zip(rows: list, multi: bool = False) -> io.BytesIO:
-    """打包一条或多条历史：图片 + 广告文案 + 落地页分析 + 生成信息。"""
+    """打包一条或多条历史：图片 + 广告文案 + 落地页分析 + 生成信息 + B5 交付物。"""
     buf = io.BytesIO()
     manifest = []
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -380,9 +497,13 @@ def build_history_zip(rows: list, multi: bool = False) -> io.BytesIO:
                     packed += 1
                 elif f:
                     missing.append(f)
+            # B5：交付说明（无论是否含文案都生成，便于只出图的历史也能交付）
+            z.writestr(f"{base}delivery_notes.md", _delivery_notes(row))
             if row.copy_json:
                 z.writestr(f"{base}广告文案.txt", copy_as_text(row))
                 z.writestr(f"{base}广告文案.json", _json_bytes(row.copy_json))
+                # B5：结构化交付物（ad_copy.csv + delivery_notes.md 已在上方写入）
+                _write_copy_csv(z, base, _copy_rows(row.copy_json, row.platform or "-"))
             if row.analysis_json:
                 z.writestr(f"{base}落地页分析.txt", analysis_as_text(row))
                 z.writestr(f"{base}落地页分析.json", _json_bytes(row.analysis_json))

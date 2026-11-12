@@ -269,6 +269,45 @@ class TestCW(unittest.TestCase):
         again = self.client.delete(f"/api/cw/library/{bid}", headers=self.auth)
         self.assertEqual(again.status_code, 404, again.text)
 
+    def test_14_export_zip_has_copy_csv_and_delivery_notes(self):
+        # V4.62 / B5：历史导出包应含结构化交付物 ad_copy.csv 与 delivery_notes.md，且文案字段正确提取。
+        import io as _io
+        import zipfile as _zf
+        import datetime as _dt
+        import types as _types
+        from creation_history import build_history_zip
+        row = _types.SimpleNamespace(
+            id=1, title="测试品牌 Acme", url="https://acme.example.com/p", image_count=1,
+            platform="Meta", lang="en",
+            images_json=[{"file": "x.png", "placement": "feed", "size": "1080x1080"}],
+            copy_json={
+                "platform_copies": {"Meta": {"fields": {"headline": "H1", "sub": "S1", "cta": "Buy"}, "brand": "Acme"}},
+                "copy_variants": [{"label": "组合A", "headline": "H2", "sub": "S2", "cta": "Shop", "brand": "Acme"}],
+            },
+            analysis_json={
+                "snapshot": {"source": "real_fetch", "title": "测试品牌 Acme",
+                             "fetched_at": "2026-01-01 10:00", "fetch_quality": "high"},
+                "model_info": {"provider": "openai", "model": "gpt-4o"},
+            },
+            style_opts_json={}, image_model_json={}, note="", owner_name="tester",
+            created_at=_dt.datetime(2026, 1, 1), updated_at=_dt.datetime(2026, 1, 1),
+        )
+        buf = build_history_zip([row], multi=False)
+        self.assertIsInstance(buf, _io.BytesIO)
+        with _zf.ZipFile(buf) as z:
+            names = z.namelist()
+            self.assertIn("ad_copy.csv", names, names)
+            self.assertIn("delivery_notes.md", names, names)
+            csv_text = z.read("ad_copy.csv").decode("utf-8-sig")
+            self.assertIn("平台", csv_text)
+            self.assertIn("Meta", csv_text)
+            self.assertIn("Acme", csv_text)
+            self.assertIn("H1", csv_text)
+            md_text = z.read("delivery_notes.md").decode("utf-8")
+            self.assertIn("交付说明", md_text)
+            self.assertIn("测试品牌 Acme", md_text)
+            self.assertIn("gpt-4o", md_text)
+
 
 if __name__ == "__main__":
     import unittest
