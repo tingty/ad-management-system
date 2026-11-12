@@ -258,6 +258,55 @@ def _git(args: list[str], timeout: float = 1.2) -> str:
         return ""
 
 
+_commit_time_cache: dict[str, str] = {}
+
+
+def _git_commit_time(version: str) -> str:
+    """取首次引入该版本 CHANGELOG 段落的提交时间（近似发布时间，含时分）。
+
+    返回 `YYYY-MM-DD HH:MM:SS +0800` 形式；无 git / 找不到提交时返回空串。
+    结果按版本缓存，避免每个版本重复调用 git。
+    """
+    if version in _commit_time_cache:
+        return _commit_time_cache[version]
+    result = ""
+    try:
+        out = subprocess.run(
+            ["git", "-C", _ROOT, "log", "-1",
+             "--format=%ci", "-S", f"## {version} ", "--", "CHANGELOG.md"],
+            capture_output=True, text=True, check=False, timeout=1.2,
+        ).stdout.strip()
+        result = out
+    except Exception:
+        result = ""
+    _commit_time_cache[version] = result
+    return result
+
+
+def _note_datetime(n: dict) -> str | None:
+    """返回完整时间 `YYYY-MM-DD HH:MM`（含时分）；拿不到时退回纯日期。
+
+    - 自动同步通知：用当前时间（系统刚生成）。
+    - CHANGELOG 通知：官方「发布日期」为权威日期，叠加该版本发布提交的「时分」，
+      既与 CHANGELOG 的日期一致，又补齐用户要求的完整时间格式。
+    - 无 git / 找不到提交：仅保留 `YYYY-MM-DD`。
+    """
+    version = n.get("version") or ""
+    if n.get("auto_generated"):
+        return datetime.now().strftime("%Y-%m-%d %H:%M")
+    date_value = n.get("date")
+    if not date_value:
+        return None
+    commit_time = _git_commit_time(version)
+    if commit_time:
+        try:
+            dt = datetime.strptime(commit_time, "%Y-%m-%d %H:%M:%S %z")
+            return f"{date_value} {dt.strftime('%H:%M')}"
+        except Exception:
+            return date_value
+    return date_value
+
+
 def auto_note(tag: str | None = None) -> dict:
     """按当前系统版本生成兜底通知；只陈述可核对的事实，不编造功能细节。"""
     tag = tag or _version.release_tag()
@@ -319,7 +368,7 @@ def public_note(n: dict) -> dict:
     return {
         "version": n.get("version") or "",
         "title": n.get("title") or "",
-        "date": n.get("date"),
+        "date": _note_datetime(n),
         "summary": _short(n.get("summary") or "", 180),
         "points": [p for p in points if p][:POINT_LIMIT],
         "change_types": n.get("change_types") or [],

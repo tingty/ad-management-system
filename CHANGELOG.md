@@ -2174,7 +2174,7 @@
 
 **发布日期**：2026-11-12
 **变更类型**：优化
-**涉及模块**：素材创作平台、系统版本、前端与菜单、数据模型、后端接口
+**涉及模块**：素材创作平台、系统版本、前端与菜单、数据模型、后端接口、新版通知
 **变更摘要**：创意工作台历史导出包增强为结构化交付物：在原有图片/文案/分析基础上，新增 ad_copy.csv（多平台文案表格）与 delivery_notes.md（来源、分析模型、各平台文案、素材清单、素材库引用追溯），一键「导出交付包」即可交付广告主/渠道。
 
 **更新要点**
@@ -2241,3 +2241,14 @@
 
 **验证**：`run_all.py` 169 项全过（原 165 + 新增 4）；`tsc` + `vite build` 通过；`prepare_release --check` 通过。
 **说明**：仅消除 `undefined` 不算修复完成；本次同时证明「正常单值文案能生成图片、异常文案能显示明确原因」。线上真实模型生成成功与生产部署需受控验证 F8（复用用户原产品/媒体/路线）后再行报告，未获真实输出不宣告生产验收。
+
+### 热修复（2026-11-12）：新版通知时间格式补全为 YYYY-MM-DD HH:MM
+
+**目标**：「新版通知」每个版本更新通知原只展示发布日期 `YYYY-MM-DD`，缺少具体时间；按需求补全为完整时间格式 `YYYY-MM-DD HH:MM`（年-月-日 时:分）。
+
+**修复**
+- `backend/release_notes.py`：新增 `_git_commit_time(version)`（取首次引入该版本 CHANGELOG 段落的提交时间，按版本缓存避免重复调用 git）与 `_note_datetime(note)`；`public_note()` 的 `date` 字段由纯日期升级为 `YYYY-MM-DD HH:MM`——CHANGELOG 通知以官方「发布日期」为权威日期、叠加该版本发布提交的「时分」；自动同步通知用当前时间；无 git / 找不到提交时退回纯日期，不编造时间。
+- 该改动同时覆盖部署环境权威数据 `backend/release_notes_data.py`：`scripts/prepare_release.py --sync` 经由 `public_note` 重建，71 个版本全部带完整时间。
+- 前端 `frontend/src/pages/ReleaseNotes.tsx` 直接渲染后端下发的 `date`，无需额外格式化。
+
+**验证**：`run_all.py` 169 项全过；`prepare_release --check` 通过；`release_notes_data.py` 首条 V4.62 的 `date` 为 `2026-11-12 11:28`（含时分）。
