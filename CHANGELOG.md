@@ -2206,3 +2206,11 @@
 - `tests/test_cw.py`：新增 `test_15`（Meta 别名端到端通过 mediaCopy / 出图）与 `test_16`（recommendedPlatforms 必为规范名）
 
 **验证**：`run_all.py` 163 项全过；`tsc` + `vite build` 通过；`prepare_release --check` 通过。
+
+### 热修复（2026-11-12）：平台规范名统一为 Meta（Facebook 降级为兼容别名）
+
+**根因回顾**：上一轮热修复用 `Meta→Facebook` 别名把「Meta」收敛到规则引擎规范名 `Facebook`，但前端/用户习惯称其为 Meta，命名仍不一致、易再次踩坑。
+
+**本次统一**：将规则引擎**规范平台名改为 `Meta`**，`Facebook / fb / instagram / ig` 全部作为**兼容别名**（出图任务矩阵 / 文案 schema 仍解析为 Meta）。涉及 `media_platforms.py`（`MEDIA_PLATFORMS` / `PLACEMENT_RULES` / `MEDIA_COPY_SCHEMA` 主键 + 别名表）、`media_ad.py`（COPY_SCHEMA 主键与默认值）、`providers.py`（平台分析字典键）、`routers.py`（提示词文案 + `rec_plat` 兜底 `['Meta','Google']`）、`prompt_catalog.py` 平台列表、`frontend`（`DEFAULT_PLATFORMS` 与菜单描述）；并把 `SPEC_VERSION` 由 `2026-11-10.3` 升到 `2026-11-12.1` 标记该规则变更。旧数据/旧调用中的 `Facebook` 仍经别名解析为 `Meta`，不破坏历史记录。
+
+**验证**：`run_all.py` 163 项全过；`tsc` + `vite build` 通过；`prepare_release --check` 通过。

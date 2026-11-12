@@ -77,7 +77,7 @@ def _mock_framework(text):
         "languages": ["en", "es", "pt", "id"],
         "selling_points": ["核心功能突出", "性价比优势", "本地化适配", "用户口碑/评分高", "限时活动/优惠"],
         "platform_analysis": {
-            "Facebook": "兴趣/行为定向为主，强视觉+短文案，Reels 9:16 短视频更易起量",
+            "Meta": "兴趣/行为定向为主，强视觉+短文案，Reels 9:16 短视频更易起量",
             "Google": "UAC/搜索并重，搜索词覆盖品类词+竞品词，多尺寸图片素材齐备",
             "Unity": "游戏/工具类首选，Rewarded 视频 + 1080x1920 竖版",
             "AppLovin": "App 安装导向，创意利益点前置，程序化放量",

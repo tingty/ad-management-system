@@ -45,7 +45,7 @@ class TestCreativeAnalysis(unittest.TestCase):
 
     def test_01_analyze_creates_record(self):
         r = self.client.post("/api/creative-analysis",
-                             json={"text": "参考：某电商 App 的 Facebook 信息流广告，主打极简产品特写 + 强 CTA",
+                             json={"text": "参考：某电商 App 的 Meta 信息流广告，主打极简产品特写 + 强 CTA",
                                    "title": "电商 App 信息流创意"},
                              headers=self.auth)
         self.assertEqual(r.status_code, 200, r.text)

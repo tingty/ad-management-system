@@ -28,7 +28,7 @@ SAMPLE_ANALYSIS = {
     "url": "https://example.com",
     "industry": "工具", "type": "效率 App", "audience": "职场人群",
     "advantages": ["一键整理", "跨端同步"], "language": "zh", "competitors": ["X"],
-    "channels": [{"platform": "Facebook", "reason": "覆盖广"}],
+    "channels": [{"platform": "Meta", "reason": "覆盖广"}],
 }
 
 
@@ -54,14 +54,14 @@ class TestCreativePlan(unittest.TestCase):
     def test_01_create_plan(self):
         r = self.client.post("/api/creative-plan",
                              json={"title": "电商 App 创意策略", "analysis": SAMPLE_ANALYSIS,
-                                   "platforms": ["Facebook", "Unity"]},
+                                   "platforms": ["Meta", "Unity"]},
                              headers=self.auth)
         self.assertEqual(r.status_code, 200, r.text)
         d = r.json()
         self.assertIsNotNone(d.get("id"), "创意策略必须落库并返回记录 id")
         self.assertTrue(isinstance(d.get("routes"), list), "routes 必须为列表")
         # routes 须与平台一一对应
-        self.assertEqual([rt.get("platform") for rt in d["routes"]], ["Facebook", "Unity"])
+        self.assertEqual([rt.get("platform") for rt in d["routes"]], ["Meta", "Unity"])
         self.assertIn("model_info", d)
 
     def test_02_list_plans(self):
@@ -102,12 +102,12 @@ class TestCreativePlan(unittest.TestCase):
 
     def test_05_missing_analysis_rejected(self):
         r = self.client.post("/api/creative-plan",
-                             json={"platforms": ["Facebook"]}, headers=self.auth)
+                             json={"platforms": ["Meta"]}, headers=self.auth)
         self.assertEqual(r.status_code, 400, r.text)
 
     def test_06_requires_auth(self):
         r = self.client.post("/api/creative-plan",
-                             json={"analysis": SAMPLE_ANALYSIS, "platforms": ["Facebook"]})
+                             json={"analysis": SAMPLE_ANALYSIS, "platforms": ["Meta"]})
         self.assertEqual(r.status_code, 401)
 
 

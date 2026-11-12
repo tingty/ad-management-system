@@ -6,7 +6,7 @@
 - 默认按「常规使用方案」预选版位与尺寸、给出默认生成数量，用户可按需增删；
 - 后端文案 / 图片生成按此目录取版位、尺寸、字数红线与常规用法。
 
-覆盖平台（与用户需求一致）：Facebook / Google / Mintegral / Unity / Adsterra / AppLovin / TikTok。
+覆盖平台（与用户需求一致）：Meta / Google / Mintegral / Unity / Adsterra / AppLovin / TikTok。
 注意：TikTok 在旧版 specs_data 中缺失，这里补齐；Mintegral/AppLovin 即用户原文的 Mitegral/Applovin。
 
 字段说明（每个平台）：
@@ -33,7 +33,7 @@ V4.40 / F08：目录从「按平台名 + 尺寸字符串」升级为**版本化�
 # ---------------------------------------------------------------------------
 import re
 
-SPEC_VERSION = "2026-11-10.3"
+SPEC_VERSION = "2026-11-12.1"
 SPEC_SOURCE = "内部整理：media_platforms.py + 《广告素材平台问题诊断与AI改造实施说明书》v1.0 静态审查"
 SPEC_VERIFIED_ON = ""      # 空 = 尚未按各平台官方文档核验；核验后填 YYYY-MM-DD
 SPEC_DISCLAIMER = ("目录中的尺寸、字数与安全区为内部参考，不是官方投放规范的永久标准；"
@@ -110,10 +110,10 @@ def parse_size(size: str) -> tuple[int, int]:
 #: asset_role 相同 + 尺寸相同 = 默认视为重复任务（F07 去重依据）；
 #: 广告产品不同仍可通过前端「保留同尺寸不同资产角色」显式保留。
 PLACEMENT_RULES: dict[str, dict[str, dict]] = {
-    "Facebook": {
-        "feed": {"ad_product": "Facebook Feed Image Ad", "asset_role": "feed_image", "os": "iOS/Android/Web"},
-        "stories": {"ad_product": "Facebook Stories", "asset_role": "story_vertical", "os": "iOS/Android"},
-        "reels": {"ad_product": "Facebook Reels", "asset_role": "reels_vertical", "os": "iOS/Android"},
+    "Meta": {
+        "feed": {"ad_product": "Meta Feed Image Ad", "asset_role": "feed_image", "os": "iOS/Android/Web"},
+        "stories": {"ad_product": "Meta Stories", "asset_role": "story_vertical", "os": "iOS/Android"},
+        "reels": {"ad_product": "Meta Reels", "asset_role": "reels_vertical", "os": "iOS/Android"},
     },
     "Google": {
         "display_mrec": {"ad_product": "Google Display (上传式展示图)", "asset_role": "display_banner", "os": "Web"},
@@ -164,7 +164,7 @@ _UNKNOWN_ROLE = {"ad_product": "未标注广告产品", "asset_role": "unspecifi
 # 各平台常规版位与尺寸（基于主流投放规范整理，供展示与预选）
 MEDIA_PLATFORMS = [
     {
-        "platform": "Facebook",
+        "platform": "Meta",
         "image_sizes": ["1080x1080", "1080x1350", "1200x628", "1080x1920"],
         "recommended_sizes": ["1080x1080", "1080x1350", "1080x1920"],
         "recommended_count": 3,
@@ -318,14 +318,13 @@ MEDIA_PLATFORMS = [
 MEDIA_PLATFORM_MAP = {p["platform"]: p for p in MEDIA_PLATFORMS}
 _PLATFORM_ALIASES = {k.lower(): k for k in MEDIA_PLATFORM_MAP}
 
-# 历史别名兼容：创意工作台等旧入口曾用 "Meta"/"fb"/"instagram" 指代 Facebook，
-# 这里统一收敛到规则内的规范平台名，避免 mediaCopy / 出图任务矩阵对 "Meta" 返回 422。
+# 历史别名兼容：规则内规范平台名已统一为 "Meta"；旧数据 / 旧调用中的
+# "Facebook" / "fb" / "instagram" / "ig" 仍按 Meta 平台处理，避免 mediaCopy / 出图任务矩阵 422。
 _PLATFORM_ALIASES.update({
-    "meta": "Facebook",
-    "fb": "Facebook",
-    "facebook": "Facebook",
-    "instagram": "Facebook",
-    "ig": "Facebook",
+    "fb": "Meta",
+    "facebook": "Meta",
+    "instagram": "Meta",
+    "ig": "Meta",
 })
 
 

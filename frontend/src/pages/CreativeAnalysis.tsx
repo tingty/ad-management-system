@@ -43,7 +43,7 @@ export default function CreativeAnalysis() {
     <div className="page">
       <div className="page-head">
         <h2>全球创意分析</h2>
-        <p className="muted">分析 Facebook / Google / Unity / Adsterra 等大媒体上最具创意与转化效果的素材，
+        <p className="muted">分析 Meta / Google / Unity / Adsterra 等大媒体上最具创意与转化效果的素材，
           归类创意风格与类型，并产出可直接调用的图片 / 视频提示词模板。</p>
       </div>
 

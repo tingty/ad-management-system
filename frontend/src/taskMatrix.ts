@@ -2,7 +2,7 @@
  * V4.40 / F07 · 版位任务矩阵（纯函数，可独立单测）
  *
  * 旧实现的三个问题：
- *  1) buildSlots() 把所选版位的所有尺寸展开后 `slice(0, count)`，Facebook 默认
+ *  1) buildSlots() 把所选版位的所有尺寸展开后 `slice(0, count)`，Meta 默认
  *     count=3 时 Stories 被静默截掉、Google 的 UAC 版位被截掉；
  *  2) 副文案池把 description / body / primary_text 混在一起取模拼接，主标题与证据
  *     可能来自完全不同的概念；

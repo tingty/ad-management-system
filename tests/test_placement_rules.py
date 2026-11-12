@@ -12,13 +12,13 @@ BACKEND = Path(_bootstrap.ROOT) / "backend"
 
 
 class TestPlacementRules(unittest.TestCase):
-    def _blocked(self, slots, platform="Facebook"):
+    def _blocked(self, slots, platform="Meta"):
         with self.assertRaises(MediaRuleError) as ctx:
             validate_task_matrix(platform, slots)
         return "；".join(ctx.exception.errors)
 
     def test_01_feed_square_ok(self):
-        r = validate_task_matrix("Facebook", [{"size": "1080x1080", "placement_id": "feed"}])
+        r = validate_task_matrix("Meta", [{"size": "1080x1080", "placement_id": "feed"}])
         self.assertEqual(r["meta"]["effective_tasks"], 1)
         self.assertEqual(r["meta"]["placement_validation"], "strict_primary_key")
 
@@ -37,11 +37,11 @@ class TestPlacementRules(unittest.TestCase):
             [{"size": "1080x1080", "placement": "不存在的版位"}]))
 
     def test_05_stories_vertical_ok(self):
-        r = validate_task_matrix("Facebook", [{"size": "1080x1920", "placement_id": "stories"}])
+        r = validate_task_matrix("Meta", [{"size": "1080x1920", "placement_id": "stories"}])
         self.assertEqual(r["slots"][0]["asset_role"], "story_vertical")
 
     def test_06_legacy_call_kept_but_flagged(self):
-        r = validate_task_matrix("Facebook", [{"size": "1080x1080"}])
+        r = validate_task_matrix("Meta", [{"size": "1080x1080"}])
         self.assertTrue(r["meta"]["placement_warnings"])
         self.assertEqual(r["meta"]["placement_validation"], "mixed_legacy")
 
@@ -74,7 +74,7 @@ class TestPlacementRules(unittest.TestCase):
         self.assertTrue(any("placement" in x for x in MEDIA_RULES["hard"]))
 
     def test_13_spec_version_bumped(self):
-        self.assertEqual(SPEC_VERSION, "2026-11-10.3")
+        self.assertEqual(SPEC_VERSION, "2026-11-12.1")
 
     def test_14_task_matrix_multi_platform_scope(self):
         r = validate_task_matrix("Google", [

@@ -170,7 +170,7 @@ async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depend
 # V4.50 创意工作台：全球创意分析（参考素材 → LLM 归类创意风格/类型 → 可复用提示词模板）
 # ===========================================================================
 _CREATIVE_ANALYSIS_SYS = (
-    "你是全球效果广告创意研究专家，长期跟踪 Facebook、Google、Unity、Adsterra 等大媒体上"
+    "你是全球效果广告创意研究专家，长期跟踪 Meta、Google、Unity、Adsterra 等大媒体上"
     "最具创意、最具吸引力、流量效应与转化效果最好的广告素材。"
     "用户会给你若干参考素材（落地页 / 广告 / 竞品创意的链接或文本）。"
     "请从中总结、归类出可复用的「创意类型 / 风格」，并给出可直接用于文生图 / 文生视频的提示词模板。"
@@ -264,7 +264,7 @@ def get_creative_analysis(cid: int, db: Session = Depends(get_db),
 
 # ----------------------------- V4.52 创意工作台：创意策略 / 路线规划 -----------------------------
 _CREATIVE_PLAN_SYS = (
-    "你是资深的出海效果广告创意策略师，长期跟踪 Facebook、Google、Unity、Adsterra 等大媒体的高转化素材。"
+    "你是资深的出海效果广告创意策略师，长期跟踪 Meta、Google、Unity、Adsterra 等大媒体的高转化素材。"
     "基于给定的「产品分析结论」与「目标媒体平台」，为每一个平台规划一条创意路线。"
     "每条路线需包含：创意概念（concept）、切入角度（angle）、视觉风格（visual_style）、"
     "文案方向（copy_direction），以及一句可直接用于文生图的创意方向 / 提示词（image_prompt）。"
@@ -418,7 +418,7 @@ def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
     `snapshot` 一并写入 analysis_json，保证历史记录可还原来源。
     """
     analysis_meta = analysis_meta or {}
-    # 平台名归一：历史别名（如 Meta→Facebook）统一收敛到规则内规范名，
+    # 平台名归一：规范平台名已统一为 Meta；"Facebook"/"fb"/"instagram"/"ig" 为兼容别名，
     # 避免 recommendedPlatforms / channels 携带已弃用别名，导致后续 mediaCopy / 出图 422。
     _seen = set()
     rec_plat = [p for p in (canonical_platform(x) for x in (rec_plat or []))
@@ -588,7 +588,7 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
             boxes = {"industry": "", "coreAudience": "", "purchaseMotivation": "", "priceBand": ""}
             brief = {"promotionGoal": "", "targetAudience": [], "sellingPoints": []}
             summary = (page.get("title") or (page.get("h1") or [""])[0] or url)[:120]
-            rec_plat = platforms[:3] or ["Facebook", "Google"]
+            rec_plat = platforms[:3] or ["Meta", "Google"]
             title = title or "产品分析"
         result = _build_cw_result(title, summary, boxes, brief, rec_plat,
                                  analysis_meta={"url": url, "final_url": page.get("final_url") or url},
@@ -615,7 +615,7 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
         boxes = {"industry": "", "coreAudience": "", "purchaseMotivation": "", "priceBand": ""}
         brief = {"promotionGoal": "", "targetAudience": [], "sellingPoints": []}
         summary = text[:120]
-        rec_plat = platforms[:3] or ["Facebook", "Google"]
+        rec_plat = platforms[:3] or ["Meta", "Google"]
         title = title or "产品分析"
     snapshot = ProductSnapshot(source="pasted", url="", final_url="",
                                fetched_at="", fetch_quality="manual_text",

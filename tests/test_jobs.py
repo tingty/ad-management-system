@@ -18,13 +18,13 @@ def payload(size="1080x1080", count=1):
     return {
         "images_request": {
             "analysis": {"url": "https://shop.example.com/p", "language": "en"},
-            "platform": "Facebook", "lang": "en",
+            "platform": "Meta", "lang": "en",
             "copy_fields": {"headline": "已确认标题"},
             "slots": [{"size": size, "placement": "信息流 Feed", "placement_id": "feed",
                        "concept_index": 0} for _ in range(count)],
             "spec_version": "", "total_pixels": None,
         },
-        "archive": {"history_id": None, "platform": "Facebook", "lang": "en"},
+        "archive": {"history_id": None, "platform": "Meta", "lang": "en"},
     }
 
 

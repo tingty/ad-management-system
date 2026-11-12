@@ -285,7 +285,7 @@ def _bp(ident, kind, name, typ, style, scene, audience, platforms, source, summa
 BEST_PRACTICES: list[dict] = [
     # ----------------------------- 广告推广文案（10） -----------------------------
     _bp("copy_aida", "ad_copy", "AIDA · 注意力→兴趣→欲望→行动", "转化导向", "简洁直给", "信息流广告", "toC 大众消费者",
-        ["Facebook", "TikTok", "Google", "AppLovin"],
+        ["Meta", "TikTok", "Google", "AppLovin"],
         "AIDA 模型（E. St. Elmo Lewis）／直效响应文案通用框架",
         "最经典的转化骨架：先打断滑动，再把卖点翻译成用户收益，最后给低门槛行动指令。适合通用品类与冷启动。",
         "你是一名资深效果广告文案，严格遵循 AIDA 模型撰写可直接投放的广告文案。\n"
@@ -298,7 +298,7 @@ BEST_PRACTICES: list[dict] = [
         "【合规】规避医疗功效、收益承诺、未成年人定向与未授权数据宣称；语言贴合目标市场表达习惯，不做字面直译。",
         ["AIDA", "经典转化", "冷启动", "通用"]),
     _bp("copy_pas", "ad_copy", "PAS · 问题→激化→解决", "痛点唤醒", "情绪张力", "信息流广告", "toC 大众消费者",
-        ["Facebook", "TikTok", "Moloco"],
+        ["Meta", "TikTok", "Moloco"],
         "PAS（Problem-Agitate-Solution）痛点文案框架",
         "效果广告转化率最高的框架之一：放大「没有它」的代价，让产品成为唯一合理解法。适合工具、效率、财务类。",
         "你是一名效果广告文案，使用 PAS 框架撰写广告文案。\n"
@@ -309,7 +309,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】编造用户故事与数据、虚构竞品缺陷、使用恐吓式表达、绝对化承诺。",
         ["PAS", "痛点", "高转化", "工具类"]),
     _bp("copy_bab", "ad_copy", "BAB · 之前→之后→桥梁", "转化导向", "故事叙事", "再营销", "toC 大众消费者",
-        ["Facebook", "Google", "Mintegral"],
+        ["Meta", "Google", "Mintegral"],
         "BAB（Before-After-Bridge）转化文案框架",
         "用「使用后的理想状态」建立向往，再把产品作为唯一桥梁。适合再营销与已有认知的人群。",
         "你是一名效果广告文案，使用 BAB 框架撰写广告文案。\n"
@@ -331,7 +331,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】堆砌参数、编造基准测试数据、把「支持某能力」写成「保证某结果」。",
         ["FAB", "SaaS", "卖点提炼"]),
     _bp("copy_4p", "ad_copy", "4P · 承诺→描绘→证明→推动", "价值证明", "权威专业", "搜索广告", "企业决策者",
-        ["Google", "Facebook", "LinkedIn"],
+        ["Google", "Meta", "LinkedIn"],
         "4P（Promise-Picture-Proof-Push）直效响应框架",
         "以可信证明支撑承诺，适合高决策成本、需要建立信任的 B 端与高客单产品。",
         "你是一名 B 端效果广告文案，使用 4P 框架撰写文案。\n"
@@ -343,7 +343,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】编造客户名与案例、承诺 ROI/收益、使用「唯一／第一／100%」等绝对化表述。",
         ["4P", "B端", "信任背书", "高客单"]),
     _bp("copy_hso", "ad_copy", "Hook-Story-Offer · 短视频信息流", "情感共鸣", "故事叙事", "视频前贴", "Z 世代",
-        ["TikTok", "Facebook", "AppLovin"],
+        ["TikTok", "Meta", "AppLovin"],
         "Hook-Story-Offer 短视频广告脚本结构",
         "前 3 秒定生死：钩子、微叙事、明确利益一气呵成，适配短视频与激励视频场景。",
         "你是一名短视频广告文案，使用 Hook-Story-Offer 结构撰写文案。\n"
@@ -354,7 +354,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】虚构折扣与倒计时、编造使用者反应、使用平台敏感词与夸大宣称。",
         ["Hook", "短视频", "Z世代", "信息流"]),
     _bp("copy_social", "ad_copy", "社会证明 · 评分/评价/权威背书", "价值证明", "写实自然", "再营销", "toC 大众消费者",
-        ["Facebook", "Google", "TikTok"],
+        ["Meta", "Google", "TikTok"],
         "Social Proof 社会证明（Cialdini《影响力》）",
         "用真实存在的评价、评分、认证降低决策风险，适合犹豫期人群与再营销。",
         "你是一名效果广告文案，以「社会证明」为核心撰写文案。\n"
@@ -364,7 +364,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】编造用户评价、虚构评分与下载量、杜撰权威机构、使用无法核实的「销量第一」。",
         ["社会证明", "信任", "再营销"]),
     _bp("copy_scarcity", "ad_copy", "稀缺紧迫 · 大促与限时", "促销刺激", "活泼潮流", "大促节点", "toC 大众消费者",
-        ["Facebook", "TikTok", "Adsterra"],
+        ["Meta", "TikTok", "Adsterra"],
         "Scarcity / Urgency 稀缺紧迫原理（合规版）",
         "把促销力度讲清楚、把行动理由讲充分，但不虚构倒计时与库存。适合大促与节点营销。",
         "你是一名大促广告文案，以「稀缺与紧迫」为核心撰写文案。\n"
@@ -374,7 +374,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】虚假倒计时、虚构库存、价格锚点造假、「错过再无」等无法证实的绝对表述。",
         ["稀缺", "大促", "合规促销"]),
     _bp("copy_ba", "ad_copy", "Before/After · 对比测评", "痛点唤醒", "数据理性", "新品上市", "女性消费人群",
-        ["Facebook", "TikTok", "Google"],
+        ["Meta", "TikTok", "Google"],
         "Before-After 对比型广告框架",
         "用清晰对照让优势一眼可见，适合效果可视化强的品类与新品沟通。",
         "你是一名效果广告文案，使用 Before/After 对比结构撰写文案。\n"
@@ -384,7 +384,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】编造前后对比数据、使用未经授权的人物形象描述、承诺确定性效果。",
         ["对比", "可视化", "新品"]),
     _bp("copy_local", "ad_copy", "本地化 · 多语种市场适配", "场景沉浸", "写实自然", "品牌曝光", "新兴市场用户",
-        ["Facebook", "TikTok", "Google", "Adsterra"],
+        ["Meta", "TikTok", "Google", "Adsterra"],
         "跨市场本地化文案实践（T1 / 拉美 / 东南亚）",
         "不是翻译而是重写：按目标市场语言习惯、节俗与支付/设备语境调整表达，降低广告感。",
         "你是一名跨市场本地化广告文案。\n"
@@ -397,7 +397,7 @@ BEST_PRACTICES: list[dict] = [
 
     # ----------------------------- 广告推广图片（10） -----------------------------
     _bp("img_hero", "ad_image", "产品主视觉 · Hero Shot", "产品展示", "写实自然", "信息流广告", "toC 大众消费者",
-        ["Facebook", "Google", "AppLovin"],
+        ["Meta", "Google", "AppLovin"],
         "Hero Shot 产品主视觉（电商 / 硬件通用广告摄影范式）",
         "产品作为唯一主体，演播级布光 + 大块负空间，最稳妥的通用背景。",
         "你是一名广告视觉总监与文生图提示词专家。\n"
@@ -408,7 +408,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】任何文字、字母、数字、logo、水印、价格标签、UI 控件、多余产品堆叠与畸形产品。",
         ["Hero Shot", "产品主体", "通用"]),
     _bp("img_lifestyle", "ad_image", "生活方式 · 场景沉浸", "场景沉浸", "写实自然", "信息流广告", "女性消费人群",
-        ["Facebook", "TikTok", "Instagram"],
+        ["Meta", "TikTok", "Instagram"],
         "Lifestyle / Aspirational 生活方式广告摄影",
         "让受众代入「这就是我的生活」，产品作为美好场景的一部分而非生硬主角。",
         "你是一名生活方式广告视觉总监。\n"
@@ -418,7 +418,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】画面内文字、logo、水印、夸张滤镜、不自然的手部与面部、多人拥挤构图。",
         ["Lifestyle", "场景", "代入感"]),
     _bp("img_split", "ad_image", "前后对比 · 左右分屏", "痛点唤醒", "数据理性", "再营销", "toC 大众消费者",
-        ["Facebook", "TikTok", "Google"],
+        ["Meta", "TikTok", "Google"],
         "Before / After Split 对比构图",
         "左右或上下对照，把差异做成一眼可见的视觉事实，适合工具类与效果可视化品类。",
         "你是一名广告视觉设计师。\n"
@@ -428,7 +428,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】任何文字与数字、贬低性丑化、真人痛苦表情、医疗前后对照暗示。",
         ["Before/After", "分屏", "对比"]),
     _bp("img_ugc", "ad_image", "UGC 真实感 · 原生内容", "价值证明", "写实自然", "视频前贴", "Z 世代",
-        ["TikTok", "Facebook", "AppLovin"],
+        ["TikTok", "Meta", "AppLovin"],
         "UGC / Creator-style 原生内容视觉",
         "弱广告感、强真实感，模拟用户自拍视角，适合短视频平台与年轻人群。",
         "你是一名原生内容广告视觉设计师。\n"
@@ -438,7 +438,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】任何文字、字幕、logo、水印、UI 界面、过度美颜、畸形手指与多人重叠。",
         ["UGC", "原生感", "Z世代", "竖屏"]),
     _bp("img_minimal", "ad_image", "极简留白 · 高级克制", "品牌叙事", "高级克制", "品牌曝光", "企业决策者",
-        ["Facebook", "Google", "LinkedIn"],
+        ["Meta", "Google", "LinkedIn"],
         "Minimal / Negative Space 极简广告美学",
         "大留白、单一主体、克制色彩，适合高端品牌与 B 端专业调性。",
         "你是一名极简主义广告视觉总监。\n"
@@ -448,7 +448,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】任何文字、logo、水印、装饰元素堆叠、复杂纹理、多主体与拥挤构图。",
         ["极简", "留白", "高端", "B端"]),
     _bp("img_data", "ad_image", "数据权威 · 理性视觉", "价值证明", "数据理性", "搜索广告", "企业决策者",
-        ["Google", "LinkedIn", "Facebook"],
+        ["Google", "LinkedIn", "Meta"],
         "Data-driven / Stat-centric 数据导向视觉",
         "以秩序感、网格与结构化光影建立专业可信，适合 SaaS 与 B 端。",
         "你是一名 B 端广告视觉设计师。\n"
@@ -458,7 +458,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】任何文字、数字、字母、图表标签、logo、水印、杂乱装饰。",
         ["数据", "权威", "SaaS", "B端"]),
     _bp("img_promo", "ad_image", "促销氛围 · 节日大促", "促销刺激", "活泼潮流", "大促节点", "toC 大众消费者",
-        ["Facebook", "TikTok", "Adsterra"],
+        ["Meta", "TikTok", "Adsterra"],
         "Promo / Festive 节点促销视觉",
         "高能量、暖色调、节庆氛围，让优惠信息在背景之上更醒目，但不生成任何文字。",
         "你是一名大促广告视觉设计师。\n"
@@ -468,7 +468,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】任何文字、数字、价格、折扣标签、倒计时、logo、水印与品牌标识。",
         ["大促", "节日", "暖调", "促销"]),
     _bp("img_portrait", "ad_image", "人物情绪 · 情感共鸣", "情感共鸣", "情绪张力", "品牌曝光", "女性消费人群",
-        ["Facebook", "TikTok", "Instagram"],
+        ["Meta", "TikTok", "Instagram"],
         "Emotional Portrait 情绪人像广告",
         "用一个真实情绪瞬间建立共鸣，适合品牌叙事与情感型品类。",
         "你是一名广告人像视觉总监。\n"
@@ -488,7 +488,7 @@ BEST_PRACTICES: list[dict] = [
         "【禁止】任何文字、字母、logo、水印、UI 控件、多余产品与畸形几何。",
         ["3D", "CGI", "科技", "新品"]),
     _bp("img_local", "ad_image", "本地文化 · 区域视觉适配", "场景沉浸", "写实自然", "品牌曝光", "新兴市场用户",
-        ["Facebook", "TikTok", "Adsterra"],
+        ["Meta", "TikTok", "Adsterra"],
         "Localization 区域文化视觉适配",
         "把本地色彩、建筑、节俗与生活符号融入画面，提升目标市场的亲近感与相关性。",
         "你是一名跨市场广告视觉设计师。\n"

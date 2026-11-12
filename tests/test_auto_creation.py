@@ -49,7 +49,7 @@ def _analysis(**kw):
 
 
 def _rec(**kw):
-    plats = kw.pop("platforms", ["Facebook"])
+    plats = kw.pop("platforms", ["Meta"])
     return build_recommendation(_analysis(**kw), plats)
 
 
@@ -99,8 +99,8 @@ class TestAutoRecommendation(unittest.TestCase):
         self.assertIn("放置", r["recommended_visual_summary"])
 
     def test_04_coverage_uses_real_platform_catalog(self):
-        r = build_recommendation(_analysis(), ["Facebook", "Moloco"])
-        self.assertEqual(r["coverage_summary"]["platforms"], ["Facebook", "Moloco"])
+        r = build_recommendation(_analysis(), ["Meta", "Moloco"])
+        self.assertEqual(r["coverage_summary"]["platforms"], ["Meta", "Moloco"])
         self.assertGreater(r["coverage_summary"]["required_tasks"], 0)
         self.assertGreater(len(r["coverage_summary"]["asset_roles"]), 1)
         self.assertEqual(r["coverage_summary"]["spec_version"], SPEC_VERSION)
@@ -120,7 +120,7 @@ class TestCrossIndustryProfiles(unittest.TestCase):
         out = {}
         for key in ("ecommerce", "subscription", "travel_local", "b2b_service"):
             a = _analysis(industry_profile=key, type=key)
-            r = build_recommendation(a, ["Facebook"])
+            r = build_recommendation(a, ["Meta"])
             b = r["visual_brief"]
             out[key] = (b["subject"], b["scene"], b["subject_asset"])
             self.assertGreater(len(b["forbidden_inferences"]), 0, key)
@@ -164,7 +164,7 @@ class TestBlockingAndEvidence(unittest.TestCase):
     def test_10_missing_evidence_blocks(self):
         a = _analysis()
         a.pop("evidence_index")
-        r = build_recommendation(a, ["Facebook"])
+        r = build_recommendation(a, ["Meta"])
         self.assertEqual(r["status"], "needs_input")
         self.assertTrue(any("证据快照" in x for x in r["blocking_reasons"]))
         self.assertEqual(r["evidence"]["review_status"], "legacy_unverified")
@@ -230,7 +230,7 @@ class TestQualifiersAndPricing(unittest.TestCase):
     def test_17_price_terms_do_not_produce_regional_price(self):
         a = _analysis(facts=["仅售 $29.99 per month，billed annually，terms apply",
                              "磁吸支架"], type="subscription")
-        r = build_recommendation(a, ["Facebook"],
+        r = build_recommendation(a, ["Meta"],
                                  workspace_defaults={"country": "BR"})
         g = r["pricing_gate"]
         self.assertTrue(g["has_price_terms"])
@@ -242,7 +242,7 @@ class TestQualifiersAndPricing(unittest.TestCase):
 
     def test_18_defaults_are_never_inferred_from_page_language(self):
         a = _analysis(language="pt-BR", url="https://www.anker.com.br/charger")
-        r = build_recommendation(a, ["Facebook"])
+        r = build_recommendation(a, ["Meta"])
         self.assertEqual(r["workspace_defaults"]["country"], "US")
         self.assertEqual(r["workspace_defaults"]["language"], "en")
 
@@ -252,9 +252,9 @@ class TestPlanVersionAndDeliveryGate(unittest.TestCase):
 
     def test_19_plan_version_changes_with_planning_inputs(self):
         base = _rec()
-        changed = build_recommendation(_analysis(facts=["完全不同的产品事实"]), ["Facebook"])
+        changed = build_recommendation(_analysis(facts=["完全不同的产品事实"]), ["Meta"])
         self.assertNotEqual(base["plan_version"], changed["plan_version"])
-        other = build_recommendation(_analysis(), ["Facebook"],
+        other = build_recommendation(_analysis(), ["Meta"],
                                      workspace_defaults={"country": "DE"})
         self.assertNotEqual(base["plan_version"], other["plan_version"])
 
@@ -270,7 +270,7 @@ class TestPlanVersionAndDeliveryGate(unittest.TestCase):
                           {"evidence_id": "E003", "quote": "one year limited warranty",
                            "char_start": 81, "char_end": 105},
                       ])
-        r = build_recommendation(a, ["Facebook"],
+        r = build_recommendation(a, ["Meta"],
                                  workspace_defaults={"concept_count": 3})
         cs = r["structured_concepts"]
         self.assertEqual(len(cs), 3)
@@ -283,7 +283,7 @@ class TestPlanVersionAndDeliveryGate(unittest.TestCase):
 
     def test_21_all_auto_outputs_are_marked_draft(self):
         for key in INDUSTRY_PROFILES:
-            r = build_recommendation(_analysis(industry_profile=key), ["Facebook"])
+            r = build_recommendation(_analysis(industry_profile=key), ["Meta"])
             self.assertEqual(r["delivery_grade"], "draft", key)
             self.assertFalse(r["quality_gate"]["deliverable"], key)
             checks = {c["key"]: c["passed"] for c in r["quality_gate"]["checks"]}

@@ -135,20 +135,20 @@ class TestD4CoveragePlan(unittest.TestCase):
 
     def test_05_coverage_only_selected_platforms(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook", "TikTok", "Moloco"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta", "TikTok", "Moloco"], {}, USER)
         full = plan.coverage_json["coverage"]["required_tasks"]
-        plan2 = set_coverage(db, plan.plan_id, ["Facebook"], USER)
+        plan2 = set_coverage(db, plan.plan_id, ["Meta"], USER)
         cov = plan2.coverage_json["coverage"]
-        self.assertEqual(cov["platforms"], ["Facebook"])
-        self.assertLess(cov["required_tasks"], full, "只选 Facebook 应少于全选")
-        self.assertTrue(all(t["platform"] == "Facebook"
+        self.assertEqual(cov["platforms"], ["Meta"])
+        self.assertLess(cov["required_tasks"], full, "只选 Meta 应少于全选")
+        self.assertTrue(all(t["platform"] == "Meta"
                             for t in plan2.coverage_json["tasks"]))
         db.close()
 
     def test_06_batch_split_does_not_truncate(self):
-        rec = rec_for(ANALYSIS, ["Facebook", "TikTok", "Moloco", "Google", "Unity", "AppLovin"],
+        rec = rec_for(ANALYSIS, ["Meta", "TikTok", "Moloco", "Google", "Unity", "AppLovin"],
                       {"concept_count": 3})
-        cov = build_coverage_plan(rec, ["Facebook", "TikTok", "Moloco", "Google", "Unity", "AppLovin"],
+        cov = build_coverage_plan(rec, ["Meta", "TikTok", "Moloco", "Google", "Unity", "AppLovin"],
                                   rec.get("structured_concepts"), rec.get("workspace_defaults"))
         rep = cov["coverage"]
         self.assertGreater(rep["required_tasks"], 24, "应超过单批上限")
@@ -164,8 +164,8 @@ class TestD4CoveragePlan(unittest.TestCase):
         self.assertTrue(all(t["asset_role"] for t in cov["tasks"]), "每个任务都须有资产角色")
 
     def test_07_cost_upper_is_estimate_not_real_billing(self):
-        rec = rec_for(ANALYSIS, ["Facebook"], {"concept_count": 1})
-        cov = build_coverage_plan(rec, ["Facebook"], rec.get("structured_concepts"),
+        rec = rec_for(ANALYSIS, ["Meta"], {"concept_count": 1})
+        cov = build_coverage_plan(rec, ["Meta"], rec.get("structured_concepts"),
                                   rec.get("workspace_defaults"))
         est = cov["cost_estimate"]
         self.assertTrue(est["is_estimate"])
@@ -177,9 +177,9 @@ class TestD4CoveragePlan(unittest.TestCase):
         self.assertIn("未官方核验", cov["coverage"]["spec_verified_on"])
 
     def test_08_over_budget_is_flagged_not_hidden(self):
-        rec = rec_for(ANALYSIS, ["Facebook", "TikTok", "Moloco", "Google", "Unity", "AppLovin"],
+        rec = rec_for(ANALYSIS, ["Meta", "TikTok", "Moloco", "Google", "Unity", "AppLovin"],
                       {"concept_count": 3, "budget_cap": 1.0})
-        cov = build_coverage_plan(rec, ["Facebook", "TikTok", "Moloco", "Google", "Unity", "AppLovin"],
+        cov = build_coverage_plan(rec, ["Meta", "TikTok", "Moloco", "Google", "Unity", "AppLovin"],
                                   rec.get("structured_concepts"), rec.get("workspace_defaults"))
         self.assertTrue(cov["cost_estimate"]["over_budget"], "预算低于成本上界须显式标出")
         self.assertIn("不会静默生成", cov["cost_estimate"]["note"])
@@ -199,7 +199,7 @@ class TestD5PlanReference(unittest.TestCase):
 
     def test_10_version_mismatch_blocks_downstream_409(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta"], {}, USER)
         confirm_plan(db, plan.plan_id, fee_authorized_usd=10.0, user=USER)
         with self.assertRaises(ValueError) as ctx:
             validate_plan_reference(db, plan.plan_id, "pv_wrong_version", "SNAP_abc123")
@@ -208,7 +208,7 @@ class TestD5PlanReference(unittest.TestCase):
 
     def test_11_fact_rewrite_blocked_422(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta"], {}, USER)
         confirm_plan(db, plan.plan_id, fee_authorized_usd=10.0, user=USER)
         with self.assertRaises(ValueError) as ctx:
             validate_plan_reference(db, plan.plan_id, plan.plan_version, "SNAP_other")
@@ -217,7 +217,7 @@ class TestD5PlanReference(unittest.TestCase):
 
     def test_12_unconfirmed_plan_rejected(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta"], {}, USER)
         with self.assertRaises(ValueError) as ctx:
             validate_plan_reference(db, plan.plan_id, plan.plan_version, "SNAP_abc123")
         self.assertEqual(str(ctx.exception), "plan_not_confirmed")
@@ -225,7 +225,7 @@ class TestD5PlanReference(unittest.TestCase):
 
     def test_13_confirm_rejects_fee_below_cost_upper(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook", "TikTok", "Moloco"], {"budget_cap": 3.0}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta", "TikTok", "Moloco"], {"budget_cap": 3.0}, USER)
         cost_upper = plan.coverage_json["cost_estimate"]["cost_upper_usd"]
         self.assertGreater(cost_upper, 0)
         with self.assertRaises(ValueError) as ctx:
@@ -238,7 +238,7 @@ class TestD5PlanReference(unittest.TestCase):
 
     def test_14_zero_fee_rejected(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta"], {}, USER)
         with self.assertRaises(ValueError) as ctx:
             confirm_plan(db, plan.plan_id, fee_authorized_usd=0, user=USER)
         self.assertIn("未授权费用上限", str(ctx.exception))
@@ -250,10 +250,10 @@ class TestD5Orchestration(unittest.TestCase):
 
     def test_15_full_lifecycle_persists_recoverable_state(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook", "TikTok"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta", "TikTok"], {}, USER)
         self.assertIn(plan.stage, ("recommendation_ready", "needs_input"))
-        plan = set_coverage(db, plan.plan_id, ["Facebook"], USER)
-        self.assertEqual(plan.coverage_json["coverage"]["platforms"], ["Facebook"])
+        plan = set_coverage(db, plan.plan_id, ["Meta"], USER)
+        self.assertEqual(plan.coverage_json["coverage"]["platforms"], ["Meta"])
         cp = confirm_plan(db, plan.plan_id, fee_authorized_usd=10.0, user=USER)
         self.assertEqual(cp.stage, "platform_confirmed")
         self.assertTrue(cp.approval_token)
@@ -356,7 +356,7 @@ class TestD5Idempotency(unittest.TestCase):
     def test_21_router_maps_idempotency_conflict_to_409(self):
         # 不直接跑 spawn：旧任务用服务层创建，路由在 create_job 内即抛 409，不会触达 spawn_job
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta"], {}, USER)
         confirm_plan(db, plan.plan_id, fee_authorized_usd=10.0, user=USER)
         js.create_job(db, _payload(1), USER,
                       idempotency_key="router_k", kind="auto_creation",
@@ -369,7 +369,7 @@ class TestD5Idempotency(unittest.TestCase):
 
     def test_22_router_maps_version_mismatch_to_409(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta"], {}, USER)
         confirm_plan(db, plan.plan_id, fee_authorized_usd=10.0, user=USER)
         body = _gen_body(1, plan.plan_id, "pv_wrong", snapshot="SNAP_abc123")
         with self.assertRaises(Exception) as ctx:
@@ -379,7 +379,7 @@ class TestD5Idempotency(unittest.TestCase):
 
     def test_23_router_maps_fact_rewrite_to_422(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta"], {}, USER)
         confirm_plan(db, plan.plan_id, fee_authorized_usd=10.0, user=USER)
         body = _gen_body(1, plan.plan_id, plan.plan_version, snapshot="SNAP_tampered")
         with self.assertRaises(Exception) as ctx:
@@ -389,7 +389,7 @@ class TestD5Idempotency(unittest.TestCase):
 
     def test_24_router_maps_unconfirmed_plan_to_422(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta"], {}, USER)
         body = _gen_body(1, plan.plan_id, plan.plan_version, snapshot="SNAP_abc123")
         with self.assertRaises(Exception) as ctx:
             asyncio.run(routers.create_generation_job(body, db=db, user=USER))
@@ -432,7 +432,7 @@ class TestD5CancelRestart(unittest.TestCase):
 
     def test_26_canceled_plan_cannot_be_reconfirmed(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta"], {}, USER)
         confirm_plan(db, plan.plan_id, fee_authorized_usd=10.0, user=USER)
         # 标记为已结束
         p = db.query(CreationPlan).filter_by(plan_id=plan.plan_id).first()
@@ -448,7 +448,7 @@ class TestD6Manifest(unittest.TestCase):
     """A20：打包 manifest 含 media / concept / role / 缺失报告，不谎报完成。"""
 
     def test_27_manifest_lists_items_and_missing(self):
-        plan = {"tasks": [{"task_index": i, "platform": "Facebook",
+        plan = {"tasks": [{"task_index": i, "platform": "Meta",
                            "asset_role": "feed_image", "concept_id": "C01"} for i in range(3)]}
         job_results = [{
             "images": [{"file": "a.png", "placement": "Feed", "size": "1080x1080",
@@ -486,7 +486,7 @@ class TestRouterStatusMapping(unittest.TestCase):
         routers.ENABLE_AUTO_CREATION_PLAN = False
         try:
             with self.assertRaises(Exception) as ctx:
-                routers.api_create_plan({"analysis": ANALYSIS, "platforms": ["Facebook"]},
+                routers.api_create_plan({"analysis": ANALYSIS, "platforms": ["Meta"]},
                                         db=db, user=USER)
             self.assertEqual(_status(ctx.exception), 503)
         finally:
@@ -503,7 +503,7 @@ class TestRouterStatusMapping(unittest.TestCase):
 
     def test_31_confirm_fee_below_cost_returns_422(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook", "TikTok", "Moloco"], {"budget_cap": 3.0}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta", "TikTok", "Moloco"], {"budget_cap": 3.0}, USER)
         cost_upper = plan.coverage_json["cost_estimate"]["cost_upper_usd"]
         with self.assertRaises(Exception) as ctx:
             routers.api_plan_confirm(plan.plan_id, {"fee_authorized_usd": 0.1}, db=db, user=USER)
@@ -516,7 +516,7 @@ class TestRouterStatusMapping(unittest.TestCase):
 
     def test_32_get_plan_recovers_full_state(self):
         db = fresh_db()
-        plan = create_plan(db, ANALYSIS, ["Facebook"], {}, USER)
+        plan = create_plan(db, ANALYSIS, ["Meta"], {}, USER)
         confirm_plan(db, plan.plan_id, fee_authorized_usd=10.0, user=USER)
         attach_job(db, plan.plan_id, "job_g1")
         p = routers.api_get_plan(plan.plan_id, db=db, _=USER)
@@ -532,13 +532,13 @@ def _payload(count, plan_id=None, plan_version=None, kind="images"):
         "images_request": {
             "analysis": {"url": "https://shop.example.com/p", "language": "en",
                          "evidence_snapshot_id": "SNAP_abc123"},
-            "platform": "Facebook", "lang": "en",
+            "platform": "Meta", "lang": "en",
             "copy_fields": {"headline": "已确认标题"},
             "slots": [{"size": "1080x1080", "placement": "信息流 Feed",
                        "placement_id": "feed", "concept_index": 0} for _ in range(count)],
             "spec_version": "", "total_pixels": None,
         },
-        "archive": {"history_id": None, "platform": "Facebook", "lang": "en"},
+        "archive": {"history_id": None, "platform": "Meta", "lang": "en"},
     }
 
 

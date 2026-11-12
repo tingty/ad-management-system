@@ -74,7 +74,7 @@ def _supplier_semaphore() -> asyncio.Semaphore:
 # ----------------------------- 文案字段结构（含 TikTok） -----------------------------
 # 与 creative.COPY_SCHEMA 保持一致，并补齐 specs_data 缺失的 TikTok。
 MEDIA_COPY_SCHEMA = {
-    "Facebook": [
+    "Meta": [
         {"key": "primary_text", "label": "主文案", "max": 125, "count": 1},
         {"key": "headline", "label": "标题", "max": 40, "count": 3},
         {"key": "description", "label": "描述", "max": 30, "count": 1},
@@ -453,7 +453,7 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
     - V4.41 / F04：注入 `ResolvedCreativeConfig.strategy` 的编辑后预设文本；
       纯视觉字段（调色板 / 版式 / 背景键）不会进入文案提示词。
     """
-    platform = platform or "Facebook"
+    platform = platform or "Meta"
     analysis = _as_dict(analysis)
     profile = resolve_profile(analysis, key=analysis.get("industry_profile") or "")
     schema = copy_schema_for(platform, ad_product)
@@ -742,7 +742,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
     返回：images / image_model / note / count / status / issues / skipped / task_results /
           rules / creative_config。
     """
-    platform = platform or "Facebook"
+    platform = platform or "Meta"
     analysis = _as_dict(analysis)
     style_opts = dict(style_opts or {})
     rules_meta = dict(rules_meta or {})
