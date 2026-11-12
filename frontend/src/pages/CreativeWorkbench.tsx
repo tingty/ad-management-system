@@ -102,12 +102,12 @@ function normalizeAnalysis(a: any): any {
 }
 
 /**
- * 创意工作台 · V4.56（进度条归位 + 右侧「项目简报」结果面板）
- * ① 顶部仅保留菜单标题；② 输入模块常驻展示链接 / 产品信息；
- * ③ 分析进度条直接显示在输入框下方（不在任何面板内）；
- * ④ 产品分析「产品分析完成」+「为你规划了 N 条创意路线」收进正文，紧接输入框下方、素材上方，分析完成后一直显示，便于直观选择路线；
- * ⑤ 右侧「项目简报」面板仅展示分析结果（推广目标 / 目标受众 / 核心卖点 / 产品定位），可收缩，不展示进度 / 选项 / 操作；
- * ⑥ 生成成果（图片 / 视频 + 尺寸规格 + 文案）展示在「创意路线」下方；⑦ 素材可批量下载，也可单独放大查阅（灯箱）。
+ * 创意工作台 · V4.65 布局优化（仅界面排版，不涉及功能 / 处理流程 / 输出结果）
+ * ① 顶部：标题 + 一句话介绍，不堆叠其他内容；
+ * ② 输入模块：统一表单行（产品链接 / 投放平台[下拉单选] / 参考图 / 品牌[文字或导入Logo]），非必要子模块收进「更多选项」；
+ * ③ 工作流处理模块：解析产品 → 规划创意 → 批量生成 三步可视化（done/cur/pending），进度条展示当前进度与待处理内容，结果汇总于此；
+ * ④ 分析结果（产品摘要 / 行业·人群·动机·价格带 / 来源徽标）统一收进右侧「项目简报」面板；
+ * ⑤ 创意路线交互选择保留在正文；⑥ 素材创作输出结果保持既有样式不变（可批量下载 / 单独放大灯箱）。
  */
 export default function CreativeWorkbench() {
   const [platforms, setPlatforms] = useState<string[]>([])
@@ -151,6 +151,12 @@ export default function CreativeWorkbench() {
 
   // V4.56 新增：右侧「项目简报」面板（仅展示分析结果 / 可收缩）
   const [briefOpen, setBriefOpen] = useState(true)
+
+  // V4.65 布局优化新增状态（仅 UI，不涉及功能 / 处理流程 / 输出结果）
+  const [showAdvanced, setShowAdvanced] = useState(false)   // 非必要子模块折叠
+  const [brandLogo, setBrandLogo] = useState('')           // 品牌 Logo 文件（UI 预览）
+  const [brandLogoName, setBrandLogoName] = useState('')
+  const [brandUploading, setBrandUploading] = useState(false)
 
   useEffect(() => {
     function applyNames(names: string[]) {
@@ -504,6 +510,8 @@ export default function CreativeWorkbench() {
     setHistoryId(null); setError(''); setProgressPct(0); setChecked({}); setDemoMode(false)
     // V4.60 / B3 + B4：清空文案缓存、参考图与品牌选择
     setCopiesByPlatform({}); setReferenceImage(''); setReferenceName(''); setSelectedBrand('')
+    // V4.65：清空布局相关状态
+    setShowAdvanced(false); setBrandLogo(''); setBrandLogoName('')
   }
   async function onRefFile(e: any) {
     const file = e.target.files?.[0]; if (!file) return
@@ -529,6 +537,21 @@ export default function CreativeWorkbench() {
     setLibPicker(null)
   }
   function closeLib() { setLibPicker(null) }
+  // V4.65：品牌 Logo 上传（UI 预览；不改变出图 / 文案处理链路）
+  async function onBrandLogo(e: any) {
+    const file = e.target.files?.[0]; if (!file) return
+    setBrandUploading(true)
+    try {
+      const r: any = await api.uploadAsset(file)
+      setBrandLogo(r?.url || ''); setBrandLogoName(r?.name || file.name)
+      if (r?.url) api.addCwLibrary({ kind: 'brand', title: selectedBrand || r?.name || '品牌Logo', file: r.url, meta: { type: 'logo' } }).catch(() => {})
+    } catch (err: any) { setError('品牌 Logo 上传失败：' + (err?.message || '')) }
+    finally { setBrandUploading(false); e.target.value = '' }
+  }
+  function clearBrandLogo() { setBrandLogo(''); setBrandLogoName('') }
+  // V4.65：投放平台改为下拉单选（内部仍保持 [platform] 数组，下游生成逻辑不变）
+  function onPlatformChange(e: any) { setSelected([e.target.value]) }
+  const selectedPlatform = selected[0] || ''
 
   async function openHistory() {
     setHistOpen(true)
@@ -561,63 +584,83 @@ export default function CreativeWorkbench() {
   const briefBoxes = cw?.boxes || {}
   const brief = cw?.brief || {}
 
+  // V4.65 工作流步骤状态（仅 UI 展示，不涉及功能）：done / cur(进行中) / pending(待处理)
+  const wf: Record<number, string> = ((
+    { analyzing:  { 1: 'cur', 2: 'pending', 3: 'pending' },
+      plan:       { 1: 'done', 2: 'cur', 3: 'pending' },
+      generating: { 1: 'done', 2: 'done', 3: 'cur' },
+      result:     { 1: 'done', 2: 'done', 3: 'done' },
+      input:      { 1: 'cur', 2: 'pending', 3: 'pending' } } as any
+  )[view]) || { 1: 'cur', 2: 'pending', 3: 'pending' }
+  const wfStatus: string = (
+    { input: '准备开始', analyzing: '正在分析产品', plan: '分析完成 · 待规划',
+      generating: '正在生成素材', result: '创作完成' } as any
+  )[view] || ''
+
   return (
     <div className="cwb">
-      {/* ① 顶部仅保留菜单标题，其他文案已删除 */}
+      {/* ① 顶部：标题 + 一句话介绍，不堆叠其他内容 */}
       <div className="cwb-top">
-        <h2 className="cwb-title-only">创意工作台</h2>
+        <div>
+          <h2 className="cwb-title-only">创意工作台</h2>
+          <p className="cwb-intro">输入产品链接并选择投放平台，AI 自动完成产品分析、创意规划与素材生成。</p>
+        </div>
       </div>
 
       <div className="cwb-body">
         <div className="cwb-main">
           {/* ② 输入模块常驻：展示用户链接 / 产品信息 */}
           <div className="cwb-input-card">
-            <div className="cwb-url">
-              <span className="cwb-link-ic">🔗</span>
-              <input value={input} onChange={e => setInput(e.target.value)} placeholder="https://soundora.com/products/air-pro"
-                onKeyDown={e => { if (e.key === 'Enter' && !running) analyze() }} />
-              <button className="cwb-reuse-btn" onClick={() => openLib('product')} title="从素材库复用已分析过的产品链接">复用产品</button>
-              <button className="cwb-start" onClick={analyze} disabled={running}>
-                {running ? '分析中…' : (cw ? '重新分析 →' : '开始分析 →')}
-              </button>
-            </div>
-            <div className="cwb-platforms">
-              <span className="cwb-pl-label">投放平台</span>
-              {visiblePlatforms.map(p => (
-                <button key={p} className={`cwb-chip ${selected.includes(p) ? 'on' : ''}`} onClick={() => togglePlatform(p)}>{p}</button>
-              ))}
-              {morePlatforms.length > 0 && (
-                <>
-                  <button className="cwb-chip more" onClick={() => setShowMore(o => !o)}>{showMore ? '收起' : '+ 更多'}</button>
-                  {showMore && morePlatforms.map(p => (
-                    <button key={p} className={`cwb-chip ${selected.includes(p) ? 'on' : ''}`} onClick={() => togglePlatform(p)}>{p}</button>
-                  ))}
-                </>
-              )}
-            </div>
-            {/* V4.60 / B3：商品/品牌参考图（上传或 URL），注入出图链路让素材参考真实外观 */}
-            <div className="cwb-ref-row">
-              <span className="cwb-pl-label">参考图</span>
-              <label className="cwb-ref-upload" title="上传商品/品牌图，本地合成或参考编辑到素材">
-                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onRefFile} disabled={refUploading} />
-                <span>{refUploading ? '处理中…' : '上传图片'}</span>
-              </label>
-              <button className="cwb-reuse-btn" onClick={() => openLib('reference')} disabled={refUploading} title="从素材库复用已用过的参考图">素材库</button>
-              <input className="cwb-ref-url" value={referenceImage.startsWith('http') ? referenceImage : ''}
-                onChange={e => { setReferenceImage(e.target.value.trim()); setReferenceName('') }}
-                placeholder="或粘贴图片 URL（自动下载）" disabled={refUploading} />
-              {referenceImage && (
-                <button className="cwb-ref-clear" onClick={() => { setReferenceImage(''); setReferenceName('') }} title="移除参考图">移除</button>
-              )}
-              {referenceName && <span className="cwb-ref-name" title={referenceImage}>{referenceName}</span>}
-            </div>
-            {/* V4.61 / B4：品牌复用——指定品牌名注入文案生成；或从素材库复用历史品牌 */}
-            <div className="cwb-ref-row">
-              <span className="cwb-pl-label">品牌</span>
-              <input className="cwb-ref-url" value={selectedBrand}
-                onChange={e => setSelectedBrand(e.target.value.trim())}
-                placeholder="指定品牌名（用于文案生成，可留空让模型推断）" />
-              <button className="cwb-reuse-btn" onClick={() => openLib('brand')} title="从素材库复用历史品牌">素材库</button>
+            {/* ② 输入模块：4 个主模块，组件一致；非必要子模块收进「更多选项」 */}
+            <div className="cwb-form">
+              {/* 链接输入框 */}
+              <div className="cwb-form-row">
+                <label className="cwb-field-label">产品链接</label>
+                <div className="cwb-url">
+                  <span className="cwb-link-ic">🔗</span>
+                  <input value={input} onChange={e => setInput(e.target.value)} placeholder="https://soundora.com/products/air-pro"
+                    onKeyDown={e => { if (e.key === 'Enter' && !running) analyze() }} />
+                </div>
+              </div>
+              {/* 投放平台：下拉单选 */}
+              <div className="cwb-form-row">
+                <label className="cwb-field-label" htmlFor="cwb-pl">投放平台</label>
+                <div className="cwb-select-wrap">
+                  <select id="cwb-pl" className="cwb-select" value={selectedPlatform} onChange={onPlatformChange}>
+                    {platforms.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+              </div>
+              {/* 参考图（上传 / URL） */}
+              <div className="cwb-form-row">
+                <label className="cwb-field-label">参考图</label>
+                <div className="cwb-ref-row cwb-ref-row2">
+                  <label className="cwb-ref-upload" title="上传商品/品牌图，注入出图链路参考真实外观">
+                    <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onRefFile} disabled={refUploading} />
+                    <span>{refUploading ? '处理中…' : (referenceImage ? '更换图片' : '上传图片')}</span>
+                  </label>
+                  {referenceImage && <span className="cwb-ref-name" title={referenceImage}>{referenceName || '已上传'}</span>}
+                  {referenceImage && <button className="cwb-ref-clear" onClick={() => { setReferenceImage(''); setReferenceName('') }} title="移除参考图">移除</button>}
+                  <input className="cwb-ref-url" value={referenceImage.startsWith('http') ? referenceImage : ''}
+                    onChange={e => { setReferenceImage(e.target.value.trim()); setReferenceName('') }}
+                    placeholder="或粘贴图片 URL（自动下载）" disabled={refUploading} />
+                </div>
+              </div>
+              {/* 品牌：文字输入 / 导入 Logo */}
+              <div className="cwb-form-row">
+                <label className="cwb-field-label">品牌</label>
+                <div className="cwb-brand-row">
+                  <input className="cwb-input" value={selectedBrand}
+                    onChange={e => setSelectedBrand(e.target.value.trim())}
+                    placeholder="品牌名称（可留空让模型推断）" />
+                  <label className="cwb-ref-upload" title="导入品牌 Logo 文件">
+                    <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={onBrandLogo} disabled={brandUploading} />
+                    <span>{brandUploading ? '上传中…' : (brandLogo ? '更换Logo' : '导入Logo')}</span>
+                  </label>
+                  {brandLogo && <span className="cwb-logo-thumb" title={brandLogoName}><img src={api.mediaFileDownloadUrl(brandLogo)} alt="" /></span>}
+                  {brandLogo && <button className="cwb-ref-clear" onClick={clearBrandLogo}>移除</button>}
+                </div>
+              </div>
             </div>
             {/* V4.61 / B4：素材库复用浮层（参考图 / 产品 / 品牌） */}
             {libPicker && (
@@ -642,81 +685,101 @@ export default function CreativeWorkbench() {
                     </div>}
               </div>
             )}
-            <div className="cwb-input-actions">
-              <label className="cwb-demo-toggle" title="开启后返回降噪耳机样例数据（标注为演示，非真实分析）">
-                <input type="checkbox" checked={demoMode} onChange={e => setDemoMode(e.target.checked)} />
-                <span>演示模式</span>
-              </label>
-              <button className="cwb-ghost-btn" onClick={openHistory}>历史</button>
-              <button className="cwb-ghost-btn" onClick={resetAll}>新建项目</button>
+            <div className="cwb-input-foot">
+              <button className="cwb-start" onClick={analyze} disabled={running}>
+                {running ? '分析中…' : (cw ? '重新分析 →' : '开始分析 →')}
+              </button>
+              <button className="cwb-ghost-btn" onClick={() => setShowAdvanced(o => !o)}>
+                {showAdvanced ? '收起更多' : '更多选项'}
+              </button>
             </div>
+            {/* 非必要子模块：演示模式 / 复用（产品·参考图·品牌）/ 历史 / 新建项目 */}
+            {showAdvanced && (
+              <div className="cwb-advanced">
+                <label className="cwb-demo-toggle" title="开启后返回样例数据（标注为演示，非真实分析）">
+                  <input type="checkbox" checked={demoMode} onChange={e => setDemoMode(e.target.checked)} />
+                  <span>演示模式</span>
+                </label>
+                <button className="cwb-reuse-btn" onClick={() => openLib('product')}>复用产品</button>
+                <button className="cwb-reuse-btn" onClick={() => openLib('reference')}>复用参考图</button>
+                <button className="cwb-reuse-btn" onClick={() => openLib('brand')}>复用品牌</button>
+                <button className="cwb-ghost-btn" onClick={openHistory}>历史</button>
+                <button className="cwb-ghost-btn" onClick={resetAll}>新建项目</button>
+              </div>
+            )}
           </div>
 
-          {/* ① 分析进度条：直接显示在输入框下方（不在右侧面板，也不在正文路线区） */}
-          {view === 'analyzing' && (
-            <div className="cwb-progress-card">
-              <div className="cwb-ai-ic"><span className="spark" /></div>
-              <h3>正在理解你的产品…</h3>
-              <p>分析页面信息、用户评论和同类广告，建立创意策略。</p>
-              <div className="cwb-bar"><div className="cwb-bar-fill" style={{ width: `${progressPct}%` }} /></div>
-              <div className="cwb-bar-txt">{progressText}</div>
+          {/* ③ 工作流处理模块：流程步骤 + 进度 + 结果（突出当前进度与待处理内容） */}
+          <div className="cwb-workflow">
+            <div className="cwb-wf-head">
+              <b>创作流程</b>
+              <span className={`cwb-wf-status ${view === 'result' ? 'ok' : (view === 'analyzing' || view === 'generating' ? 'run' : '')}`}>{wfStatus}</span>
             </div>
-          )}
-
-          {/* 分析结果 + 创意路线：常驻展示在输入框下方，分析完成后一直显示，便于直观查看 分析 / 路线 / 成品 */}
-          <div className="cwb-strategy">
-            {cw && view !== 'analyzing' && (
+            <div className="cwb-wf-steps">
+              {STEPS.map(s => {
+                const st = wf[s.n]
+                return (
+                  <div className={`cwb-wf-step ${st}`} key={s.n}>
+                    <div className="cwb-wf-dot">{st === 'done' ? '✓' : s.n}</div>
+                    <div className="cwb-wf-txt">
+                      <b>{s.label}</b>
+                      <small>{s.sub}</small>
+                      <span className="cwb-wf-tag">{st === 'done' ? '已完成' : st === 'cur' ? '进行中' : '待处理'}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            {(view === 'analyzing' || view === 'generating') && (
               <>
-                <section className="cwb-section">
-                  <h3 className="cwb-sub">产品分析完成</h3>
-                  <p className="cwb-summary">{cw.summary || '（暂无分析摘要）'}</p>
-                  {renderSrcBadges()}
-                  <div className="cwb-boxes">
-                    {[['行业', briefBoxes.industry], ['核心人群', briefBoxes.coreAudience],
-                      ['购买动机', briefBoxes.purchaseMotivation], ['价格带', briefBoxes.priceBand]].map(([k, v]) => (
-                      <div className="cwb-box" key={k as string}><span>{k as string}</span><b>{v || '—'}</b></div>
-                    ))}
-                  </div>
-                </section>
-
-                <section className="cwb-section">
-                  <div className="cwb-sub-row">
-                    <h3 className="cwb-sub">为你规划了 {routes.length} 条创意路线</h3>
-                    <span className="cwb-tag-reco">推荐方案</span>
-                  </div>
-                  <p className="cwb-reco-note">已按 {selected.join('、') || '所选媒体'} 的素材规格自动适配</p>
-                  <div className="cwb-routes">
-                    {routes.map((r, i) => (
-                      <div className={`cwb-route ${r.selected ? 'on' : ''}`} key={i} onClick={() => updateRoute(i, 'selected', !r.selected)}>
-                        <div className="cwb-route-head">
-                          <span className="cwb-route-key">{r.key || String.fromCharCode(65 + i)}</span>
-                          <b>{r.name || '未命名路线'}</b>
-                          <span className={`cwb-check ${r.selected ? 'on' : ''}`} />
-                        </div>
-                        <p>{r.description}</p>
-                        <div className="cwb-route-tags">
-                          {(r.tags || []).map((t: string, j: number) => <span key={j} className="cwb-rtag">{t}</span>)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="cwb-foot-note">路线与平台均可在生成后继续调整</p>
-                  <div className="cwb-confirm">
-                    <button className="cwb-gen-btn" onClick={generate} disabled={!routes.some(r => r.selected)}>
-                      确认并生成 {planImageCount()} 份素材
-                    </button>
-                  </div>
-                </section>
+                <div className="cwb-bar"><div className="cwb-bar-fill" style={{ width: `${progressPct}%` }} /></div>
+                <div className="cwb-bar-txt">{progressText}</div>
               </>
             )}
+            {view === 'result' && assets.length > 0 && (
+              <div className="cwb-wf-result">✓ 已生成 {assets.length} 份素材，通过平台合规预检</div>
+            )}
+          </div>
 
+          {/* 创意路线：交互选择保留在正文；文字性分析结果统一收进右侧「项目简报」 */}
+          <section className="cwb-section">
+            {cw && view !== 'analyzing' && (
+              <>
+                <div className="cwb-sub-row">
+                  <h3 className="cwb-sub">为你规划了 {routes.length} 条创意路线</h3>
+                  <span className="cwb-tag-reco">推荐方案</span>
+                </div>
+                <p className="cwb-reco-note">已按 {selectedPlatform || '所选媒体'} 的素材规格自动适配</p>
+                <div className="cwb-routes">
+                  {routes.map((r, i) => (
+                    <div className={`cwb-route ${r.selected ? 'on' : ''}`} key={i} onClick={() => updateRoute(i, 'selected', !r.selected)}>
+                      <div className="cwb-route-head">
+                        <span className="cwb-route-key">{r.key || String.fromCharCode(65 + i)}</span>
+                        <b>{r.name || '未命名路线'}</b>
+                        <span className={`cwb-check ${r.selected ? 'on' : ''}`} />
+                      </div>
+                      <p>{r.description}</p>
+                      <div className="cwb-route-tags">
+                        {(r.tags || []).map((t: string, j: number) => <span key={j} className="cwb-rtag">{t}</span>)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="cwb-foot-note">路线与平台均可在生成后继续调整</p>
+                <div className="cwb-confirm">
+                  <button className="cwb-gen-btn" onClick={generate} disabled={!routes.some(r => r.selected)}>
+                    确认并生成 {planImageCount()} 份素材
+                  </button>
+                </div>
+              </>
+            )}
             {!cw && view !== 'analyzing' && (
               <div className="cwb-drawer-empty">
                 <div className="cwb-empty-ic"><span className="spark" /></div>
                 <p>输入产品链接并选择媒体平台，点击「开始分析」后，这里将展示产品分析与创意路线。</p>
               </div>
             )}
-          </div>
+          </section>
 
           {/* ④ 生成成果：展示在「创意路线」下方（图片 / 视频 + 尺寸规格 + 文案内容） */}
           <section className="cwb-results">
@@ -769,10 +832,6 @@ export default function CreativeWorkbench() {
                   </div>
                 ))}
               </div>
-            )}
-
-            {view === 'generating' && (
-              <div className="cwb-bar"><div className="cwb-bar-fill" style={{ width: `${progressPct}%` }} /></div>
             )}
 
             <div className="cwb-grid">
@@ -862,6 +921,15 @@ export default function CreativeWorkbench() {
                   {(() => { const s: any = cw?.snapshot || {}; if (!s.source) return null; return (
                     <span className={`cwb-src-pill src-${s.source}`}>{srcLabel(s.source)}</span>
                   )})()}
+                </div>
+                {/* 产品摘要 + 来源徽标（从正文移入，分析结果统一展示在右侧面板） */}
+                <p className="cwb-brief-summary">{cw.summary || '（暂无分析摘要）'}</p>
+                {renderSrcBadges()}
+                <div className="cwb-boxes cwb-boxes-sm">
+                  {[['行业', briefBoxes.industry], ['核心人群', briefBoxes.coreAudience],
+                    ['购买动机', briefBoxes.purchaseMotivation], ['价格带', briefBoxes.priceBand]].map(([k, v]) => (
+                    <div className="cwb-box" key={k as string}><span>{k as string}</span><b>{v || '—'}</b></div>
+                  ))}
                 </div>
                 <div className="cwb-brief-row">
                   <div className="cwb-brief-label">推广目标</div>
