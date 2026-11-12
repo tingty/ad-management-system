@@ -1001,6 +1001,45 @@ async def upload_asset(file: UploadFile = File(...),
     with open(path, "wb") as f:
         f.write(await file.read())
     return {"path": path, "url": f"/files/{name}", "name": file.filename}
+
+
+@router.post("/assets/fetch-url")
+async def fetch_asset_url(body: dict, user: User = Depends(require_roles(*CAN_EDIT))):
+    """B3：把参考图 URL 下载到本地 uploads，返回 /files/<name>，供 style_opts.reference_image 使用。
+
+    仅支持 http(s)；校验响应 content-type 为图片、限大小（12MB），避免把非图片 / 超大资源
+    当作商品参考图塞进文生图链路。下载失败 / 非图片一律 400，不静默假装成功。
+    """
+    url = str((body or {}).get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "仅支持 http(s) 链接")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            async with client.stream("GET", url) as resp:
+                if resp.status_code != 200:
+                    raise HTTPException(400, f"无法获取图片（HTTP {resp.status_code}）")
+                ctype = (resp.headers.get("content-type") or "").lower()
+                if not ctype.startswith("image/"):
+                    raise HTTPException(400, f"链接内容不是图片（content-type={ctype or '未知'}）")
+                ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
+                       "image/gif": ".gif"}.get(ctype, ".img")
+                name = f"ref_{int(time.time() * 1000)}{ext}"
+                path = os.path.join(UPLOAD_DIR, name)
+                total = 0
+                MAX = 12 * 1024 * 1024
+                with open(path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(1024 * 64):
+                        total += len(chunk)
+                        if total > MAX:
+                            f.close(); os.remove(path)
+                            raise HTTPException(400, "图片超过 12MB 限制")
+                        f.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"下载参考图失败：{str(e)[:160]}")
+    return {"path": path, "url": f"/files/{name}", "name": url}
 @router.get("/settings/creative-presets")
 def creative_presets():
     """返回「素材创作」三大提示词库：创意方向（D01-D20）/ 内容风格（S01-S26）/ 配色（C01-C16）。

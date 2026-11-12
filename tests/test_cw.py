@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from database import SessionLocal
 from migrations import ensure_schema
-from models import User
+from models import User, GenerationJob
 from auth import hash_password
 from main import app  # 触发 on_startup：建表 + 默认管理员
 
@@ -134,6 +134,76 @@ class TestCW(unittest.TestCase):
         self.assertEqual(d.get("source"), "pasted", "仅文本模式 source 必须为 pasted")
         self.assertIsInstance(d.get("snapshot"), dict)
         self.assertEqual(d["snapshot"].get("source"), "pasted")
+
+    def test_08_copy_generated_per_platform(self):
+        # B3 / P0#4：文案生成必须返回非空 fields（修复「文案为空」）
+        a = self.client.post("/api/cw/analyze",
+                             json={"url": "https://x.com/p", "platforms": ["Meta"], "demo_mode": True},
+                             headers=self.auth).json()
+        analysis = a.get("analysis") or {}
+        # 前端 normalizeAnalysis 会把 channels 由平台名字符串转成 [{platform, reason}]
+        analysis = {**analysis, "channels": [{"platform": p, "reason": ""}
+                                            for p in (analysis.get("recommendedPlatforms") or ["Facebook", "Google"])]}
+        r = self.client.post("/api/media-campaign/copy",
+                             json={"analysis": analysis, "platform": "Facebook", "lang": "en"},
+                             headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()
+        self.assertIsInstance(d.get("fields"), dict, "文案必须为字典")
+        non_empty = [v for v in (d.get("fields") or {}).values() if v]
+        self.assertTrue(len(non_empty) > 0, "文案 fields 不应全空（P0#4：文案为空）")
+        self.assertIsInstance(d.get("model_info"), dict)
+
+    def test_09_generation_job_carries_copy_and_reference(self):
+        # B3：生成任务的 images_request 必须携带 copy_variants 与 style_opts.reference_image
+        a = self.client.post("/api/cw/analyze",
+                             json={"url": "https://x.com/p", "platforms": ["Meta"], "demo_mode": True},
+                             headers=self.auth).json()
+        analysis = a.get("analysis") or {}
+        # 前端 normalizeAnalysis：channels 平台名字符串 → [{platform, reason}]
+        analysis = {**analysis, "channels": [{"platform": p, "reason": ""}
+                                            for p in (analysis.get("recommendedPlatforms") or ["Meta", "Google"])]}
+        copy = self.client.post("/api/media-campaign/copy",
+                                json={"analysis": analysis, "platform": "Meta", "lang": "en"},
+                                headers=self.auth).json()
+        fields = copy.get("fields") or {}
+        first = lambda v: (v[0] if isinstance(v, list) else v) or ""
+        variant = {"headline": str(first(fields.get("headline") or fields.get("title"))),
+                   "sub": str(first(fields.get("description") or fields.get("body") or fields.get("primary_text"))),
+                   "cta": str(first(fields.get("cta"))),
+                   "brand": str(first(copy.get("brand"))), "label": "Meta"}
+        payload = {
+            "images_request": {
+                "analysis": analysis, "platform": "Meta", "lang": "en",
+                "copy_fields": {}, "copy_variants": [variant],
+                "style_opts": {"creative_direction": "D01", "reference_image": "/files/ref_test.png"},
+                "slots": [{"size": "1080x1080", "placement": "Meta"}],
+                "spec_version": "", "total_pixels": 1080 * 1080,
+            },
+            "idempotency_key": "cw_b3_test_1",
+        }
+        r = self.client.post("/api/generation-jobs", json=payload, headers=self.auth)
+        self.assertEqual(r.status_code, 202, r.text)
+        job_id = r.json().get("job_id")
+        self.assertIsNotNone(job_id)
+        db = SessionLocal()
+        try:
+            job = db.query(GenerationJob).filter_by(job_id=job_id).first()
+            self.assertIsNotNone(job, "生成任务必须落库")
+            req = job.request_json or {}
+            ir = req.get("images_request") or {}
+            self.assertEqual(len(ir.get("copy_variants") or []), 1, "images_request 必须携带 copy_variants")
+            self.assertEqual((ir.get("style_opts") or {}).get("reference_image"), "/files/ref_test.png",
+                             "参考图必须透传到 style_opts.reference_image")
+        finally:
+            db.close()
+
+    def test_10_fetch_url_validates(self):
+        # B3：非 http(s) 的参考图 URL 必须 400 拒绝（不静默通过）
+        r = self.client.post("/api/assets/fetch-url", json={"url": "ftp://example.com/x.png"}, headers=self.auth)
+        self.assertEqual(r.status_code, 400, r.text)
+        r2 = self.client.post("/api/assets/fetch-url", json={"url": "just-text"}, headers=self.auth)
+        self.assertEqual(r2.status_code, 400, r2.text)
 
 
 if __name__ == "__main__":

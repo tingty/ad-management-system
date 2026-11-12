@@ -2114,6 +2114,34 @@
 - `python3 tests/run_all.py`：全量通过（含 B1 新增的 demo / real_fetch / 422 断言）。
 - `python3 scripts/prepare_release.py --check`：发布数据最新版本 V4.59 == 系统版本 V4.59，校验通过。
 
+## V4.60 创意工作台：广告文案上线 + 商品/品牌参考图接入（B3·P0#4）
+
+**发布日期**：2026-11-12
+**变更类型**：新增 + 缺陷修复（后端新增端点、前端处理流程 + 文案生成 + 参考图接入）
+**涉及模块**：创意工作台（后端 routers / 前端 CreativeWorkbench / api / styles）；复用素材创作链路 `generate_media_copy` / `generate_media_images`
+**变更摘要**：依据《创意工作台专项评估与改造实施方案 V4.56》「问题排查」P0#4，确认创意工作台 `generate()` 只提交 `images_request` 且写死 `copy_fields: {}, copy_variants: []`，从不调用 `generate_media_copy`，导致**出图不出文案（文案为空）**；同时出图链路虽已支持 `style_opts.reference_image`（真实商品/品牌图本地合成或参考编辑），但 CW 前端既无上传/传参入口、也未把产品参考图接上。本版为 B 类（修改处理流程 + 新增内容）第三项，按依赖顺序 `B2 → B1 → B3 → B4 → B5` 推进：① 生成流程每平台基于统一分析来源产出可编辑广告文案，文案随图叠加（`copy_variants`），并在结果区展示 / 可下载 / 落库；② 输入区新增「商品/品牌参考图」，支持上传与 URL 两种方式，URL 经后端下载本地化后以 `/files/<name>` 注入 `style_opts.reference_image`，让生成资产真正参考真实商品外观。
+
+**更新要点**
+- 前端 `CreativeWorkbench.tsx`：在 `generate()` 中为每个平台先调用 `api.mediaCopy({analysis, platform, lang})` 取得 `fields` 与 `variants`，组装成 `copy_variants` 注入该平台每个路线任务的 `images_request`（图片叠加文案）；按平台收集文案用于展示。
+- 前端 `CreativeWorkbench.tsx`：输入卡新增「参考图」控件——上传（调 `POST /api/assets/upload`）或粘贴 URL（调新增 `POST /api/assets/fetch-url` 下载本地化），统一以 `/files/<name>` 经 `style_opts.reference_image` 进入出图链路；结果区新增「广告文案」区块，按平台展示字段并提供单平台 TXT / 全部 JSON 下载；生成后把文案写回创作历史（`updateCreationHistory` 的 `copy`，含 `platform_copies` 多平台全量），`loadPlan` 从历史恢复展示。
+- 后端 `routers.py` 新增 `POST /api/assets/fetch-url`：校验 http(s)、超时、content-type 为图片、限大小（12MB），下载到 `UPLOAD_DIR` 并返回 `/files/<name>`；非图片 / 下载失败一律 400，不静默假装成功。
+
+**本次优化与更改的功能 / 模块**
+- 【修复·前端】`CreativeWorkbench.tsx` 的 `generate()`：接入每平台文案生成并注入 `copy_variants`（修复「文案为空」），参考图经 `style_opts.reference_image` 进入出图。
+- 【新增·前端】输入卡「参考图」上传 + URL 输入；结果区「广告文案」展示与下载（TXT / JSON）；`loadPlan` 恢复历史文案。
+- 【新增·前端】`api.ts` 补充 `fetchAssetUrl` 与 `creationHistoryDetail` 封装。
+- 【新增·后端】`routers.py` 的 `POST /api/assets/fetch-url`：参考图 URL 下载本地化。
+- 【复用·后端】素材创作链路 `generate_media_copy` / `generate_media_images` 已具备文案叠加与 `reference_image` 能力，本版直接复用，无重复实现。
+
+**影响范围**
+- 前端：输入卡新增参考图控件、结果区新增文案区；现有布局 / 步骤 / 其它文案不变。文案生成比原流程每平台多 1 次模型调用，已计入进度与文案。
+- 后端：新增 1 个端点（不修改既有接口契约）；旧历史 `copy` 缺省为 null，前端空值兜底；`reference_image` 不传时维持原 `reference_mode=none` 行为，向后兼容。
+
+**验证**
+- 前端 `tsc --noEmit` 通过；`vite build` 通过。
+- `python3 tests/run_all.py`：全量通过（含 B3 新增的文案生成 / copy_variants 透传 / reference_image 透传 / URL 端点校验断言）。
+- `python3 scripts/prepare_release.py --check`：发布数据最新版本 V4.60 == 系统版本 V4.60，校验通过。
+
 **说明 / 默认约定**
 - 演示模式默认关闭；开启后返回降噪耳机样例并明确标注「演示样例」，不会伪装成真实抓取结论。
 - 真实抓取失败（链接不可达 / 空页）且未提供文本时，系统直接 422 阻断并提示「开启演示模式或补充正文」，不再静默套用样例数据。

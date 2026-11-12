@@ -1007,6 +1007,13 @@ export const api = {
     if (!res.ok) throw new Error(`上传失败 ${res.status}`)
     return res.json() as Promise<{ path: string; url: string; name: string }>
   },
+  // V4.60 / B3：把参考图 URL 下载到本地，返回 /files/<name>，用于 style_opts.reference_image
+  fetchAssetUrl: (url: string) =>
+    req<{ path: string; url: string; name: string }>('/api/assets/fetch-url',
+      { method: 'POST', body: JSON.stringify({ url }) }),
+  // V4.60 / B3：按 id 取单条素材历史（含 copy_json），用于恢复已生成的文案
+  creationHistoryDetail: (id: number) =>
+    req<any>(`/api/creation-history/${id}`),
   models: () => req<ModelConfig[]>('/api/settings/models'),
   modelPresets: (usage?: string) =>
     req<ModelPreset[]>(`/api/settings/models/presets${usage ? `?usage=${encodeURIComponent(usage)}` : ''}`),

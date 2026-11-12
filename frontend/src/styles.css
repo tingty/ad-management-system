@@ -1582,6 +1582,29 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cwb-src-pill.src-pasted { background: #eff6ff; color: #1e40af; }
 .cwb-src-pill.src-fetch_failed { background: #fef2f2; color: #991b1b; }
 
+/* V4.60 / B3：参考图输入行 + 文案区块 */
+.cwb-ref-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.cwb-ref-row .cwb-pl-label { font-size: 12.5px; color: #64748b; }
+.cwb-ref-upload { position: relative; display: inline-flex; overflow: hidden; }
+.cwb-ref-upload input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.cwb-ref-upload span { display: inline-block; padding: 7px 13px; border-radius: 9px; border: 1px solid var(--border, #e5e7eb); background: var(--card, #fff); color: var(--text, #1f2937); font-size: 12.5px; cursor: pointer; }
+.cwb-ref-upload:hover span { border-color: #16a34a; color: #15803d; }
+.cwb-ref-upload input:disabled + span { opacity: .6; cursor: not-allowed; }
+.cwb-ref-url { flex: 1 1 220px; min-width: 160px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border, #e5e7eb); font-size: 12.5px; background: var(--card, #fff); color: var(--text, #1f2937); }
+.cwb-ref-clear { background: transparent; border: none; color: #dc2626; font-size: 12.5px; cursor: pointer; padding: 4px 6px; }
+.cwb-ref-name { font-size: 12px; color: #16a34a; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.cwb-copy-section { margin: 14px 0 4px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; padding: 14px 16px; background: var(--card, #fff); }
+.cwb-copy-platform { padding: 10px 0; border-bottom: 1px dashed var(--border, #e5e7eb); }
+.cwb-copy-platform:last-child { border-bottom: none; }
+.cwb-copy-pl { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.cwb-copy-pl b { font-size: 14px; color: var(--text, #1f2937); }
+.cwb-copy-model { font-size: 11px; color: #64748b; background: #f1f5f9; border: 1px solid #e2e8f0; padding: 2px 8px; border-radius: 999px; }
+.cwb-copy-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px 18px; }
+.cwb-copy-field { display: flex; gap: 8px; font-size: 12.5px; line-height: 1.5; }
+.cwb-copy-k { flex: 0 0 96px; color: #64748b; }
+.cwb-copy-v { flex: 1; color: var(--text, #1f2937); word-break: break-word; }
+
 /* ④ 生成成果：输入框下方 */
 .cwb-strategy { margin-top: 18px; display: flex; flex-direction: column; gap: 14px; }
 .cwb-strategy > .cwb-section:first-child { margin-top: 0; }

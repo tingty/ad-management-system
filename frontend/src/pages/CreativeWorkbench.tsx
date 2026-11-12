@@ -86,6 +86,20 @@ function copyOf(a: any): { headline: string; sub: string; cta: string } | null {
   return has ? c : null
 }
 
+// V4.60 / B3：把 CW 的「统一分析来源」归一化为合法 LandingAnalysis，
+// 重点是把 channels（平台名字符串列表）转成 [{platform, reason}]，避免 media-campaign/copy
+// 与 generation-jobs 因 channels 类型不符 422（前端 mediaCopy 调用被 .catch 静默吞掉 → 文案为空）。
+function normalizeAnalysis(a: any): any {
+  const x = a || {}
+  const raw = (Array.isArray(x.channels) && x.channels.length)
+    ? x.channels
+    : (Array.isArray(x.recommendedPlatforms) ? x.recommendedPlatforms : [])
+  const channels = raw
+    .map((c: any) => (c && typeof c === 'object' && c.platform) ? c : { platform: String(c || ''), reason: '' })
+    .filter((c: any) => c.platform)
+  return { ...x, channels }
+}
+
 /**
  * 创意工作台 · V4.56（进度条归位 + 右侧「项目简报」结果面板）
  * ① 顶部仅保留菜单标题；② 输入模块常驻展示链接 / 产品信息；
@@ -103,6 +117,10 @@ export default function CreativeWorkbench() {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
   const [demoMode, setDemoMode] = useState(false)   // V4.59 / B1：演示模式开关（默认关闭）
+  const [copiesByPlatform, setCopiesByPlatform] = useState<Record<string, any>>({})  // V4.60 / B3：各平台生成的广告文案
+  const [referenceImage, setReferenceImage] = useState('')   // V4.60 / B3：商品/品牌参考图（/files/<name> 或 URL）
+  const [referenceName, setReferenceName] = useState('')     // 参考图展示名
+  const [refUploading, setRefUploading] = useState(false)   // 参考图上传/下载中
 
   const [view, setView] = useState<'input' | 'analyzing' | 'plan' | 'generating' | 'result'>('input')
   const [progressPct, setProgressPct] = useState(0)
@@ -220,6 +238,8 @@ export default function CreativeWorkbench() {
   async function generate() {
     if (!routes.length) return
     setError(''); setView('generating'); setAssets([]); setJobs([]); setChecked({}); setProgressText('正在创建素材任务…')
+    // V4.60 / B3：归一化为合法 LandingAnalysis（channels 转成 [{platform,reason}]），否则文案 / 出图端点会 422。
+    const analysis = normalizeAnalysis(cw?.analysis)
     let hid: number | null = null
     try {
       const h: any = await api.createCreationHistory({ analysis: cw?.analysis || {}, platform: selected[0] || '', lang: 'en' }).catch(() => null)
@@ -227,8 +247,40 @@ export default function CreativeWorkbench() {
     } catch { /* 历史可选 */ }
     if (planId) await api.updateCreativePlan(planId, { status: 'generating', history_id: hid ?? undefined }).catch(() => {})
 
-    const activeRoutes = routes.filter(r => r.selected)
+    // V4.60 / B3：先为每个平台生成广告文案（修复「文案为空」），并把参考图归一成 /files/ 本地路径。
     const targets = selected
+    const copiesByPlat: Record<string, any> = {}
+    const variantsByPlat: Record<string, any[]> = {}
+    for (const p of targets) {
+      try {
+        setProgressText(`正在为 ${p} 生成广告文案…`)
+        const cr: any = await api.mediaCopy({ analysis, platform: p, lang: 'en' }).catch(() => null)
+        if (cr && cr.fields) {
+          copiesByPlat[p] = { fields: cr.fields, schema: cr.schema, brand: cr.brand, model_info: cr.model_info, validation: cr.validation }
+          const f = cr.fields
+          const one = (v: any) => (Array.isArray(v) ? v.filter(Boolean).join(' / ') : (v == null ? '' : String(v)))
+          variantsByPlat[p] = [{
+            headline: one(f.headline ?? f.title) || '',
+            sub: one(f.description ?? f.body ?? f.primary_text) || '',
+            cta: one(f.cta) || '',
+            brand: one(cr.brand) || '',
+            label: p,
+          }]
+        }
+      } catch { /* 文案生成失败不阻断出图 */ }
+    }
+    setCopiesByPlatform(copiesByPlat)
+    let refPath = ''
+    if (referenceImage && referenceImage.trim()) {
+      const raw = referenceImage.trim()
+      if (raw.startsWith('http')) {
+        setRefUploading(true)
+        try { const fr: any = await api.fetchAssetUrl(raw); refPath = fr?.url || '' } catch { refPath = '' }
+        setRefUploading(false)
+      } else refPath = raw
+    }
+
+    const activeRoutes = routes.filter(r => r.selected)
     const collected: any[] = []
     const finalStates: string[] = []
     // A2（V4.57）：总任务数 = 平台数 × 选中路线数，进度分母据此计算（不再按平台数）。
@@ -248,15 +300,18 @@ export default function CreativeWorkbench() {
           genIdx++
           setProgressText(`正在为 ${p} · ${route?.name || '默认'} 生成推广图片…`)
           const slots = sizes.map(size => ({ size, placement: p }))
-          const style_opts = {
+          const style_opts: any = {
             creative_direction: `${route?.name || ''}（${route?.angle || ''}）`.replace(/[（）\s]+$/, ''),
             content_style: `${route?.description || ''}；${((route?.tags) || []).join('、')}`.replace(/^[；\s]+|[；\s]+$/g, ''),
             color_scheme: '',
           }
+          // V4.60 / B3：把商品/品牌参考图注入出图链路（后端仅接受 /files/ 本地路径，URL 已先行下载本地化）
+          if (refPath) style_opts.reference_image = refPath
           const payload = {
             images_request: {
-              analysis: cw?.analysis || {}, platform: p, lang: 'en',
-              copy_fields: {}, copy_variants: [], style_opts, slots,
+              analysis, platform: p, lang: 'en',
+              // V4.60 / B3：注入按平台生成的文案组合，使出图结果携带真实可投放文案（修复文案为空）
+              copy_fields: {}, copy_variants: variantsByPlat[p] || [], style_opts, slots,
               spec_version: rules?.spec_version || '',
               total_pixels: sizes.reduce((n: number, s: string) => { const [w, h] = s.split('x').map(Number); return n + (w * h || 0) }, 0),
             },
@@ -291,6 +346,21 @@ export default function CreativeWorkbench() {
           done++; setProgressPct(Math.round(done / totalJobs * 100))
         }
       }
+      // V4.60 / B3：把生成的文案落库（主平台字段供 copy_as_text 兼容，platform_copies 保留多平台全量）
+      if (hid) {
+        const primary = Object.keys(copiesByPlat)[0] || selected[0] || ''
+        const copyPayload: any = {
+          platform: primary,
+          lang: 'en',
+          fields: primary ? copiesByPlat[primary].fields : {},
+          schema: primary ? copiesByPlat[primary].schema : [],
+          brand: primary ? copiesByPlat[primary].brand : '',
+          model_info: primary ? copiesByPlat[primary].model_info : {},
+          copy_variants: primary ? variantsByPlat[primary] : [],
+          platform_copies: copiesByPlat,
+        }
+        await api.updateCreationHistory(hid, { copy: copyPayload }).catch(() => {})
+      }
     } catch (e: any) {
       setError((e?.message || '图片生成失败') + '（可重试或调整媒体后继续）')
     }
@@ -321,6 +391,29 @@ export default function CreativeWorkbench() {
     const f = assets.filter(a => a.file).map(a => a.file)
     if (f.length) window.open(api.mediaZipUrl(f, '创意工作台素材'), '_blank')
   }
+  // V4.60 / B3：文案下载（单平台 TXT / 全部 JSON）
+  function downloadBlob(filename: string, content: string, mime: string) {
+    const blob = new Blob([content], { type: mime })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = filename; a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+  function copyToText(p: string, c: any): string {
+    const lines = [`广告推广文案 · ${p} · ${c.model_info?.provider || ''}/${c.model_info?.model || ''}`, '-'.repeat(40)]
+    for (const [k, v] of Object.entries(c.fields || {})) {
+      if (v == null || v === '') continue
+      lines.push(`${k}：${Array.isArray(v) ? (v as any[]).filter(Boolean).join(' / ') : String(v)}`)
+    }
+    return lines.join('\n')
+  }
+  function downloadCopy(p: string) {
+    const c = copiesByPlatform[p]; if (!c) return
+    downloadBlob(`ad_copy_${p}.txt`, copyToText(p, c), 'text/plain;charset=utf-8')
+  }
+  function downloadAllCopy() {
+    downloadBlob('ad_copy_all.json', JSON.stringify(copiesByPlatform, null, 2), 'application/json')
+  }
   function toggleSelectAll() {
     if (selectedCount > 0) setChecked({})
     else setChecked(Object.fromEntries(assets.map(a => [a.file, true])))
@@ -328,6 +421,17 @@ export default function CreativeWorkbench() {
   function resetAll() {
     setView('input'); setCw(null); setLanding(null); setRoutes([]); setPlanId(null); setAssets([]); setJobs([])
     setHistoryId(null); setError(''); setProgressPct(0); setChecked({}); setDemoMode(false)
+    // V4.60 / B3：清空文案缓存与参考图
+    setCopiesByPlatform({}); setReferenceImage(''); setReferenceName('')
+  }
+  async function onRefFile(e: any) {
+    const file = e.target.files?.[0]; if (!file) return
+    setRefUploading(true)
+    try {
+      const r: any = await api.uploadAsset(file)
+      setReferenceImage(r?.url || ''); setReferenceName(r?.name || file.name)
+    } catch (err: any) { setError('参考图上传失败：' + (err?.message || '')) }
+    finally { setRefUploading(false); e.target.value = '' }
   }
 
   async function openHistory() {
@@ -346,6 +450,14 @@ export default function CreativeWorkbench() {
     setPlanId(item.id)
     if (item.history_id) setHistoryId(item.history_id)   // 还原历史归属，便于后续再下载 / 复用
     if (item.input) setInput(item.input)                 // 还原输入链接 / 文本（若存在）
+    // V4.60 / B3：从历史恢复已生成文案（多平台存于 platform_copies，单平台存于顶层字段）
+    if (item.history_id) {
+      api.creationHistoryDetail(item.history_id).then((h: any) => {
+        const cj = h?.copy || {}
+        if (cj.platform_copies && Object.keys(cj.platform_copies).length) setCopiesByPlatform(cj.platform_copies)
+        else if (cj.fields) setCopiesByPlatform({ [cj.platform || selected[0] || '']: cj })
+      }).catch(() => {})
+    }
     setHistOpen(false); setView('plan')
   }
 
@@ -385,6 +497,21 @@ export default function CreativeWorkbench() {
                   ))}
                 </>
               )}
+            </div>
+            {/* V4.60 / B3：商品/品牌参考图（上传或 URL），注入出图链路让素材参考真实外观 */}
+            <div className="cwb-ref-row">
+              <span className="cwb-pl-label">参考图</span>
+              <label className="cwb-ref-upload" title="上传商品/品牌图，本地合成或参考编辑到素材">
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onRefFile} disabled={refUploading} />
+                <span>{refUploading ? '处理中…' : '上传图片'}</span>
+              </label>
+              <input className="cwb-ref-url" value={referenceImage.startsWith('http') ? referenceImage : ''}
+                onChange={e => { setReferenceImage(e.target.value.trim()); setReferenceName('') }}
+                placeholder="或粘贴图片 URL（自动下载）" disabled={refUploading} />
+              {referenceImage && (
+                <button className="cwb-ref-clear" onClick={() => { setReferenceImage(''); setReferenceName('') }} title="移除参考图">移除</button>
+              )}
+              {referenceName && <span className="cwb-ref-name" title={referenceImage}>{referenceName}</span>}
             </div>
             <div className="cwb-input-actions">
               <label className="cwb-demo-toggle" title="开启后返回降噪耳机样例数据（标注为演示，非真实分析）">
@@ -485,6 +612,35 @@ export default function CreativeWorkbench() {
                 </div>
               )}
             </div>
+
+            {/* V4.60 / B3：广告文案展示与下载（修复「文案为空」） */}
+            {Object.keys(copiesByPlatform).length > 0 && (
+              <div className="cwb-copy-section">
+                <div className="cwb-sub-row">
+                  <h3 className="cwb-sub">广告文案</h3>
+                  <button className="cwb-link-btn" onClick={downloadAllCopy}>下载全部文案（JSON）</button>
+                </div>
+                {Object.entries(copiesByPlatform).map(([p, c]) => (
+                  <div className="cwb-copy-platform" key={p}>
+                    <div className="cwb-copy-pl">
+                      <b>{p}</b>
+                      {c.model_info?.provider && (
+                        <span className="cwb-copy-model">{c.model_info.provider}/{c.model_info.model}</span>
+                      )}
+                      <button className="cwb-link-btn sm" onClick={() => downloadCopy(p)}>下载 {p}</button>
+                    </div>
+                    <div className="cwb-copy-fields">
+                      {Object.entries(c.fields || {}).filter(([, v]) => v != null && v !== '').map(([k, v]) => (
+                        <div className="cwb-copy-field" key={k}>
+                          <span className="cwb-copy-k">{k}</span>
+                          <span className="cwb-copy-v">{Array.isArray(v) ? (v as any[]).filter(Boolean).join(' / ') : String(v)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {view === 'generating' && (
               <div className="cwb-bar"><div className="cwb-bar-fill" style={{ width: `${progressPct}%` }} /></div>
