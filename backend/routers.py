@@ -14,7 +14,8 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LandingAnalysisRequest, LandingAnalysis, MediaCopyRequest, MediaImageRequest,
                      CreativeAnalysisRequest, CreativeAnalysisResult,
                      CreativePlanRequest, CreativePlanResult, CreativeRoute,
-                     CWAnalyzeRequest, CWAnalysisResult, CWRoutesRequest, CWRoute, CWRoutesResult)
+                     CWAnalyzeRequest, CWAnalysisResult, CWRoutesRequest, CWRoute, CWRoutesResult,
+                     ProductSnapshot)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import get_llm_with_info, finalize_invocation, parse_json
@@ -41,6 +42,8 @@ from creation_history import (
     media_type_of, image_files_of, copy_as_text, build_files_zip,
     build_history_zip, cleanup_orphan_files,
 )
+from fetchers import (fetch_product, demo_product, demo_snapshot,
+                      evidence_prompt_part)
 
 router = APIRouter(prefix="/api")
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -406,42 +409,14 @@ _CW_ROUTES_SYS = (
 )
 
 
-@router.post("/cw/analyze", response_model=CWAnalysisResult)
-async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
-                         user: User = Depends(require_roles(*CAN_EDIT))):
-    """创意工作台·产品分析：产品链接/文本 + 平台 → 大模型产出定位 + 4 分析盒 + 项目简报；落库为创意方案草稿。"""
-    url = (req.url or "").strip()
-    text = (req.text or "").strip()
-    platforms = [str(p).strip() for p in (req.platforms or []) if str(p).strip()]
-    if not url and not text:
-        raise HTTPException(400, "请提供产品链接或描述")
-    llm, info = get_llm_with_info(db, "analysis")
-    user_prompt = json.dumps({"url": url, "text": text, "platforms": platforms}, ensure_ascii=False)
-    try:
-        resp = await llm.chat(_CW_ANALYZE_SYS, user_prompt)
-        parsed = parse_json(resp) or {}
-        info = finalize_invocation(info, llm, bool(parsed))
-    except Exception:
-        parsed, info = {}, finalize_invocation(info, llm, False)
-    boxes = parsed.get("boxes") or {}
-    brief = parsed.get("brief") or {}
-    title = str(parsed.get("title") or "").strip() or (url or text)[:40]
-    summary = str(parsed.get("summary") or "").strip()
-    rec_plat = [str(p).strip() for p in (parsed.get("recommendedPlatforms") or []) if str(p).strip()]
-    # Mock / 解析失败兜底：给出可演示的默认结构，保证端到端流程可跑通（不标注为真实模型结论）
-    if not (boxes or brief or summary):
-        boxes = {"industry": "消费电子", "coreAudience": "城市效率人群",
-                 "purchaseMotivation": "专注与沉浸", "priceBand": "中高端"}
-        brief = {"promotionGoal": "提升购买转化",
-                 "targetAudience": ["18-35 岁", "城市通勤", "音乐爱好者", "效率人群"],
-                 "sellingPoints": ["自适应主动降噪", "40 小时超长续航", "沉浸式空间音频"]}
-        summary = "这是一款面向城市年轻人的中高端无线降噪耳机，用户的关键动机是隔绝环境干扰，并在通勤和工作中获得沉浸体验。"
-        rec_plat = platforms[:3] or ["Meta", "Google"]
-        title = title or "产品分析"
-    # V4.58 / B2：基于产品分析结论构造「生成所需的统一分析来源」，避免前端再调一次
-    # landing-analysis（文档 P0#3：两次模型理解、且 landing 失败被静默 catch 成空）。
-    # 字段对齐媒体生成链路 media_ad 读取的键（industry/type/audience/advantages/channels/
-    # language/industry_profile 等），并保留 boxes/brief 嵌套供前端展示与历史恢复。
+def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
+                     analysis_meta=None, snapshot, info, db, user, platforms):
+    """V4.59 / B1 + B2：由 boxes/brief 构造「生成统一来源 analysis」、来源快照、并落库为创意方案草稿。
+
+    `analysis` 字段对齐媒体生成链路 media_ad 读取的键，兼容历史恢复；
+    `snapshot` 一并写入 analysis_json，保证历史记录可还原来源。
+    """
+    analysis_meta = analysis_meta or {}
     analysis = {
         "title": title,
         "summary": summary,
@@ -464,19 +439,134 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
         "recommendedPlatforms": rec_plat,
         "boxes": boxes,
         "brief": brief,
+        "snapshot": snapshot.model_dump(),
+        "url": analysis_meta.get("url") or "",
+        "final_url": analysis_meta.get("final_url") or "",
     }
     result = {
         "title": title, "summary": summary, "boxes": boxes, "brief": brief,
         "recommendedPlatforms": rec_plat, "analysis": analysis,
-        "model_info": info, "source": info.get("source", "local"),
+        "snapshot": snapshot, "model_info": info, "source": snapshot.source,
     }
     rec = CreativePlan(owner_id=user.id, owner_name=user.username, title=title,
                        analysis_json={"summary": summary, "boxes": boxes, "brief": brief,
-                                      "recommendedPlatforms": rec_plat, "analysis": analysis},
+                                      "recommendedPlatforms": rec_plat, "analysis": analysis,
+                                      "snapshot": snapshot.model_dump()},
                        platforms=platforms, gen_image=True, gen_video=False,
                        routes_json=[], status="draft", model_info=info)
     db.add(rec); db.commit(); db.refresh(rec)
     result["id"] = rec.id
+    return result
+
+
+@router.post("/cw/analyze", response_model=CWAnalysisResult)
+async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
+                         user: User = Depends(require_roles(*CAN_EDIT))):
+    """创意工作台·产品分析：产品链接/文本 + 平台 → 大模型产出定位 + 4 分析盒 + 项目简报；落库为创意方案草稿。
+
+    V4.59 / B1（P0#2：消除「只传 URL 不抓取」）：
+    - demo_mode=True  → 仅返回显式「降噪耳机」演示样例，标注 source=demo（不再静默套用/伪装成真实结论）。
+    - url 有值        → 服务端真实抓取落地页，用带 [E###] 证据包的页面内容驱动模型（source=real_fetch）；
+                        抓取失败且无文本时明确 422 阻断，绝不编造。
+    - 仅 text 有值    → 基于用户粘贴文本分析（source=pasted），不猜测 URL 外的产品事实。
+    """
+    url = (req.url or "").strip()
+    text = (req.text or "").strip()
+    platforms = [str(p).strip() for p in (req.platforms or []) if str(p).strip()]
+    if not url and not text:
+        raise HTTPException(400, "请提供产品链接或描述")
+
+    # ---- ① 演示模式：显式样例，不调用模型、不伪装成真实抓取 ----
+    if req.demo_mode:
+        demo = demo_product()
+        title = str(demo.get("title") or "").strip()
+        summary = str(demo.get("summary") or "").strip()
+        boxes = demo.get("boxes") or {}
+        brief = demo.get("brief") or {}
+        rec_plat = [str(p).strip() for p in (demo.get("recommendedPlatforms") or []) if str(p).strip()]
+        snapshot = ProductSnapshot(**demo_snapshot(url))
+        info = {"source": "demo", "provider": "demo", "model": "demo",
+                "fallback": False, "config_id": None, "request_id": "", "error_type": "", "retries": 0}
+        result = _build_cw_result(title, summary, boxes, brief, rec_plat,
+                                 analysis_meta=None, snapshot=snapshot, info=info, db=db,
+                                 user=user, platforms=platforms)
+        return CWAnalysisResult(**result)
+
+    # ---- ② URL：服务端真实抓取 + 证据包驱动 ----
+    if url:
+        fetch = await fetch_product(url)
+        if not fetch["ok"]:
+            # 抓取失败且无文本：明确阻断，不再静默套用演示数据
+            raise HTTPException(422, detail={
+                "message": "产品链接抓取失败，已在调用模型前阻断分析（needs_input）",
+                "errors": ["链接不可达或返回空页；请检查网址可达性，或开启「演示模式」，或直接粘贴产品描述文本"],
+                "fetch_quality": fetch["page"].get("fetch_quality") or "fetch_failed",
+                "final_url": fetch["page"].get("final_url") or url,
+                "hint": "系统不会从 URL 猜测产品事实；请补充正文或开启演示模式后重试。",
+            })
+        page = fetch["page"]
+        pack = fetch["pack"]
+        snapshot = ProductSnapshot(**fetch["snapshot"])
+        evidence_text = evidence_prompt_part(url, page, pack)
+        user_prompt = (
+            json.dumps({"url": url, "platforms": platforms}, ensure_ascii=False)
+            + "\n\n" + evidence_text
+            + "\n\n请严格基于上方带 [E###] 编号的页面真实内容输出产品分析 JSON；"
+              "不得从 URL / 域名推断页面未出现的事实，缺资料时留空。"
+        )
+        llm, info = get_llm_with_info(db, "analysis")
+        try:
+            resp = await llm.chat(_CW_ANALYZE_SYS, user_prompt)
+            parsed = parse_json(resp) or {}
+            info = finalize_invocation(info, llm, bool(parsed))
+        except Exception:
+            parsed, info = {}, finalize_invocation(info, llm, False)
+        boxes = parsed.get("boxes") or {}
+        brief = parsed.get("brief") or {}
+        title = str(parsed.get("title") or "").strip() or (page.get("title") or url)[:40]
+        summary = str(parsed.get("summary") or "").strip()
+        rec_plat = [str(p).strip() for p in (parsed.get("recommendedPlatforms") or []) if str(p).strip()]
+        # 真实抓取成功但模型未返回有效结构：用页面元信息（标题/H1）兜底，仍属真实抓取，不伪装为耳机样例
+        if not (boxes or brief or summary):
+            boxes = {"industry": "", "coreAudience": "", "purchaseMotivation": "", "priceBand": ""}
+            brief = {"promotionGoal": "", "targetAudience": [], "sellingPoints": []}
+            summary = (page.get("title") or (page.get("h1") or [""])[0] or url)[:120]
+            rec_plat = platforms[:3] or ["Meta", "Google"]
+            title = title or "产品分析"
+        result = _build_cw_result(title, summary, boxes, brief, rec_plat,
+                                 analysis_meta={"url": url, "final_url": page.get("final_url") or url},
+                                 snapshot=snapshot, info=info, db=db,
+                                 user=user, platforms=platforms)
+        return CWAnalysisResult(**result)
+
+    # ---- ③ 仅文本：基于用户粘贴描述分析（source=pasted） ----
+    llm, info = get_llm_with_info(db, "analysis")
+    user_prompt = json.dumps({"text": text, "platforms": platforms}, ensure_ascii=False)
+    try:
+        resp = await llm.chat(_CW_ANALYZE_SYS, user_prompt)
+        parsed = parse_json(resp) or {}
+        info = finalize_invocation(info, llm, bool(parsed))
+    except Exception:
+        parsed, info = {}, finalize_invocation(info, llm, False)
+    boxes = parsed.get("boxes") or {}
+    brief = parsed.get("brief") or {}
+    title = str(parsed.get("title") or "").strip() or text[:40]
+    summary = str(parsed.get("summary") or "").strip()
+    rec_plat = [str(p).strip() for p in (parsed.get("recommendedPlatforms") or []) if str(p).strip()]
+    # 文本模式解析失败：以用户文本首段兜底，标注 source=pasted（不伪装为真实抓取）
+    if not (boxes or brief or summary):
+        boxes = {"industry": "", "coreAudience": "", "purchaseMotivation": "", "priceBand": ""}
+        brief = {"promotionGoal": "", "targetAudience": [], "sellingPoints": []}
+        summary = text[:120]
+        rec_plat = platforms[:3] or ["Meta", "Google"]
+        title = title or "产品分析"
+    snapshot = ProductSnapshot(source="pasted", url="", final_url="",
+                               fetched_at="", fetch_quality="manual_text",
+                               snapshot_id="", title="", evidence_ids=[])
+    result = _build_cw_result(title, summary, boxes, brief, rec_plat,
+                             analysis_meta={"url": "", "final_url": ""},
+                             snapshot=snapshot, info=info, db=db,
+                             user=user, platforms=platforms)
     return CWAnalysisResult(**result)
 
 

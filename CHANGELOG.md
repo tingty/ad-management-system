@@ -2084,3 +2084,36 @@
 **说明 / 默认约定**
 - 本版仅做 A 类止血；B 类系统性重构（抓取 / 统一快照 / 覆盖编排 / 质检 / 视频）不在本次范围，待逐条确认方案后实施。
 - KeyError 修复采用「安全返回 + 自定义文本兜底」，未改变前端 `style_opts` 传参结构，因此不需要调整界面或处理流程。
+
+## V4.59 创意工作台：真实抓取 + 来源快照 + 演示模式隔离（B1·P0#2）
+
+**发布日期**：2026-11-12
+**变更类型**：新增 + 缺陷修复（新增 fetchers 模块、后端处理流程 + 前端展示）
+**涉及模块**：创意工作台（后端 routers / 新增 fetchers / schemas；前端 CreativeWorkbench / api / styles）
+**变更摘要**：依据《创意工作台专项评估与改造实施方案 V4.56》「问题排查」P0#2，确认 `api_cw_analyze` 仅把 URL 当字符串塞进提示词（不抓取），模型无页面事实可依、只能凭 URL 猜测或静默套用写死的「降噪耳机」演示数据并以真实结论呈现。本版为 B 类（修改处理流程 + 新增内容）第二项，按依赖顺序 `B2 → B1 → B3 → B4 → B5` 推进：① 输入 URL 时服务端真实抓取落地页并构造带 [E###] 证据包的事实提示词；② 新增 `ProductSnapshot` 固化来源 / 抓取时间 / 证据，可追溯；③ 把「降噪耳机演示数据」隔离到显式「演示模式」开关（默认关闭），非演示且抓取失败时明确 422 阻断，不再静默编造；④ 前端展示数据来源与真实调用的模型。
+
+**更新要点**
+- 新增 `backend/fetchers.py`：复用素材创作链路的真实抓取与证据机制（`fetch_page` / `build_evidence_pack` / `evidence_contract` / `claim_contract`），提供 `fetch_product(url)`（真实抓取 + 快照字段，抓取失败返回 `ok=False` 供调用方阻断）与隔离的 `demo_product()` / `demo_snapshot(url)`（仅演示模式使用，标注 `source=demo`）。
+- 后端 `schemas.py`：新增 `ProductSnapshot`（source / url / final_url / fetched_at / fetch_quality / snapshot_id / title / evidence_ids）；`CWAnalyzeRequest` 增加 `demo_mode: bool = False`；`CWAnalysisResult` 增加 `snapshot: ProductSnapshot`。
+- 后端 `routers.py` 的 `api_cw_analyze`：按三态分支 —— `demo_mode=True` 仅返回样例（`source=demo`，不调用模型、不伪装真实）；`url` 有值则服务端真实抓取并以证据包驱动模型（`source=real_fetch`），抓取失败且无文本时返回 `422 needs_input`；仅 `text` 有值则基于粘贴文本分析（`source=pasted`）。抽出 `_build_cw_result` 统一构造 B2 的「生成统一来源 analysis」并落库，快照一并写入 `CreativePlan.analysis_json`。
+
+**本次优化与更改的功能 / 模块**
+- 【新增·后端】`backend/fetchers.py`：CW 专属抓取模块（真实抓取 + 证据包 + 演示数据隔离）。
+- 【修复·后端】`schemas.py` 新增 `ProductSnapshot`；`CWAnalyzeRequest.demo_mode`；`CWAnalysisResult.snapshot`。
+- 【修复·后端】`routers.py` 的 `api_cw_analyze`：真实抓取 + 证据驱动 + 演示模式隔离 + 422 阻断；新增 `_build_cw_result` 统一构造 analysis 与快照落库。
+- 【前端】`api.ts` 的 `cwAnalyze` 请求体支持 `demo_mode`。
+- 【前端】`CreativeWorkbench.tsx`：输入框新增「演示模式」勾选并随请求发送；分析结果区与右侧「项目简报」面板展示「数据来源 / 落地页 / 抓取时间 / 抓取质量 / 分析模型」徽标（按来源着色）；`loadPlan` 恢复历史 `snapshot`。
+- 【测试】`tests/test_cw.py` 增强断言：演示模式返回 `source=demo`，真实抓取路径返回 `snapshot.fetched_at` 非空且 `source=real_fetch`，抓取失败 + 无文本返回 422。
+
+**影响范围**
+- 前端：新增演示模式开关与来源徽标展示；现有界面布局、步骤流程、文案不变。
+- 后端：新增 `fetchers.py`；`cw/analyze` 响应新增 `snapshot` 字段（向后兼容，旧调用方忽略即可）；`CreativePlan.analysis_json` 多存 `snapshot`，无表结构变更。`demo_mode` 未传时默认 `False`，向后兼容。
+
+**验证**
+- 前端 `tsc --noEmit` 通过；`vite build` 通过（约 47 模块）。
+- `python3 tests/run_all.py`：全量通过（含 B1 新增的 demo / real_fetch / 422 断言）。
+- `python3 scripts/prepare_release.py --check`：发布数据最新版本 V4.59 == 系统版本 V4.59，校验通过。
+
+**说明 / 默认约定**
+- 演示模式默认关闭；开启后返回降噪耳机样例并明确标注「演示样例」，不会伪装成真实抓取结论。
+- 真实抓取失败（链接不可达 / 空页）且未提供文本时，系统直接 422 阻断并提示「开启演示模式或补充正文」，不再静默套用样例数据。

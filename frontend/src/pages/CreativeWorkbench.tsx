@@ -102,6 +102,7 @@ export default function CreativeWorkbench() {
   const [input, setInput] = useState('')
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
+  const [demoMode, setDemoMode] = useState(false)   // V4.59 / B1：演示模式开关（默认关闭）
 
   const [view, setView] = useState<'input' | 'analyzing' | 'plan' | 'generating' | 'result'>('input')
   const [progressPct, setProgressPct] = useState(0)
@@ -159,6 +160,28 @@ export default function CreativeWorkbench() {
     setToast(m); window.setTimeout(() => setToast(t => (t === m ? null : t)), 3500)
   }
   function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
+  // V4.59 / B1：把来源快照 + 模型信息渲染成可追溯徽标（真实抓取 / 演示 / 手动文本 / 抓取失败）
+  function srcLabel(s?: string) {
+    return ({ real_fetch: '真实抓取', demo: '演示样例', pasted: '手动文本', fetch_failed: '抓取失败', local: '本地' } as any)[s || 'local'] || s || '—'
+  }
+  function renderSrcBadges() {
+    const snap: any = cw?.snapshot || {}
+    const mi: any = cw?.model_info || {}
+    const items: [string, string][] = []
+    items.push(['数据来源', srcLabel(snap.source)])
+    if (snap.final_url) items.push(['落地页', snap.final_url])
+    if (snap.fetched_at) items.push(['抓取时间', (snap.fetched_at || '').replace('T', ' ').slice(0, 19) + ' UTC'])
+    if (snap.fetch_quality) items.push(['抓取质量', snap.fetch_quality])
+    if (mi?.provider || mi?.model) items.push(['分析模型', `${mi.provider || ''}/${mi.model || ''}${mi.fallback ? '（兜底）' : ''}`])
+    if (!items.length) return null
+    return (
+      <div className="cwb-src-badges">
+        {items.map(([k, v], i) => (
+          <span key={i} className={`cwb-src-badge src-${snap.source || 'local'}`}><i>{k}</i>{v}</span>
+        ))}
+      </div>
+    )
+  }
   function togglePlatform(p: string) {
     setSelected(s => s.includes(p) ? s.filter(x => x !== p) : [...s, p])
   }
@@ -172,7 +195,7 @@ export default function CreativeWorkbench() {
     setRunning(true)                            // 分析进度在正文分析区展示
     setView('analyzing'); setProgressPct(8); setProgressText('正在解析产品页面…')
     try {
-      const cwRes: any = await api.cwAnalyze({ url: isUrl(val) ? val : '', text: isUrl(val) ? '' : val, platforms: selected })
+      const cwRes: any = await api.cwAnalyze({ url: isUrl(val) ? val : '', text: isUrl(val) ? '' : val, platforms: selected, demo_mode: demoMode })
       setCw(cwRes); setPlanId(cwRes?.id ?? null)
       setProgressPct(46); setProgressText('47% · 正在提取核心利益点')
       // V4.58 / B2：移除二次模型调用（landingAnalysis）。cwAnalyze 已返回统一分析来源 `analysis`，
@@ -304,7 +327,7 @@ export default function CreativeWorkbench() {
   }
   function resetAll() {
     setView('input'); setCw(null); setLanding(null); setRoutes([]); setPlanId(null); setAssets([]); setJobs([])
-    setHistoryId(null); setError(''); setProgressPct(0); setChecked({})
+    setHistoryId(null); setError(''); setProgressPct(0); setChecked({}); setDemoMode(false)
   }
 
   async function openHistory() {
@@ -316,7 +339,8 @@ export default function CreativeWorkbench() {
     setLanding(null); setAssets([]); setJobs([]); setHistoryId(null); setError('')
     setCw({ id: item.id, title: item.title, summary: item.analysis?.summary || '',
       boxes: item.analysis?.boxes || {}, brief: item.analysis?.brief || {}, recommendedPlatforms: item.analysis?.recommendedPlatforms || [],
-      analysis: (item.analysis && item.analysis.analysis) || {} })
+      analysis: (item.analysis && item.analysis.analysis) || {},
+      snapshot: (item.analysis && item.analysis.snapshot) || {} })   // V4.59 / B1：恢复来源快照
     setSelected((item.platforms || []).slice())
     setRoutes((item.routes || []).map((r: any) => ({ ...r, selected: r.selected !== false })))
     setPlanId(item.id)
@@ -363,6 +387,10 @@ export default function CreativeWorkbench() {
               )}
             </div>
             <div className="cwb-input-actions">
+              <label className="cwb-demo-toggle" title="开启后返回降噪耳机样例数据（标注为演示，非真实分析）">
+                <input type="checkbox" checked={demoMode} onChange={e => setDemoMode(e.target.checked)} />
+                <span>演示模式</span>
+              </label>
               <button className="cwb-ghost-btn" onClick={openHistory}>历史</button>
               <button className="cwb-ghost-btn" onClick={resetAll}>新建项目</button>
             </div>
@@ -386,6 +414,7 @@ export default function CreativeWorkbench() {
                 <section className="cwb-section">
                   <h3 className="cwb-sub">产品分析完成</h3>
                   <p className="cwb-summary">{cw.summary || '（暂无分析摘要）'}</p>
+                  {renderSrcBadges()}
                   <div className="cwb-boxes">
                     {[['行业', briefBoxes.industry], ['核心人群', briefBoxes.coreAudience],
                       ['购买动机', briefBoxes.purchaseMotivation], ['价格带', briefBoxes.priceBand]].map(([k, v]) => (
@@ -541,6 +570,9 @@ export default function CreativeWorkbench() {
                     <b>{cw.title || '未命名项目'}</b>
                     <small>{view === 'analyzing' ? '分析中' : view === 'plan' ? '分析完成' : assets.length ? '素材已生成' : '已分析'}</small>
                   </div>
+                  {(() => { const s: any = cw?.snapshot || {}; if (!s.source) return null; return (
+                    <span className={`cwb-src-pill src-${s.source}`}>{srcLabel(s.source)}</span>
+                  )})()}
                 </div>
                 <div className="cwb-brief-row">
                   <div className="cwb-brief-label">推广目标</div>

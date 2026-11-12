@@ -1565,6 +1565,23 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cwb-ghost-btn { background: var(--card, #fff); color: var(--text, #1f2937); border: 1px solid var(--border, #e5e7eb); padding: 7px 13px; border-radius: 9px; font-size: 12.5px; cursor: pointer; }
 .cwb-ghost-btn:hover { border-color: #16a34a; color: #15803d; }
 
+/* V4.59 / B1：演示模式开关 + 来源徽标（真实抓取 / 演示 / 手动文本 / 抓取失败） */
+.cwb-demo-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text, #1f2937); cursor: pointer; padding: 6px 10px; border: 1px dashed var(--border, #e5e7eb); border-radius: 9px; user-select: none; }
+.cwb-demo-toggle input { width: 14px; height: 14px; cursor: pointer; }
+.cwb-src-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.cwb-src-badge { display: inline-flex; align-items: baseline; gap: 5px; font-size: 11.5px; padding: 4px 9px; border-radius: 8px; background: #f1f5f9; color: #334155; border: 1px solid #e2e8f0; max-width: 100%; }
+.cwb-src-badge i { font-style: normal; color: #64748b; font-size: 10.5px; }
+.cwb-src-badge b, .cwb-src-badge { word-break: break-all; }
+.cwb-src-badge.src-real_fetch { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+.cwb-src-badge.src-demo { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
+.cwb-src-badge.src-pasted { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
+.cwb-src-badge.src-fetch_failed { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+.cwb-src-pill { display: inline-block; font-size: 10.5px; padding: 2px 8px; border-radius: 999px; margin-top: 4px; background: #f1f5f9; color: #334155; }
+.cwb-src-pill.src-real_fetch { background: #ecfdf5; color: #065f46; }
+.cwb-src-pill.src-demo { background: #fff7ed; color: #9a3412; }
+.cwb-src-pill.src-pasted { background: #eff6ff; color: #1e40af; }
+.cwb-src-pill.src-fetch_failed { background: #fef2f2; color: #991b1b; }
+
 /* ④ 生成成果：输入框下方 */
 .cwb-strategy { margin-top: 18px; display: flex; flex-direction: column; gap: 14px; }
 .cwb-strategy > .cwb-section:first-child { margin-top: 0; }

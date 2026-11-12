@@ -307,12 +307,36 @@ class CreativePlanResult(BaseModel):
 
 
 
+# ----------------------------- V4.59 / B1：产品来源快照（真实抓取 / 演示 / 手动文本） -----------------------------
+class ProductSnapshot(BaseModel):
+    """V4.59 / B1：本次产品分析的来源快照，保证结论可追溯、可区分「真实抓取 / 演示 / 手动文本 / 抓取失败」。
+
+    - source: real_fetch（服务端真实抓取并带入证据）/ demo（演示模式样例，非真实结论）/
+      pasted（用户粘贴文本）/ fetch_failed（链接不可达，已在调用模型前阻断）/ local（兜底）
+    - 仅记录可追溯元数据，绝不带任何凭据；evidence_ids 为本次抓取证据包的可引用编号。
+    """
+    model_config = {"protected_namespaces": ()}
+    source: str = "local"          # real_fetch / demo / pasted / fetch_failed / local
+    url: str = ""
+    final_url: str = ""            # 抓取后的最终地址（含重定向链终点）
+    fetched_at: str = ""           # 抓取时间（ISO UTC）
+    fetch_quality: str = "not_fetched"  # ok / thin_content / fetch_failed / manual_text / demo
+    snapshot_id: str = ""          # 证据包唯一 id（可追溯到 [E###] 采样）
+    title: str = ""                # 抓到的页面标题（或演示标识）
+    evidence_ids: List[str] = []
+
+
 # ----------------------------- V4.53 创意工作台：设计对齐的产品分析 + 3 条创意路线 -----------------------------
 class CWAnalyzeRequest(BaseModel):
-    """创意工作台·产品分析请求：产品链接 / 文本 + 所选媒体平台 → 大模型产出产品定位与项目简报。"""
+    """创意工作台·产品分析请求：产品链接 / 文本 + 所选媒体平台 → 大模型产出产品定位与项目简报。
+
+    V4.59 / B1：新增 `demo_mode` —— 仅当它显式为 True 时才返回「降噪耳机」样例数据，
+    并标注 source=demo；默认关闭，避免解析失败时静默套用演示数据冒充真实分析。
+    """
     url: str = ""
     text: str = ""
     platforms: List[str] = []
+    demo_mode: bool = False
 
 
 class CWAnalysisResult(BaseModel):
@@ -331,6 +355,7 @@ class CWAnalysisResult(BaseModel):
     brief: dict = {}                 # {promotionGoal, targetAudience:[], sellingPoints:[]}
     recommendedPlatforms: List[str] = []
     analysis: dict = {}              # 生成所需统一分析来源（B2：消除二次模型理解）
+    snapshot: ProductSnapshot = ProductSnapshot()   # V4.59 / B1：来源快照（真实抓取/演示/手动文本）
     model_info: ModelInfo = ModelInfo()
     source: str = "local"
 

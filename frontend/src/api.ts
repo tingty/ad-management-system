@@ -978,7 +978,8 @@ export const api = {
   creativePlanDetail: (id: number) =>
     req<any>(`/api/creative-plan/${id}`),
   // V4.53 创意工作台：设计对齐的产品分析 + 3 条创意路线（复用 CreativePlan 存储）
-  cwAnalyze: (payload: { url?: string; text?: string; platforms: string[] }) =>
+  // V4.59 / B1：支持 demo_mode（演示模式开关，仅开启时返回样例数据并标注 source=demo）
+  cwAnalyze: (payload: { url?: string; text?: string; platforms: string[]; demo_mode?: boolean }) =>
     req<any>('/api/cw/analyze', { method: 'POST', body: JSON.stringify(payload) }),
   cwRoutes: (payload: { plan_id?: number; analysis: any; platforms: string[]; brief: any }) =>
     req<any>('/api/cw/routes', { method: 'POST', body: JSON.stringify(payload) }),
