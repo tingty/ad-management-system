@@ -318,6 +318,16 @@ MEDIA_PLATFORMS = [
 MEDIA_PLATFORM_MAP = {p["platform"]: p for p in MEDIA_PLATFORMS}
 _PLATFORM_ALIASES = {k.lower(): k for k in MEDIA_PLATFORM_MAP}
 
+# 历史别名兼容：创意工作台等旧入口曾用 "Meta"/"fb"/"instagram" 指代 Facebook，
+# 这里统一收敛到规则内的规范平台名，避免 mediaCopy / 出图任务矩阵对 "Meta" 返回 422。
+_PLATFORM_ALIASES.update({
+    "meta": "Facebook",
+    "fb": "Facebook",
+    "facebook": "Facebook",
+    "instagram": "Facebook",
+    "ig": "Facebook",
+})
+
 
 def canonical_platform(name: str) -> str:
     return _PLATFORM_ALIASES.get(str(name or "").strip().lower(), "")

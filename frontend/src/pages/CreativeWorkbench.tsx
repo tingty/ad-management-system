@@ -44,7 +44,8 @@ function statusClass(s: string) {
   return 'off'
 }
 // 媒体平台兜底清单：当接口未返回（或返回结构异常）时，保证投放平台选择器始终可见
-const DEFAULT_PLATFORMS = ['Meta', 'Google', 'Unity', 'Adsterra']
+// 注意：必须用规则内的规范平台名（Facebook，而非旧别名 Meta），否则 mediaCopy / 出图会 422
+const DEFAULT_PLATFORMS = ['Facebook', 'Google', 'Unity', 'Adsterra']
 function isUrl(s: string) { return /^https?:\/\//i.test(s.trim()) }
 function isVideo(a: any) {
   const u = a?.url || a?.file || ''

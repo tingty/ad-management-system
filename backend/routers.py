@@ -25,6 +25,7 @@ from prompt_catalog import (library_dimensions, library_entries,
                             USAGE_TYPES, BEST_PRACTICES)
 from media_platforms import (list_media_platforms, validate_platform,
                              validate_task_matrix, media_rules_payload,
+                             canonical_platform,
                              MediaRuleError, SPEC_VERSION, MEDIA_RULES)
 from media_ad import generate_media_copy, generate_media_images
 from industry_profiles import resolve_profile
@@ -417,6 +418,11 @@ def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
     `snapshot` 一并写入 analysis_json，保证历史记录可还原来源。
     """
     analysis_meta = analysis_meta or {}
+    # 平台名归一：历史别名（如 Meta→Facebook）统一收敛到规则内规范名，
+    # 避免 recommendedPlatforms / channels 携带已弃用别名，导致后续 mediaCopy / 出图 422。
+    _seen = set()
+    rec_plat = [p for p in (canonical_platform(x) for x in (rec_plat or []))
+                if p and not (p in _seen or _seen.add(p))]
     analysis = {
         "title": title,
         "summary": summary,
@@ -582,7 +588,7 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
             boxes = {"industry": "", "coreAudience": "", "purchaseMotivation": "", "priceBand": ""}
             brief = {"promotionGoal": "", "targetAudience": [], "sellingPoints": []}
             summary = (page.get("title") or (page.get("h1") or [""])[0] or url)[:120]
-            rec_plat = platforms[:3] or ["Meta", "Google"]
+            rec_plat = platforms[:3] or ["Facebook", "Google"]
             title = title or "产品分析"
         result = _build_cw_result(title, summary, boxes, brief, rec_plat,
                                  analysis_meta={"url": url, "final_url": page.get("final_url") or url},
@@ -609,7 +615,7 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
         boxes = {"industry": "", "coreAudience": "", "purchaseMotivation": "", "priceBand": ""}
         brief = {"promotionGoal": "", "targetAudience": [], "sellingPoints": []}
         summary = text[:120]
-        rec_plat = platforms[:3] or ["Meta", "Google"]
+        rec_plat = platforms[:3] or ["Facebook", "Google"]
         title = title or "产品分析"
     snapshot = ProductSnapshot(source="pasted", url="", final_url="",
                                fetched_at="", fetch_quality="manual_text",

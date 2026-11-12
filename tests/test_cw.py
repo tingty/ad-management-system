@@ -309,6 +309,50 @@ class TestCW(unittest.TestCase):
             self.assertIn("gpt-4o", md_text)
 
 
+    def test_15_meta_alias_resolves_to_facebook(self):
+        # P0 回归：创意工作台历史使用平台名 "Meta"，但规则引擎只认 "Facebook"，
+        # 导致 mediaCopy / 出图任务矩阵对 "Meta" 返回 422（被前端 .catch 静默吞掉 →
+        # 「无文案、无素材图片」）。修复后 "Meta" 必须等价 "Facebook" 通过校验。
+        a = self.client.post("/api/cw/analyze",
+                             json={"url": "https://x.com/p", "platforms": ["Meta"], "demo_mode": True},
+                             headers=self.auth).json()
+        analysis = a.get("analysis") or {}
+        analysis = {**analysis, "channels": [{"platform": p, "reason": ""}
+                                            for p in (analysis.get("recommendedPlatforms") or ["Meta", "Google"])]}
+        # ① mediaCopy 必须接受 "Meta"（不再 422）
+        r = self.client.post("/api/media-campaign/copy",
+                             json={"analysis": analysis, "platform": "Meta", "lang": "en"},
+                             headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        # ② 出图任务矩阵必须接受 "Meta"（platform / slot.placement 均为 Meta）
+        payload = {
+            "images_request": {
+                "analysis": analysis, "platform": "Meta", "lang": "en",
+                "copy_fields": {}, "copy_variants": [],
+                "style_opts": {"creative_direction": "D01", "reference_image": "/files/ref_meta.png"},
+                "slots": [{"size": "1080x1080", "placement": "Meta"}],
+                "spec_version": "", "total_pixels": 1080 * 1080,
+            },
+            "idempotency_key": "cw_meta_alias_test",
+        }
+        r2 = self.client.post("/api/generation-jobs", json=payload, headers=self.auth)
+        self.assertEqual(r2.status_code, 202, r2.text)
+
+    def test_16_recommended_platforms_are_canonical(self):
+        # 兜底 rec_plat 必须返回规范名 Facebook（而非已弃用的别名 Meta），
+        # 否则前端选择器/后续生成仍会拿到 "Meta" 再次触发上述问题。
+        r = self.client.post("/api/cw/analyze",
+                             json={"url": "https://real.example.com/p", "platforms": ["Meta"],
+                                   "demo_mode": True},
+                             headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        rec = (r.json().get("analysis") or {}).get("recommendedPlatforms") or []
+        self.assertNotIn("Meta", rec, "recommendedPlatforms 不应再出现已弃用的别名 Meta")
+        self.assertTrue(all(p in ("Facebook", "Google", "Unity", "AppLovin",
+                                  "Adsterra", "Mintegral", "TikTok", "Moloco") for p in rec),
+                        f"recommendedPlatforms 必须为规则内规范平台名：{rec}")
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()
