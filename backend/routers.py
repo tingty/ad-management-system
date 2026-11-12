@@ -438,13 +438,41 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
         summary = "这是一款面向城市年轻人的中高端无线降噪耳机，用户的关键动机是隔绝环境干扰，并在通勤和工作中获得沉浸体验。"
         rec_plat = platforms[:3] or ["Meta", "Google"]
         title = title or "产品分析"
+    # V4.58 / B2：基于产品分析结论构造「生成所需的统一分析来源」，避免前端再调一次
+    # landing-analysis（文档 P0#3：两次模型理解、且 landing 失败被静默 catch 成空）。
+    # 字段对齐媒体生成链路 media_ad 读取的键（industry/type/audience/advantages/channels/
+    # language/industry_profile 等），并保留 boxes/brief 嵌套供前端展示与历史恢复。
+    analysis = {
+        "title": title,
+        "summary": summary,
+        "product": title,
+        "brand": "",
+        "industry": boxes.get("industry") or "",
+        "type": boxes.get("industry") or "",
+        "audience": ("、".join(brief.get("targetAudience") or []) or boxes.get("coreAudience") or "").strip(),
+        "advantages": brief.get("sellingPoints") or [],
+        "competitors": [],
+        "channels": rec_plat,
+        "language": "en",
+        "industry_profile": "",
+        "purchaseMotivation": boxes.get("purchaseMotivation") or "",
+        "priceBand": boxes.get("priceBand") or "",
+        "coreAudience": boxes.get("coreAudience") or "",
+        "promotionGoal": brief.get("promotionGoal") or "",
+        "targetAudience": brief.get("targetAudience") or [],
+        "sellingPoints": brief.get("sellingPoints") or [],
+        "recommendedPlatforms": rec_plat,
+        "boxes": boxes,
+        "brief": brief,
+    }
     result = {
         "title": title, "summary": summary, "boxes": boxes, "brief": brief,
-        "recommendedPlatforms": rec_plat, "model_info": info, "source": info.get("source", "local"),
+        "recommendedPlatforms": rec_plat, "analysis": analysis,
+        "model_info": info, "source": info.get("source", "local"),
     }
     rec = CreativePlan(owner_id=user.id, owner_name=user.username, title=title,
                        analysis_json={"summary": summary, "boxes": boxes, "brief": brief,
-                                      "recommendedPlatforms": rec_plat},
+                                      "recommendedPlatforms": rec_plat, "analysis": analysis},
                        platforms=platforms, gen_image=True, gen_video=False,
                        routes_json=[], status="draft", model_info=info)
     db.add(rec); db.commit(); db.refresh(rec)

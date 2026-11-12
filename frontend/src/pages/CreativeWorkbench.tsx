@@ -175,11 +175,10 @@ export default function CreativeWorkbench() {
       const cwRes: any = await api.cwAnalyze({ url: isUrl(val) ? val : '', text: isUrl(val) ? '' : val, platforms: selected })
       setCw(cwRes); setPlanId(cwRes?.id ?? null)
       setProgressPct(46); setProgressText('47% · 正在提取核心利益点')
-      const [landRes, routeRes] = await Promise.all([
-        api.landingAnalysis({ url: isUrl(val) ? val : undefined, text: isUrl(val) ? undefined : val }).catch(() => null),
-        api.cwRoutes({ plan_id: cwRes?.id, analysis: cwRes?.analysis || {}, platforms: selected, brief: cwRes?.brief || {} }).catch(() => ({ routes: cwRes?.routes || [] })),
-      ])
-      setLanding(landRes); setRoutes((routeRes?.routes || cwRes?.routes || []).map((r: any) => ({ ...r, selected: r.selected !== false })))
+      // V4.58 / B2：移除二次模型调用（landingAnalysis）。cwAnalyze 已返回统一分析来源 `analysis`，
+      // 路线规划与素材生成均以此为唯一依据，避免「两次模型理解」且 landing 失败被静默 catch 成空。
+      const routeRes = await api.cwRoutes({ plan_id: cwRes?.id, analysis: cwRes?.analysis || {}, platforms: selected, brief: cwRes?.brief || {} }).catch(() => ({ routes: cwRes?.routes || [] }))
+      setRoutes((routeRes?.routes || cwRes?.routes || []).map((r: any) => ({ ...r, selected: r.selected !== false })))
       setProgressPct(100); setProgressText('分析完成')
       setView('plan')
     } catch (e: any) {
@@ -200,7 +199,7 @@ export default function CreativeWorkbench() {
     setError(''); setView('generating'); setAssets([]); setJobs([]); setChecked({}); setProgressText('正在创建素材任务…')
     let hid: number | null = null
     try {
-      const h: any = await api.createCreationHistory({ analysis: landing || cw?.analysis || {}, platform: selected[0] || '', lang: 'en' }).catch(() => null)
+      const h: any = await api.createCreationHistory({ analysis: cw?.analysis || {}, platform: selected[0] || '', lang: 'en' }).catch(() => null)
       hid = h?.id ?? null; setHistoryId(hid)
     } catch { /* 历史可选 */ }
     if (planId) await api.updateCreativePlan(planId, { status: 'generating', history_id: hid ?? undefined }).catch(() => {})
@@ -233,7 +232,7 @@ export default function CreativeWorkbench() {
           }
           const payload = {
             images_request: {
-              analysis: landing || cw?.analysis || {}, platform: p, lang: 'en',
+              analysis: cw?.analysis || {}, platform: p, lang: 'en',
               copy_fields: {}, copy_variants: [], style_opts, slots,
               spec_version: rules?.spec_version || '',
               total_pixels: sizes.reduce((n: number, s: string) => { const [w, h] = s.split('x').map(Number); return n + (w * h || 0) }, 0),
@@ -316,7 +315,8 @@ export default function CreativeWorkbench() {
     // A4（V4.57）：先清理上一项目的残留（landing / assets / jobs / historyId），避免跨项目旧数据参与生成。
     setLanding(null); setAssets([]); setJobs([]); setHistoryId(null); setError('')
     setCw({ id: item.id, title: item.title, summary: item.analysis?.summary || '',
-      boxes: item.analysis?.boxes || {}, brief: item.analysis?.brief || {}, recommendedPlatforms: item.analysis?.recommendedPlatforms || [] })
+      boxes: item.analysis?.boxes || {}, brief: item.analysis?.brief || {}, recommendedPlatforms: item.analysis?.recommendedPlatforms || [],
+      analysis: (item.analysis && item.analysis.analysis) || {} })
     setSelected((item.platforms || []).slice())
     setRoutes((item.routes || []).map((r: any) => ({ ...r, selected: r.selected !== false })))
     setPlanId(item.id)

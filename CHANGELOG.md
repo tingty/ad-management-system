@@ -2016,6 +2016,35 @@
 - `python3 tests/run_all.py`：运行 152 项，失败 0、错误 0、跳过 0（纯前端改动，无新增后端用例）。
 - `python3 scripts/prepare_release.py --check`：发布数据最新版本 V4.56 == 系统版本 V4.56，校验通过。
 
+## V4.58 创意工作台：统一分析来源（B2·消除二次模型理解）
+
+**发布日期**：2026-11-12
+**变更类型**：缺陷修复（后端契约 + 前端数据源统一）
+**涉及模块**：创意工作台（前端 CreativeWorkbench / 后端 cw/analyze / schemas）
+**变更摘要**：依据《创意工作台专项评估与改造实施方案 V4.56》「问题排查」P0#3，确认 `cwAnalyze` 不返回 `analysis` 字段、前端在 `analyze()` 内二次调用 `landingAnalysis` 形成「两次模型理解」且失败时静默吞掉。本版为 B 类（涉及处理流程调整）第一项，按依赖顺序 `B2 → B1 → B3 → B4 → B5` 推进；仅做统一分析来源的契约与前端去重，不动界面布局。
+**更新要点**
+- 后端 `CWAnalysisResult` 新增 `analysis`，`api_cw_analyze` 一次性产出生成所需统一分析来源。
+- 前端移除第二次模型调用，路线规划与素材生成均复用 `cw.analysis` 单一来源。
+
+**来源 / 问题**
+- 依《创意工作台专项评估与改造实施方案V4.56》「问题排查」P0#3：`cwAnalyze` 不返回 `analysis` 字段，前端在 `analyze()` 内再调一次 `landingAnalysis` 取得落地分析，形成「两次模型理解」且 `landing` 失败被 `.catch(() => null)` 静默吞掉，路线规划与生成以空分析兜底。
+- 本版为 B 类（涉及处理流程调整）第一项，按依赖顺序 `B2 → B1 → B3 → B4 → B5` 推进；仅做统一分析来源的契约与前端去重，不动界面布局。
+
+**本次优化与更改的功能 / 模块**
+- 【修复·后端】`schemas.py` 的 `CWAnalysisResult` 新增 `analysis: dict`（统一分析来源）。
+- 【修复·后端】`routers.py` 的 `api_cw_analyze`：基于产品分析结论（boxes/brief/summary/recommendedPlatforms）构造兼容媒体生成链路 `media_ad` 的 `analysis`（含 industry/type/audience/advantages/channels/language/industry_profile 等键，并保留 boxes/brief 嵌套），随结果返回并写入 `CreativePlan.analysis_json`，供历史复用。
+- 【修复·前端】`CreativeWorkbench.tsx` 的 `analyze()` 移除第二次模型调用 `landingAnalysis`，路线规划与素材生成统一改用 `cw.analysis` 单一来源；落库 `createCreationHistory` 与生成 payload 的 `analysis` 均取自 `cw.analysis`；`loadPlan` 恢复时回填 `analysis`。
+- 【测试】`tests/test_cw.py` 的 `test_01` 增加 `analysis` 字段结构断言。
+
+**影响范围**
+- 前端：仅 `CreativeWorkbench.tsx` 的 `analyze()` / `generate()` / `loadPlan` 数据源切换；界面布局、步骤、文案、右侧面板均不变。
+- 后端：`api_cw/analyze` 响应多一个 `analysis` 字段（向后兼容，旧调用方忽略即可）；`CreativePlan.analysis_json` 多存 `analysis`，无表结构变更。
+
+**验证**
+- 前端 `tsc --noEmit` 通过；`vite build` 47 模块 / 309.72 kB JS / 82.30 kB CSS。
+- `python3 tests/run_all.py`：运行 152 项，失败 0、错误 0、跳过 0（含新增的 `analysis` 结构断言）。
+- `python3 scripts/prepare_release.py --check`：发布数据最新版本 V4.58 == 系统版本 V4.58，校验通过。
+
 **说明 / 默认约定**
 - 右侧面板定位为「结果查阅」：不展示进度、不展示路线勾选、不提供生成 / 下载按钮；需要选择路线或生成素材时仍在正文操作。
 - 面板默认展开，可点击头部「›」收起；收起后右侧显示竖排「项目简报 ›」标签，点击即展开。

@@ -316,7 +316,13 @@ class CWAnalyzeRequest(BaseModel):
 
 
 class CWAnalysisResult(BaseModel):
-    """产品分析结果：一句话定位 + 4 个分析盒 + 项目简报（推广目标 / 目标受众 / 核心卖点）。"""
+    """产品分析结果：一句话定位 + 4 个分析盒 + 项目简报（推广目标 / 目标受众 / 核心卖点）。
+
+    V4.58 / B2：新增 `analysis`，作为「生成素材」的唯一权威依据（替代前端再调一次
+    landing-analysis 产生的第二份分析），保证路线规划与图片生成都来自同一份结论。
+    `analysis` 兼容媒体生成链路（media_ad）读取的字段（industry/type/audience/advantages/
+    channels/language/industry_profile 等），并保留 boxes/brief 嵌套以便前端展示。
+    """
     model_config = {"protected_namespaces": ()}
     id: Optional[int] = None
     title: str = ""
@@ -324,6 +330,7 @@ class CWAnalysisResult(BaseModel):
     boxes: dict = {}                 # {industry, coreAudience, purchaseMotivation, priceBand}
     brief: dict = {}                 # {promotionGoal, targetAudience:[], sellingPoints:[]}
     recommendedPlatforms: List[str] = []
+    analysis: dict = {}              # 生成所需统一分析来源（B2：消除二次模型理解）
     model_info: ModelInfo = ModelInfo()
     source: str = "local"
 

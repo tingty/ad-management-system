@@ -55,6 +55,10 @@ class TestCW(unittest.TestCase):
         self.assertIsInstance(d.get("boxes"), dict, "boxes 必须为字典")
         self.assertIsInstance(d.get("brief"), dict, "brief 必须为字典")
         self.assertIn("industry", d["boxes"])
+        # V4.58 / B2：分析接口须返回统一分析来源，供路线规划与素材生成复用（避免二次模型理解）
+        self.assertIsInstance(d.get("analysis"), dict, "analysis 必须为字典（统一分析来源）")
+        self.assertTrue(d["analysis"].get("industry") or d["analysis"].get("summary"),
+                        "analysis 应携带 industry / summary 等生成所需字段")
         self.assertIn("promotionGoal", d["brief"])
         self.assertIn("sellingPoints", d["brief"])
 
