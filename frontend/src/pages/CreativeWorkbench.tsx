@@ -157,6 +157,8 @@ export default function CreativeWorkbench() {
   const [brandLogo, setBrandLogo] = useState('')           // 品牌 Logo 文件（UI 预览）
   const [brandLogoName, setBrandLogoName] = useState('')
   const [brandUploading, setBrandUploading] = useState(false)
+  // V4.62：素材图叠加模式。默认「纯图片」：生成素材时不含文字 / 按钮 / logo。
+  const [overlayMode, setOverlayMode] = useState<'pure' | 'text' | 'text_button'>('pure')
 
   useEffect(() => {
     function applyNames(names: string[]) {
@@ -289,6 +291,11 @@ export default function CreativeWorkbench() {
     const copyIsInvalid = (cr: any): boolean => !!(cr?.validation && cr.validation.status === 'invalid')
 
     for (const p of targets) {
+      // V4.62：纯图片模式不需要文案，跳过文案生成与校验，直接以空文案出图。
+      if (overlayMode === 'pure') {
+        variantsByPlat[p] = []
+        continue
+      }
       try {
         setProgressText(`正在为 ${p} 生成广告文案…`)
         const cr: any = await api.mediaCopy({ analysis, platform: p, lang: 'en' }).catch(() => null)
@@ -382,6 +389,8 @@ export default function CreativeWorkbench() {
               copy_fields: {}, copy_variants: variantsByPlat[p] || [], style_opts, slots,
               spec_version: rules?.spec_version || '',
               total_pixels: sizes.reduce((n: number, s: string) => { const [w, h] = s.split('x').map(Number); return n + (w * h || 0) }, 0),
+              // V4.62：叠加模式：纯图片 / 图片+文字 / 图片+文字+按钮
+              overlay_mode: overlayMode,
             },
             archive: hid ? { history_id: hid, platform: p, lang: 'en' } : undefined,
             idempotency_key: `cw_${p}_${genIdx}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -764,6 +773,27 @@ export default function CreativeWorkbench() {
                       </div>
                     </div>
                   ))}
+                </div>
+                <div className="cwb-overlay-modes">
+                  <span className="cwb-overlay-title">素材图叠加</span>
+                  <label className={`cwb-ov ${overlayMode === 'pure' ? 'on' : ''}`}>
+                    <input type="radio" name="overlay-mode" value="pure"
+                      checked={overlayMode === 'pure'} onChange={() => setOverlayMode('pure')} />
+                    <span className="cwb-ov-label">纯图片</span>
+                    <span className="cwb-ov-desc">只有纯图片，没有文字，没有按钮</span>
+                  </label>
+                  <label className={`cwb-ov ${overlayMode === 'text' ? 'on' : ''}`}>
+                    <input type="radio" name="overlay-mode" value="text"
+                      checked={overlayMode === 'text'} onChange={() => setOverlayMode('text')} />
+                    <span className="cwb-ov-label">图片+文字</span>
+                    <span className="cwb-ov-desc">有纯图片和文字，没有按钮</span>
+                  </label>
+                  <label className={`cwb-ov ${overlayMode === 'text_button' ? 'on' : ''}`}>
+                    <input type="radio" name="overlay-mode" value="text_button"
+                      checked={overlayMode === 'text_button'} onChange={() => setOverlayMode('text_button')} />
+                    <span className="cwb-ov-label">图片+文字+按钮</span>
+                    <span className="cwb-ov-desc">有纯图片，文字和按钮</span>
+                  </label>
                 </div>
                 <p className="cwb-foot-note">路线与平台均可在生成后继续调整</p>
                 <div className="cwb-confirm">

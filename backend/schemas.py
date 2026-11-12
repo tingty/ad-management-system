@@ -213,6 +213,11 @@ class MediaImageRequest(BaseModel):
     # V4.40 / F08：客户端声明的规则版本与像素总量，仅用于一致性核对，不作为放行依据。
     spec_version: str = ""
     total_pixels: Optional[int] = None
+    # V4.62：叠加模式，控制成图是否含文字/按钮/logo。可选值：
+    #   "pure"         — 纯图片，无文字、无按钮、无 logo
+    #   "text"         — 图片 + 文字（标题/副标/品牌）+ logo，无按钮
+    #   "text_button"  — 图片 + 文字 + 按钮 + logo（默认，保持旧行为向后兼容）
+    overlay_mode: str = "text_button"
 
 # ----------------------------- V4.50 创意工作台：全球创意分析 -----------------------------
 class CreativeAnalysisRequest(BaseModel):

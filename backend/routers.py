@@ -158,7 +158,8 @@ async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depend
     result = await generate_media_images(db, analysis, checked["meta"]["platform"], req.lang,
                                          req.copy_fields, req.style_opts, checked["slots"],
                                          req.logo or "", copy_variants=variants,
-                                         rules_meta=checked["meta"])
+                                         rules_meta=checked["meta"],
+                                         overlay_mode=req.overlay_mode)
     return result
 
 

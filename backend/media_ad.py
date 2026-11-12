@@ -730,7 +730,8 @@ def _resolve_logo_local(logo_url: str, workspace: BatchWorkspace | None = None):
 async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                                 copy_fields: dict, style_opts: dict, slots: list,
                                 logo: str = "", copy_variants: list | None = None,
-                                rules_meta: dict | None = None) -> dict:
+                                rules_meta: dict | None = None,
+                                overlay_mode: str = "text_button") -> dict:
     """基于「任务矩阵 + 创意文案组合 + 落地页分析结论 + 风格」生成推广图片素材。
 
     V4.38：copy_variants 为前端按勾选文案拼出的组合；不传时兼容旧行为。
@@ -990,7 +991,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                         bg_path or None, t["logo_path"] or None, None, strict_text,
                         t["palette"], t["layout"],
                         product_path if reference_mode == "local_composite" else None,
-                        t["dim_ratio"], trace=trace)
+                        t["dim_ratio"], False, None, trace, overlay_mode)
                     break
                 except TextOverflowError as e:
                     return {"__skipped__": {

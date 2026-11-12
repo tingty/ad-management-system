@@ -451,7 +451,8 @@ async def run_job(job_id: str) -> None:
         result = await generate_media_images(
             db, analysis, checked["meta"]["platform"], parsed.lang,
             parsed.copy_fields, parsed.style_opts, checked["slots"],
-            parsed.logo or "", copy_variants=variants, rules_meta=checked["meta"])
+            parsed.logo or "", copy_variants=variants, rules_meta=checked["meta"],
+            overlay_mode=parsed.overlay_mode)
         canceled = await asyncio.to_thread(_is_canceled, job_id)
         # 每张图带上任务 ID，归档 / 导出可回溯到具体服务端任务
         for im in (result.get("images") or []):

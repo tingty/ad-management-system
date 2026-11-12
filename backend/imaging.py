@@ -675,12 +675,18 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
                   dim_ratio: float = 0.28,
                   remove_white_logo_bg: bool = False,
                   composition: dict | None = None,
-                  trace: dict | None = None) -> str:
+                  trace: dict | None = None,
+                  overlay_mode: str = "text_button") -> str:
     """V4.41 / F05：按内容需求选布局、按品牌 token 上色、先预留 Logo 区。
 
     仍保留 V4.39 / F01 的硬约束：`strict_text=True` 时文字放不下就抛
     TextOverflowError，由上层标记 needs_revision，不输出省略号残图。
     旧调用（不传 palette / layout / logo）行为与 V4.40 一致。
+
+    V4.62 叠加模式 `overlay_mode`：
+      "pure"        — 纯图片，无文字、无按钮、无 logo
+      "text"        — 图片 + 文字（标题/副标/品牌）+ logo，无按钮
+      "text_button" — 图片 + 文字 + 按钮 + logo（默认，保持旧行为）
     """
     w, h = int(width), int(height)
     pal = resolve_palette(palette, accent)
@@ -688,52 +694,59 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
     logo_box = logo_metrics(w, h, logo_path)
     margin = max(10, int(min(w, h) * 0.06))
     accent_c = pal["accent"]
+    # V4.62：叠加模式（纯图片 / 图片+文字 / 图片+文字+按钮）
+    mode = overlay_mode if overlay_mode in ("pure", "text", "text_button") else "text_button"
+    draw_text = mode != "pure"
+    draw_cta = mode == "text_button"
+    draw_logo = mode != "pure"
 
     img = _prepare_bg(w, h, bg_path, pal, eff, dim_ratio,
                       composition=composition, trace=trace)
     img = _composite_product(img, product_image_path, eff)
 
     if eff == "banner":
-        d = ImageDraw.Draw(img)
-        # 小横幅：标题 | CTA | Logo 三段各自独立、按顺序预留，互不重叠（T07）
-        fs = max(11, int(h * 0.34))
-        pf = _primary_font(fs)
-        line = (headline or brand or "Ad")
-        cta_w = int(w * 0.24) if cta else 0
-        logo_w = (logo_box[2] + 8) if logo_box else 0
-        cta_x = w - margin - logo_w - cta_w
-        avail = max(0, cta_x - margin - 8)
-        if avail < 12:
-            raise TextOverflowError("小横幅在预留 CTA 与 Logo 后已无标题空间")
-        while d.textlength(line, font=pf) > avail and fs > 8:
-            fs -= 1
+        if draw_text or draw_cta:
+            d = ImageDraw.Draw(img)
+            # 小横幅：标题 | CTA | Logo 三段各自独立、按顺序预留，互不重叠（T07）
+            fs = max(11, int(h * 0.34))
             pf = _primary_font(fs)
-        if strict_text and d.textlength(line, font=pf) > avail:
-            raise TextOverflowError("小横幅标题超出可排版宽度")
-        # V4.64：浮字 + 投影描边（无底板），与常规版式一致的"无板可读"风格
-        lleg = _legibility(fs)
-        _draw_text(d, (margin, (h - fs * 1.2) / 2), line, fs, pal["fg"],
-                    shadow=lleg["shadow"], outline=lleg["outline"])
-        if cta:
-            cfs = max(9, int(h * 0.26))
-            cf = _primary_font(cfs)
-            while d.textlength(cta, font=cf) + cfs * 1.4 > cta_w and cfs > 8:
-                cfs -= 1
+            line = (headline or brand or "")
+            cta_w = int(w * 0.24) if (cta and draw_cta) else 0
+            logo_w = (logo_box[2] + 8) if (logo_box and draw_logo) else 0
+            cta_x = w - margin - logo_w - cta_w
+            avail = max(0, cta_x - margin - 8)
+            if avail < 12:
+                raise TextOverflowError("小横幅在预留 CTA 与 Logo 后已无标题空间")
+            while d.textlength(line, font=pf) > avail and fs > 8:
+                fs -= 1
+                pf = _primary_font(fs)
+            if strict_text and d.textlength(line, font=pf) > avail:
+                raise TextOverflowError("小横幅标题超出可排版宽度")
+            # V4.64：浮字 + 投影描边（无底板），与常规版式一致的"无板可读"风格
+            if draw_text and line:
+                lleg = _legibility(fs)
+                _draw_text(d, (margin, (h - fs * 1.2) / 2), line, fs, pal["fg"],
+                            shadow=lleg["shadow"], outline=lleg["outline"])
+            if cta and draw_cta:
+                cfs = max(9, int(h * 0.26))
                 cf = _primary_font(cfs)
-            if strict_text and d.textlength(cta, font=cf) + cfs * 1.4 > cta_w:
-                raise TextOverflowError("小横幅 CTA 超出可排版宽度")
-            bw = d.textlength(cta, font=cf) + cfs * 1.4
-            bh = min(h - 8, cfs * 2.0)
-            bx, by = cta_x, (h - bh) / 2
-            sd = max(1, int(cfs * 0.18))
-            d.rounded_rectangle([bx + sd, by + sd, bx + bw + sd, by + bh + sd],
-                                radius=int(bh / 2), fill=(0, 0, 0))
-            d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=int(bh / 2),
-                                fill=accent_c)
-            cleg = _legibility(cfs)
-            _draw_text(d, (bx + cfs * 0.7, by + bh / 2 - cfs * 0.62),
-                       cta, cfs, pal["on_accent"],
-                       shadow=cleg["shadow"], outline=cleg["outline"])
+                while d.textlength(cta, font=cf) + cfs * 1.4 > cta_w and cfs > 8:
+                    cfs -= 1
+                    cf = _primary_font(cfs)
+                if strict_text and d.textlength(cta, font=cf) + cfs * 1.4 > cta_w:
+                    raise TextOverflowError("小横幅 CTA 超出可排版宽度")
+                bw = d.textlength(cta, font=cf) + cfs * 1.4
+                bh = min(h - 8, cfs * 2.0)
+                bx, by = cta_x, (h - bh) / 2
+                sd = max(1, int(cfs * 0.18))
+                d.rounded_rectangle([bx + sd, by + sd, bx + bw + sd, by + bh + sd],
+                                    radius=int(bh / 2), fill=(0, 0, 0))
+                d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=int(bh / 2),
+                                    fill=accent_c)
+                cleg = _legibility(cfs)
+                _draw_text(d, (bx + cfs * 0.7, by + bh / 2 - cfs * 0.62),
+                           cta, cfs, pal["on_accent"],
+                           shadow=cleg["shadow"], outline=cleg["outline"])
     else:
         spec = LAYOUT_SPEC[eff]
         pad = max(margin, int(w * spec["x"]))
@@ -742,102 +755,109 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
         # 可读性由「投影 + 描边」保障（对齐样例素材的浮字风格）。
         fg_c, sub_c = pal["fg"], pal["sub"]
 
-        # ---- C. 字阶精修：基准 0.082，按行数 / 占用宽度自适应，避免过大突兀 ----
-        dm = ImageDraw.Draw(img)  # 仅用于文字测量，不落像素
-        fs = int(min(w, h) * 0.082)
-        hf = _primary_font(fs)
-        lines = _wrap(dm, headline, hf, text_w, 4)
-        while len(lines) > 3 and fs > 16:
-            fs = int(fs * 0.9)
+        cta_box = None
+        if draw_text:
+            # ---- C. 字阶精修：基准 0.082，按行数 / 占用宽度自适应，避免过大突兀 ----
+            dm = ImageDraw.Draw(img)  # 仅用于文字测量，不落像素
+            fs = int(min(w, h) * 0.082)
             hf = _primary_font(fs)
             lines = _wrap(dm, headline, hf, text_w, 4)
-        if strict_text:
-            lines = _wrap(dm, headline, hf, text_w, 4, allow_ellipsis=False)
-        # 单行 / 短标题不再被放大到突兀：实际占用宽度不足文字区 62% 时再收一档
-        _hw = max((dm.textlength(ln, font=hf) for ln in lines), default=0)
-        if _hw < text_w * 0.62 and fs > 16:
-            fs = int(fs * 0.9)
-            hf = _primary_font(fs)
-            lines = _wrap(dm, headline, hf, text_w, 4)
-        sfs = max(12, int(fs * 0.42))
-        sf = _primary_font(sfs)
-        sub_lines = (_wrap(dm, sub, sf, text_w, 3,
-                           allow_ellipsis=not strict_text) if sub else [])
-        cfs = max(12, int(fs * 0.46))
-        cf = _primary_font(cfs)
+            while len(lines) > 3 and fs > 16:
+                fs = int(fs * 0.9)
+                hf = _primary_font(fs)
+                lines = _wrap(dm, headline, hf, text_w, 4)
+            if strict_text:
+                lines = _wrap(dm, headline, hf, text_w, 4, allow_ellipsis=False)
+            # 单行 / 短标题不再被放大到突兀：实际占用宽度不足文字区 62% 时再收一档
+            _hw = max((dm.textlength(ln, font=hf) for ln in lines), default=0)
+            if _hw < text_w * 0.62 and fs > 16:
+                fs = int(fs * 0.9)
+                hf = _primary_font(fs)
+                lines = _wrap(dm, headline, hf, text_w, 4)
+            sfs = max(12, int(fs * 0.42))
+            sf = _primary_font(sfs)
+            sub_lines = (_wrap(dm, sub, sf, text_w, 3,
+                               allow_ellipsis=not strict_text) if sub else [])
+            cfs = max(12, int(fs * 0.46))
+            cf = _primary_font(cfs)
 
-        # 可读性参数（按字号推导：白字配暗投影 / 描边，通用且最稳，无需任何底板）
-        leg = _legibility(fs)
-        sub_leg = _legibility(sfs)
-        cta_leg = _legibility(cfs)
+            # 可读性参数（按字号推导：白字配暗投影 / 描边，通用且最稳，无需任何底板）
+            leg = _legibility(fs)
+            sub_leg = _legibility(sfs)
+            cta_leg = _legibility(cfs)
 
-        # 行高精修：更紧凑的呼吸感
-        line_h = int(fs * 1.12)
-        brand_h = 0
-        if brand:
-            bf = max(11, int(h * 0.024))
-            brand_h = bf + int(fs * 0.45)
-            brand_leg = _legibility(bf)
-        block = brand_h + len(lines) * line_h
-        if sub_lines:
-            block += int(fs * 0.18) + len(sub_lines) * int(sfs * 1.20)
+            # 行高精修：更紧凑的呼吸感
+            line_h = int(fs * 1.12)
+            brand_h = 0
+            if brand:
+                bf = max(11, int(h * 0.024))
+                brand_h = bf + int(fs * 0.45)
+                brand_leg = _legibility(bf)
+            block = brand_h + len(lines) * line_h
+            if sub_lines:
+                block += int(fs * 0.18) + len(sub_lines) * int(sfs * 1.20)
 
-        # ---- B. 安全锚点：品牌 / 标题 / 副标 整体落在画布安全区（无板，纯坐标约束） ----
-        container_bottom = h - margin
-        top = int(h * spec["top"])
-        if logo_box and pad + text_w > logo_box[0] - 4:
-            if top < logo_box[1] + logo_box[3] + 6:
-                top = logo_box[1] + logo_box[3] + 6
-        top_max = container_bottom - block
-        if top_max < int(h * 0.04):
-            top_max = int(h * 0.04)
-        top = max(int(h * 0.04), min(top, top_max))
+            # ---- B. 安全锚点：品牌 / 标题 / 副标 整体落在画布安全区（无板，纯坐标约束） ----
+            container_bottom = h - margin
+            top = int(h * spec["top"])
+            if logo_box and pad + text_w > logo_box[0] - 4:
+                if top < logo_box[1] + logo_box[3] + 6:
+                    top = logo_box[1] + logo_box[3] + 6
+            top_max = container_bottom - block
+            if top_max < int(h * 0.04):
+                top_max = int(h * 0.04)
+            top = max(int(h * 0.04), min(top, top_max))
 
-        # 品牌在上、标题 / 副标依序向下，统一锚点
-        brand_y = top
-        headline_y = top + brand_h
-        y = headline_y
-        if spec["rule"] == "left":
-            accent_box = [pad, y, pad + max(3, int(fs * 0.09)), y + len(lines) * line_h - 1]
-            text_x = pad + max(3, int(fs * 0.09)) + int(fs * 0.28)
+            # 品牌在上、标题 / 副标依序向下，统一锚点
+            brand_y = top
+            headline_y = top + brand_h
+            y = headline_y
+            if spec["rule"] == "left":
+                accent_box = [pad, y, pad + max(3, int(fs * 0.09)), y + len(lines) * line_h - 1]
+                text_x = pad + max(3, int(fs * 0.09)) + int(fs * 0.28)
+            else:
+                rx = pad if spec["rule"] == "top" else int((w - int(text_w * 0.14)) / 2)
+                accent_box = [rx, y - int(fs * 0.30), rx + int(text_w * 0.14), y - int(fs * 0.23)]
+                text_x = pad
+            y_sub = y + len(lines) * line_h
+            if sub_lines:
+                y_sub += int(fs * 0.18)
+            y_after_sub = y_sub + (len(sub_lines) * int(sfs * 1.20) if sub_lines else 0)
+
+            # 文字块包围盒（不含 CTA）：用于「按钮不与文字交叠」的约束与排障
+            text_box = [max(0, int(text_x - fs * 0.3)),
+                        max(0, int(min(brand_y, accent_box[1]) - fs * 0.5)),
+                        min(w, int(text_x + text_w + fs * 0.3)),
+                        min(h, int(y_after_sub + sfs * 0.5))]
+
+            d = ImageDraw.Draw(img)
+
+            if spec["band"] == "top":
+                d.rectangle([0, 0, w, max(2, int(h * 0.018))], fill=accent_c)
+
+            if brand:
+                _draw_text(d, (pad, brand_y), brand, bf, sub_c,
+                           shadow=brand_leg["shadow"], outline=brand_leg["outline"])
+            d.rectangle(accent_box, fill=accent_c)
+            y = headline_y
+            for ln in lines:
+                _draw_text(d, (text_x, y), ln, fs, fg_c,
+                           shadow=leg["shadow"], outline=leg["outline"])
+                y += line_h
+            if sub_lines:
+                y = y_sub
+                for ln in sub_lines:
+                    _draw_text(d, (text_x, y), ln, sfs, sub_c,
+                               shadow=sub_leg["shadow"], outline=sub_leg["outline"])
+                    y += int(sfs * 1.20)
         else:
-            rx = pad if spec["rule"] == "top" else int((w - int(text_w * 0.14)) / 2)
-            accent_box = [rx, y - int(fs * 0.30), rx + int(text_w * 0.14), y - int(fs * 0.23)]
-            text_x = pad
-        y_sub = y + len(lines) * line_h
-        if sub_lines:
-            y_sub += int(fs * 0.18)
-        y_after_sub = y_sub + (len(sub_lines) * int(sfs * 1.20) if sub_lines else 0)
-
-        # 文字块包围盒（不含 CTA）：用于「按钮不与文字交叠」的约束与排障
-        text_box = [max(0, int(text_x - fs * 0.3)),
-                    max(0, int(min(brand_y, accent_box[1]) - fs * 0.5)),
-                    min(w, int(text_x + text_w + fs * 0.3)),
-                    min(h, int(y_after_sub + sfs * 0.5))]
-
-        d = ImageDraw.Draw(img)
-
-        if spec["band"] == "top":
-            d.rectangle([0, 0, w, max(2, int(h * 0.018))], fill=accent_c)
-
-        if brand:
-            _draw_text(d, (pad, brand_y), brand, bf, sub_c,
-                       shadow=brand_leg["shadow"], outline=brand_leg["outline"])
-        d.rectangle(accent_box, fill=accent_c)
-        y = headline_y
-        for ln in lines:
-            _draw_text(d, (text_x, y), ln, fs, fg_c,
-                       shadow=leg["shadow"], outline=leg["outline"])
-            y += line_h
-        if sub_lines:
-            y = y_sub
-            for ln in sub_lines:
-                _draw_text(d, (text_x, y), ln, sfs, sub_c,
-                           shadow=sub_leg["shadow"], outline=sub_leg["outline"])
-                y += int(sfs * 1.20)
+            # 纯图片模式：不绘制任何文字 / 装饰，仅保留背景与产品合成
+            d = ImageDraw.Draw(img)
+            text_box = [0, 0, 0, 0]
+            fs = sfs = cfs = 0
 
         # ---- 按钮：浮于照片、与文字块不交叠、自带投影（对齐样例的 pill 风格） ----
-        if cta:
+        if draw_cta and cta:
             bh = int(cfs * 2.0)
             bw = int(dm.textlength(cta, font=cf) + cfs * 2.0)
             if strict_text and bw > text_w:
@@ -852,20 +872,20 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
             _draw_text(d, (cta_box[0] + cfs * 1.0, cta_box[1] + bh / 2 - cfs * 0.66),
                        cta, cfs, pal["on_accent"],
                        shadow=cta_leg["shadow"], outline=cta_leg["outline"])
-        else:
-            cta_box = None
 
         if trace is not None:
             trace["render"] = {
                 "layout": eff, "headline_font": fs, "sub_font": sfs, "cta_font": cfs,
                 "text_container": text_box,
                 "scrim": False,
+                "overlay_mode": mode,
                 "legibility": {"shadow": True, "outline": True},
                 "cta_box": cta_box,
                 "type_scale": "V4.64",
             }
 
-    img = _composite_logo(img, logo_path, w, h, logo_box, remove_white_logo_bg)
+    img = _composite_logo(img, logo_path if draw_logo else None, w, h, logo_box,
+                          remove_white_logo_bg)
     img.save(out_path, "PNG", optimize=True)
     return out_path
 

@@ -2313,3 +2313,28 @@
 - `frontend/src/styles.css`：新增 V4.65 布局样式（表单行、下拉、品牌行、工作流步骤、右侧摘要等）与窄屏自适应。
 
 **验证**：`tsc --noEmit` 通过；`npm run build` 成功（dist 产出，CSS 90.9 kB / JS 321 kB）；投放平台下拉单选、工作流步骤状态切换、右侧简报聚合均为纯 UI 改动，不触达 `analyze` / `generate` 等处理函数。
+
+### 热修复（2026-11-12）：创意工作台素材图叠加模式（纯图片 / 图片+文字 / 图片+文字+按钮）
+
+**目标**：在「创意工作台」最后生成素材图片时，默认生成**纯图片**（不增加文字、不增加 logo、不增加按钮）；并在「为你规划了 N 条创意路线」子模块新增三个叠加勾选项，供用户按场景选择成图形态：
+- **纯图片**：只有纯图片，没有文字，没有按钮；
+- **图片+文字**：有纯图片和文字，没有按钮；
+- **图片+文字+按钮**：有纯图片、文字和按钮（即旧默认行为）。
+
+**改动（后端 + 前端 + 样式）**
+- `backend/schemas.py`：`MediaImageRequest` 新增 `overlay_mode: str = "text_button"`（默认保持旧行为，向后兼容）。
+- `backend/imaging.py`：`render_ad_png` 新增 `overlay_mode` 参数，按 `pure / text / text_button` 三态控制绘制——
+  - `pure`：跳过全部文字（标题/副标/品牌）、CTA 按钮与 logo 合成，仅保留背景与商品合成；
+  - `text`：绘制文字（标题/副标/品牌）+ logo，跳过 CTA 按钮；
+  - `text_button`：绘制文字 + CTA 按钮 + logo（默认，与旧版一致）；
+  - banner 分支同样遵循三态（纯图片模式标题与 CTA 均不绘制）；`trace.render` 增加 `overlay_mode` 字段。
+- `backend/media_ad.py`：`generate_media_images` 透传 `overlay_mode`（默认 `"text_button"`），并在 `_render_one` 调用 `render_ad_png` 时传入。
+- `backend/routers.py` / `backend/job_service.py`：旧直接生成端点与持久任务 `run_job` 均从请求 `overlay_mode` 透传至 `generate_media_images`（缺省回落 `"text_button"`，无回归）。
+- `frontend/src/pages/CreativeWorkbench.tsx`：
+  · 新增 `overlayMode` 状态，**默认 `"pure"`**（满足「默认纯图片」要求）；
+  · 在「为你规划了 N 条创意路线」子模块增加三选项控件（纯图片 / 图片+文字 / 图片+文字+按钮）；
+  · 生成逻辑：当 `overlayMode === "pure"` 时跳过 `mediaCopy` 文案生成与 `invalid` 硬阻断（无需文案），直接以空文案出图；`copy_variants` 置空，且不填充「广告文案」展示区；
+  · 出图请求 `images_request` 携带 `overlay_mode: overlayMode`。
+- `frontend/src/styles.css`：新增 `.cwb-overlay-modes / .cwb-ov` 等样式（推荐态绿色边框 + 描述文案）。
+
+**验证**：`python3 -m py_compile` 五个后端文件全部通过；`tests/test_imaging_render.py` 现有 6 项断言全过（未回归）；新增脚本验证三种模式——`pure` 输出 `text_container=[0,0,0,0]`、`cta_box=None`、图片正常生成；`text` 有文字无 CTA；`text_button` 文字 + CTA 均存在。`overlay_mode` 缺省/旧调用回落 `"text_button"`，历史记录与旧接口保持兼容。
