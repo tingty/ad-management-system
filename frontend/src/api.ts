@@ -983,6 +983,13 @@ export const api = {
     req<any>('/api/cw/analyze', { method: 'POST', body: JSON.stringify(payload) }),
   cwRoutes: (payload: { plan_id?: number; analysis: any; platforms: string[]; brief: any }) =>
     req<any>('/api/cw/routes', { method: 'POST', body: JSON.stringify(payload) }),
+  // V4.61 / B4：创意工作台「素材沉淀库」（参考图 / 产品 / 品牌）增查删
+  cwLibrary: (params: { kind?: string; limit?: number; offset?: number } = {}) =>
+    req<any[]>('/api/cw/library' + qs(params)),
+  addCwLibrary: (payload: { kind: string; title?: string; file?: string; url?: string; meta?: any; source_plan_id?: number }) =>
+    req<any>('/api/cw/library', { method: 'POST', body: JSON.stringify(payload) }),
+  deleteCwLibrary: (id: number) =>
+    req<{ ok: boolean }>(`/api/cw/library/${id}`, { method: 'DELETE' }),
   updateCreationHistory: (id: number, payload: {
     // V4.38：copy 允许附带 selected_copy / copy_variants，记录本次选用的创意文案
     platform?: string; lang?: string; copy?: any

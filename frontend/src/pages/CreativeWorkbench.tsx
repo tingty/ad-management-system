@@ -121,6 +121,11 @@ export default function CreativeWorkbench() {
   const [referenceImage, setReferenceImage] = useState('')   // V4.60 / B3：商品/品牌参考图（/files/<name> 或 URL）
   const [referenceName, setReferenceName] = useState('')     // 参考图展示名
   const [refUploading, setRefUploading] = useState(false)   // 参考图上传/下载中
+  // V4.61 / B4：素材沉淀库（参考图 / 产品 / 品牌）复用状态
+  const [selectedBrand, setSelectedBrand] = useState('')     // 用户指定/复用的品牌名（注入文案生成）
+  const [libPicker, setLibPicker] = useState<'reference' | 'product' | 'brand' | null>(null)
+  const [libItems, setLibItems] = useState<any[]>([])
+  const [libLoading, setLibLoading] = useState(false)
 
   const [view, setView] = useState<'input' | 'analyzing' | 'plan' | 'generating' | 'result'>('input')
   const [progressPct, setProgressPct] = useState(0)
@@ -240,6 +245,8 @@ export default function CreativeWorkbench() {
     setError(''); setView('generating'); setAssets([]); setJobs([]); setChecked({}); setProgressText('正在创建素材任务…')
     // V4.60 / B3：归一化为合法 LandingAnalysis（channels 转成 [{platform,reason}]），否则文案 / 出图端点会 422。
     const analysis = normalizeAnalysis(cw?.analysis)
+    // V4.61 / B4：若用户指定/复用了品牌，注入分析，使文案生成沿用该品牌（避免模型随意起名）
+    if (selectedBrand && selectedBrand.trim()) analysis.brand = selectedBrand.trim()
     let hid: number | null = null
     try {
       const h: any = await api.createCreationHistory({ analysis: cw?.analysis || {}, platform: selected[0] || '', lang: 'en' }).catch(() => null)
@@ -270,6 +277,16 @@ export default function CreativeWorkbench() {
       } catch { /* 文案生成失败不阻断出图 */ }
     }
     setCopiesByPlatform(copiesByPlat)
+    // V4.61 / B4：把本次产出的品牌沉淀进素材库（去重键=品牌名）；含用户复用指定的品牌
+    const brandSet = new Set<string>()
+    if (selectedBrand && selectedBrand.trim()) brandSet.add(selectedBrand.trim())
+    for (const p of Object.keys(copiesByPlat)) {
+      const b = copiesByPlat[p]?.brand
+      if (b && String(b).trim()) brandSet.add(String(b).trim())
+    }
+    for (const b of brandSet) {
+      api.addCwLibrary({ kind: 'brand', title: b, meta: { platforms: Object.keys(copiesByPlat) } }).catch(() => {})
+    }
     let refPath = ''
     if (referenceImage && referenceImage.trim()) {
       const raw = referenceImage.trim()
@@ -278,6 +295,11 @@ export default function CreativeWorkbench() {
         try { const fr: any = await api.fetchAssetUrl(raw); refPath = fr?.url || '' } catch { refPath = '' }
         setRefUploading(false)
       } else refPath = raw
+    }
+    // V4.61 / B4：把本次实际使用的参考图沉淀进素材库（去重键=文件），新会话可一键引用
+    if (refPath) {
+      api.addCwLibrary({ kind: 'reference', title: referenceName || '参考图', file: refPath,
+        meta: { from: 'creative_workbench' } }).catch(() => {})
     }
 
     const activeRoutes = routes.filter(r => r.selected)
@@ -421,8 +443,8 @@ export default function CreativeWorkbench() {
   function resetAll() {
     setView('input'); setCw(null); setLanding(null); setRoutes([]); setPlanId(null); setAssets([]); setJobs([])
     setHistoryId(null); setError(''); setProgressPct(0); setChecked({}); setDemoMode(false)
-    // V4.60 / B3：清空文案缓存与参考图
-    setCopiesByPlatform({}); setReferenceImage(''); setReferenceName('')
+    // V4.60 / B3 + B4：清空文案缓存、参考图与品牌选择
+    setCopiesByPlatform({}); setReferenceImage(''); setReferenceName(''); setSelectedBrand('')
   }
   async function onRefFile(e: any) {
     const file = e.target.files?.[0]; if (!file) return
@@ -433,6 +455,21 @@ export default function CreativeWorkbench() {
     } catch (err: any) { setError('参考图上传失败：' + (err?.message || '')) }
     finally { setRefUploading(false); e.target.value = '' }
   }
+  // V4.61 / B4：素材沉淀库复用入口——拉取自己沉淀的参考图 / 产品 / 品牌，一键引用到当前会话
+  async function openLib(kind: 'reference' | 'product' | 'brand') {
+    setLibLoading(true); setLibPicker(kind); setLibItems([])
+    try {
+      const items: any[] = await api.cwLibrary({ kind, limit: 50 }).catch(() => [])
+      setLibItems(items)
+    } finally { setLibLoading(false) }
+  }
+  function pickLib(item: any) {
+    if (libPicker === 'reference') { setReferenceImage(item.file); setReferenceName(item.title || '素材库参考图') }
+    else if (libPicker === 'product') { if (item.url) setInput(item.url) }
+    else if (libPicker === 'brand') { setSelectedBrand(item.title || '') }
+    setLibPicker(null)
+  }
+  function closeLib() { setLibPicker(null) }
 
   async function openHistory() {
     setHistOpen(true)
@@ -480,6 +517,7 @@ export default function CreativeWorkbench() {
               <span className="cwb-link-ic">🔗</span>
               <input value={input} onChange={e => setInput(e.target.value)} placeholder="https://soundora.com/products/air-pro"
                 onKeyDown={e => { if (e.key === 'Enter' && !running) analyze() }} />
+              <button className="cwb-reuse-btn" onClick={() => openLib('product')} title="从素材库复用已分析过的产品链接">复用产品</button>
               <button className="cwb-start" onClick={analyze} disabled={running}>
                 {running ? '分析中…' : (cw ? '重新分析 →' : '开始分析 →')}
               </button>
@@ -505,6 +543,7 @@ export default function CreativeWorkbench() {
                 <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onRefFile} disabled={refUploading} />
                 <span>{refUploading ? '处理中…' : '上传图片'}</span>
               </label>
+              <button className="cwb-reuse-btn" onClick={() => openLib('reference')} disabled={refUploading} title="从素材库复用已用过的参考图">素材库</button>
               <input className="cwb-ref-url" value={referenceImage.startsWith('http') ? referenceImage : ''}
                 onChange={e => { setReferenceImage(e.target.value.trim()); setReferenceName('') }}
                 placeholder="或粘贴图片 URL（自动下载）" disabled={refUploading} />
@@ -513,6 +552,37 @@ export default function CreativeWorkbench() {
               )}
               {referenceName && <span className="cwb-ref-name" title={referenceImage}>{referenceName}</span>}
             </div>
+            {/* V4.61 / B4：品牌复用——指定品牌名注入文案生成；或从素材库复用历史品牌 */}
+            <div className="cwb-ref-row">
+              <span className="cwb-pl-label">品牌</span>
+              <input className="cwb-ref-url" value={selectedBrand}
+                onChange={e => setSelectedBrand(e.target.value.trim())}
+                placeholder="指定品牌名（用于文案生成，可留空让模型推断）" />
+              <button className="cwb-reuse-btn" onClick={() => openLib('brand')} title="从素材库复用历史品牌">素材库</button>
+            </div>
+            {/* V4.61 / B4：素材库复用浮层（参考图 / 产品 / 品牌） */}
+            {libPicker && (
+              <div className="cwb-lib-pop">
+                <div className="cwb-lib-head">
+                  <span>{libPicker === 'reference' ? '复用参考图' : libPicker === 'product' ? '复用产品' : '复用品牌'}</span>
+                  <button className="cwb-lib-close" onClick={closeLib}>✕</button>
+                </div>
+                {libLoading ? <div className="cwb-lib-empty">加载中…</div> :
+                  libItems.length === 0 ? <div className="cwb-lib-empty">暂无沉淀素材（生成过参考图 / 产品 / 品牌后会自动沉淀）</div> :
+                    <div className="cwb-lib-list">
+                      {libItems.map((it: any) => (
+                        <div key={it.id} className="cwb-lib-item" onClick={() => pickLib(it)}>
+                          {it.file && <img src={api.mediaFileDownloadUrl(it.file)} alt="" className="cwb-lib-thumb" />}
+                          <div className="cwb-lib-meta">
+                            <b>{it.title || '（未命名）'}</b>
+                            {it.url && <span className="cwb-lib-sub">{it.url}</span>}
+                          </div>
+                          <button className="cwb-lib-pick" onClick={(e) => { e.stopPropagation(); pickLib(it) }}>引用</button>
+                        </div>
+                      ))}
+                    </div>}
+              </div>
+            )}
             <div className="cwb-input-actions">
               <label className="cwb-demo-toggle" title="开启后返回降噪耳机样例数据（标注为演示，非真实分析）">
                 <input type="checkbox" checked={demoMode} onChange={e => setDemoMode(e.target.checked)} />

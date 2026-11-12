@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from database import SessionLocal
 from migrations import ensure_schema
-from models import User, GenerationJob
+from models import User, GenerationJob, CwLibrary
 from auth import hash_password
 from main import app  # 触发 on_startup：建表 + 默认管理员
 
@@ -204,6 +204,70 @@ class TestCW(unittest.TestCase):
         self.assertEqual(r.status_code, 400, r.text)
         r2 = self.client.post("/api/assets/fetch-url", json={"url": "just-text"}, headers=self.auth)
         self.assertEqual(r2.status_code, 400, r2.text)
+
+    def test_11_pasted_analyze_sinks_product(self):
+        # V4.61 / B4：粘贴文本分析（source=pasted）后，产品快照自动沉淀进素材库
+        text = "一款面向跑步爱好者的智能运动手环，主打心率监测与长续航。"
+        r = self.client.post("/api/cw/analyze",
+                             json={"text": text, "platforms": ["Meta"]}, headers=self.auth)
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()
+        self.assertEqual(d.get("source"), "pasted")
+        plan_id = d.get("id")
+        self.assertIsNotNone(plan_id)
+        # 产品应自动沉淀（去重键 source_plan_id）
+        r2 = self.client.get("/api/cw/library?kind=product", headers=self.auth)
+        self.assertEqual(r2.status_code, 200, r2.text)
+        items = r2.json()
+        self.assertIsInstance(items, list)
+        self.assertTrue(any(it.get("kind") == "product" and it.get("title") for it in items),
+                        "粘贴文本分析后应在素材库沉淀至少一条产品")
+        # 同一方案只应沉淀一条产品（去重，避免重复分析刷屏）
+        db = SessionLocal()
+        try:
+            cnt = db.query(CwLibrary).filter_by(kind="product", source_plan_id=plan_id).count()
+            self.assertEqual(cnt, 1, "同一方案只应沉淀一条产品")
+        finally:
+            db.close()
+
+    def test_12_reference_library_add_and_reuse(self):
+        # V4.61 / B4：参考图可沉淀进素材库，且新会话（GET）可读到并复用
+        add = self.client.post("/api/cw/library",
+                               json={"kind": "reference", "title": "品牌Logo", "file": "/files/ref_reuse_test.png"},
+                               headers=self.auth)
+        self.assertEqual(add.status_code, 200, add.text)
+        rid = add.json().get("id")
+        self.assertIsNotNone(rid)
+        # 去重：同一 file 再次提交应命中同一条（upsert）
+        add2 = self.client.post("/api/cw/library",
+                                json={"kind": "reference", "title": "品牌Logo2", "file": "/files/ref_reuse_test.png"},
+                                headers=self.auth)
+        self.assertEqual(add2.status_code, 200, add2.text)
+        self.assertEqual(add2.json().get("id"), rid, "同一文件应去重 upsert 到同一条")
+        # 新会话可读取并复用
+        lst = self.client.get("/api/cw/library?kind=reference", headers=self.auth)
+        self.assertEqual(lst.status_code, 200)
+        ids = [it["id"] for it in lst.json()]
+        self.assertIn(rid, ids)
+        # 校验：kind 非法应 400；reference 缺 file 应 400
+        bad = self.client.post("/api/cw/library", json={"kind": "video", "title": "x"}, headers=self.auth)
+        self.assertEqual(bad.status_code, 400, bad.text)
+        nofile = self.client.post("/api/cw/library", json={"kind": "reference", "title": "x"}, headers=self.auth)
+        self.assertEqual(nofile.status_code, 400, nofile.text)
+
+    def test_13_library_delete_owner_scoped(self):
+        # V4.61 / B4：删除自己的素材；未登录 401，删除后再次删除 404
+        add = self.client.post("/api/cw/library",
+                               json={"kind": "brand", "title": "AcmeBrand"}, headers=self.auth)
+        self.assertEqual(add.status_code, 200, add.text)
+        bid = add.json().get("id")
+        self.assertIsNotNone(bid)
+        noauth = self.client.delete(f"/api/cw/library/{bid}")
+        self.assertEqual(noauth.status_code, 401)
+        delr = self.client.delete(f"/api/cw/library/{bid}", headers=self.auth)
+        self.assertEqual(delr.status_code, 200, delr.text)
+        again = self.client.delete(f"/api/cw/library/{bid}", headers=self.auth)
+        self.assertEqual(again.status_code, 404, again.text)
 
 
 if __name__ == "__main__":

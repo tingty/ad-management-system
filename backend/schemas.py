@@ -368,6 +368,34 @@ class CWRoutesRequest(BaseModel):
     brief: dict = {}
 
 
+# ----------------------------- V4.61 / B4：创意工作台「素材沉淀库」 -----------------------------
+class CwLibraryOut(BaseModel):
+    """素材沉淀库条目（响应）。"""
+    model_config = {"protected_namespaces": ()}
+    id: int
+    owner_id: Optional[int] = None
+    owner_name: Optional[str] = None
+    kind: str                                  # reference / product / brand
+    title: str = ""
+    file: Optional[str] = None                 # /files/<name>，仅 reference 必填
+    url: Optional[str] = None                  # 产品链接（kind=product）
+    meta_json: Optional[dict] = None
+    source_plan_id: Optional[int] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class CwLibraryCreate(BaseModel):
+    """新增/沉淀一条素材库条目（后端按 kind 去重 upsert）。"""
+    model_config = {"protected_namespaces": ()}
+    kind: str                                  # reference / product / brand
+    title: str = ""
+    file: Optional[str] = None
+    url: Optional[str] = None
+    meta: Optional[dict] = None
+    source_plan_id: Optional[int] = None
+
+
 class CWRoute(BaseModel):
     """单条创意路线（概念级，非逐平台）。"""
     key: str = ""                    # A / B / C

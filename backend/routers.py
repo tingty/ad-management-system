@@ -7,7 +7,7 @@ import os, time, re, json
 
 from database import get_db
 from models import (ModelConfig, User, AuditLog, LoginLog, PromptConfig, SystemState,
-                    CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, CreativePlan, utcnow)
+                    CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, CreativePlan, CwLibrary, utcnow)
 from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LoginRequest, UserOut, UserCreate, UserUpdate,
                      PromptOut, PromptUpdate, PromptDefaultIn,
@@ -15,7 +15,7 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      CreativeAnalysisRequest, CreativeAnalysisResult,
                      CreativePlanRequest, CreativePlanResult, CreativeRoute,
                      CWAnalyzeRequest, CWAnalysisResult, CWRoutesRequest, CWRoute, CWRoutesResult,
-                     ProductSnapshot)
+                     ProductSnapshot, CwLibraryOut, CwLibraryCreate)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import get_llm_with_info, finalize_invocation, parse_json
@@ -456,7 +456,58 @@ def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
                        routes_json=[], status="draft", model_info=info)
     db.add(rec); db.commit(); db.refresh(rec)
     result["id"] = rec.id
+    # V4.61 / B4：把真实抓取 / 手动文本的产品快照沉淀进素材库（演示样例不沉淀）。
+    # 去重键为 source_plan_id：一个创意方案只对应一条产品条目，重复分析不会刷屏。
+    if snapshot.source in ("real_fetch", "pasted") and title:
+        _upsert_cw_library(db, user, "product", title,
+                           url=analysis_meta.get("url") or "",
+                           meta={"snapshot_id": snapshot.snapshot_id,
+                                 "evidence_ids": snapshot.evidence_ids,
+                                 "summary": summary, "brand": analysis.get("brand") or "",
+                                 "platform": (platforms or [None])[0] or ""},
+                           source_plan_id=rec.id)
     return result
+
+
+def _upsert_cw_library(db: Session, user: User, kind: str, title: str, *,
+                       file: str | None = None, url: str | None = None,
+                       meta: dict | None = None, source_plan_id: int | None = None) -> CwLibrary:
+    """B4 素材沉淀库 upsert：按 kind 去重，避免重复素材刷屏。
+
+    - product → (owner_id, source_plan_id)
+    - reference → (owner_id, file)
+    - brand → (owner_id, title)
+    """
+    q = db.query(CwLibrary).filter(CwLibrary.owner_id == user.id, CwLibrary.kind == kind)
+    if kind == "product":
+        if source_plan_id:
+            q = q.filter(CwLibrary.source_plan_id == source_plan_id)
+    elif kind == "reference":
+        q = q.filter(CwLibrary.file == (file or ""))
+    elif kind == "brand":
+        q = q.filter(CwLibrary.title == (title or ""))
+    existing = q.first()
+    if existing:
+        existing.title = title or existing.title
+        existing.file = file if file is not None else existing.file
+        existing.url = url if url is not None else existing.url
+        existing.meta_json = meta
+        existing.updated_at = utcnow()
+    else:
+        existing = CwLibrary(owner_id=user.id, owner_name=user.username, kind=kind,
+                             title=title, file=file, url=url, meta_json=meta,
+                             source_plan_id=source_plan_id)
+        db.add(existing)
+    db.commit(); db.refresh(existing)
+    return existing
+
+
+def _cw_library_to_dict(row: CwLibrary) -> dict:
+    return {"id": row.id, "owner_id": row.owner_id, "owner_name": row.owner_name,
+            "kind": row.kind, "title": row.title or "", "file": row.file, "url": row.url,
+            "meta_json": row.meta_json, "source_plan_id": row.source_plan_id,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None}
 
 
 @router.post("/cw/analyze", response_model=CWAnalysisResult)
@@ -621,6 +672,58 @@ async def api_cw_routes(req: CWRoutesRequest, db: Session = Depends(get_db),
             db.commit(); db.refresh(r0)
             result["id"] = r0.id
     return CWRoutesResult(**result)
+
+
+# ----------------------------- V4.61 / B4：创意工作台「素材沉淀库」接口 -----------------------------
+@router.get("/cw/library", response_model=list[CwLibraryOut])
+async def list_cw_library(kind: Optional[str] = None, limit: int = 50, offset: int = 0,
+                          db: Session = Depends(get_db), user: User = Depends(require_roles(*CAN_EDIT))):
+    """当前用户自己的素材库条目（参考图 / 产品 / 品牌），按最近更新倒序。"""
+    q = db.query(CwLibrary).filter(CwLibrary.owner_id == user.id)
+    if kind:
+        q = q.filter(CwLibrary.kind == kind)
+    lim = max(1, min(int(limit or 50), 200))
+    off = max(0, int(offset or 0))
+    rows = q.order_by(CwLibrary.updated_at.desc()).offset(off).limit(lim).all()
+    return [_cw_library_to_dict(r) for r in rows]
+
+
+@router.post("/cw/library", response_model=CwLibraryOut)
+async def add_cw_library(body: CwLibraryCreate, db: Session = Depends(get_db),
+                         user: User = Depends(require_roles(*CAN_EDIT))):
+    """沉淀 / 手动新增一条素材库条目；按 kind 去重 upsert（product→方案、reference→文件、brand→标题）。"""
+    kind = (body.kind or "").strip().lower()
+    if kind not in ("reference", "product", "brand"):
+        raise HTTPException(400, "kind 仅支持 reference / product / brand")
+    if kind == "reference" and not body.file:
+        raise HTTPException(400, "参考图条目必须携带 file（/files/<name>）")
+    if kind == "product" and not (body.title or body.url):
+        raise HTTPException(400, "产品条目需至少提供 title 或 url")
+    row = _upsert_cw_library(db, user, kind, body.title or "",
+                             file=body.file, url=body.url, meta=body.meta,
+                             source_plan_id=body.source_plan_id)
+    return _cw_library_to_dict(row)
+
+
+@router.delete("/cw/library/{id}")
+async def delete_cw_library(id: int, db: Session = Depends(get_db),
+                            user: User = Depends(require_roles(*CAN_EDIT))):
+    """删除自己的素材库条目；若该文件未被其他条目引用，则一并删除磁盘文件（孤立清理）。"""
+    row = db.query(CwLibrary).filter(CwLibrary.id == id, CwLibrary.owner_id == user.id).first()
+    if not row:
+        raise HTTPException(404, "素材不存在或无权删除")
+    f = row.file
+    if f:
+        others = db.query(CwLibrary).filter(CwLibrary.file == f, CwLibrary.id != id).first()
+        if not others:
+            disk = os.path.join(UPLOAD_DIR, os.path.basename(f))
+            if os.path.exists(disk):
+                try:
+                    os.remove(disk)
+                except OSError:
+                    pass
+    db.delete(row); db.commit()
+    return {"ok": True}
 
 
 @router.get("/image-capabilities")

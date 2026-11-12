@@ -1593,6 +1593,23 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cwb-ref-url { flex: 1 1 220px; min-width: 160px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border, #e5e7eb); font-size: 12.5px; background: var(--card, #fff); color: var(--text, #1f2937); }
 .cwb-ref-clear { background: transparent; border: none; color: #dc2626; font-size: 12.5px; cursor: pointer; padding: 4px 6px; }
 .cwb-ref-name { font-size: 12px; color: #16a34a; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* V4.61 / B4：素材沉淀库复用入口与浮层 */
+.cwb-reuse-btn { padding: 7px 12px; border-radius: 9px; border: 1px solid #16a34a; background: #f0fdf4; color: #15803d; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.cwb-reuse-btn:hover { background: #dcfce7; }
+.cwb-reuse-btn:disabled { opacity: .55; cursor: not-allowed; }
+.cwb-lib-pop { margin-top: 10px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--card, #fff); box-shadow: 0 8px 24px rgba(15,23,42,.08); overflow: hidden; }
+.cwb-lib-head { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-bottom: 1px solid var(--border, #e5e7eb); font-size: 13px; font-weight: 600; color: var(--text, #1f2937); }
+.cwb-lib-close { border: none; background: transparent; color: #64748b; font-size: 14px; cursor: pointer; padding: 2px 6px; }
+.cwb-lib-empty { padding: 16px 14px; font-size: 12.5px; color: #94a3b8; }
+.cwb-lib-list { max-height: 240px; overflow-y: auto; }
+.cwb-lib-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border, #f1f5f9); cursor: pointer; }
+.cwb-lib-item:hover { background: #f8fafc; }
+.cwb-lib-thumb { width: 36px; height: 36px; border-radius: 7px; object-fit: cover; background: #f1f5f9; flex: none; }
+.cwb-lib-meta { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.cwb-lib-meta b { font-size: 12.5px; color: var(--text, #1f2937); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cwb-lib-sub { font-size: 11.5px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cwb-lib-pick { flex: none; padding: 5px 12px; border-radius: 8px; border: 1px solid #16a34a; background: #16a34a; color: #fff; font-size: 12px; cursor: pointer; }
+.cwb-lib-pick:hover { background: #15803d; }
 
 .cwb-copy-section { margin: 14px 0 4px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; padding: 14px 16px; background: var(--card, #fff); }
 .cwb-copy-platform { padding: 10px 0; border-bottom: 1px dashed var(--border, #e5e7eb); }

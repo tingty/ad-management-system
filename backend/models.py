@@ -241,3 +241,26 @@ class CreativePlan(Base):
     model_info = Column(JSON, nullable=True)             # 本次实际调用模型快照
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+# ----------------------------- V4.61 / B4：创意工作台「素材沉淀库」 -----------------------------
+class CwLibrary(Base):
+    """创意工作台·素材沉淀库：把一次创作用到的参考图 / 产品快照 / 品牌沉淀为可复用条目，
+    新会话可「一键引用」，避免重复上传或重复分析。
+
+    - kind: reference（商品/品牌参考图）/ product（B1 真实抓取或手动文本的产品快照）/ brand（文案品牌）
+    - 去重键：product → source_plan_id（一个方案一条产品）；reference → (owner_id, file)；brand → (owner_id, title)
+    - file 仅 reference 必填，存 /files/<name> 本地路径；product/brand 可空。
+    """
+    __tablename__ = "cw_library"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    owner_name = Column(String(64), nullable=True)
+    kind = Column(String(24), index=True)             # reference / product / brand
+    title = Column(String(255), nullable=True)
+    file = Column(String(512), nullable=True)         # /files/<name>，仅 reference 必填
+    url = Column(String(1024), nullable=True)          # 产品链接（kind=product）
+    meta_json = Column(JSON, nullable=True)            # brand / summary / snapshot_id / evidence_ids / platform 等
+    source_plan_id = Column(Integer, nullable=True, index=True)   # 关联创意方案（产品去重用）
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
