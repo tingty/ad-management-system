@@ -1,11 +1,11 @@
-"""V4.63 成像渲染回归：验证「透明遮罩替代实心面板 + 安全容器 + 字阶精修」统一修复。
+"""V4.64 成像渲染回归：验证「无背景板浮字 + 投影描边可读 + 按钮不压字」统一修复。
 
 仅用 Pillow 本地合成（不依赖文生图供应商 / 网络），用一张合成「照片感」底图渲染各版式，
-断言：
-1. 文字区不再是实心面板（场景像素方差 > 阈值，证明背景透出）；
-2. CTA 落在画布与文字安全容器内（不再越界到面板/背景硬边）；
+断言（对齐样例素材风格：文字直接浮于照片、按钮为独立 pill 且不压字）：
+1. 文字区无任何背景板（场景像素方差显著 > 阈值，证明背景完全透出、无遮罩）；
+2. CTA 落在画布内，且与文字块包围盒不相交（按钮绝不压字 / 与文字交叉）；
 3. 标题字号受控（<= 0.09 * min(w,h)，不再过大突兀）；
-4. trace.render 字段完整，供线上排障。
+4. trace.render 字段完整（scrim=False / legibility / text_container / cta_box），供线上排障。
 """
 import os
 import random
@@ -84,16 +84,20 @@ class ImagingRenderTest(unittest.TestCase):
             self.assertGreater(var, 100.0,
                                f"{layout}: 文字区像素方差仅 {var:.1f}，疑似仍为实心面板（背景被遮挡）")
 
-    def test_cta_inside_canvas_and_container(self):
-        """核心修复②④：CTA 落在画布内、且位于文字安全容器内（不越界到硬边）。"""
+    def test_cta_inside_canvas_and_not_overlapping_text(self):
+        """核心修复②：CTA 落在画布内，且与文字块包围盒不相交（按钮绝不压字 / 交叉）。"""
         for layout in self.LAYOUTS:
             out, trace = self._render(layout)
             cb = trace["render"]["cta_box"]
             self.assertIsNotNone(cb, f"{layout}: 缺少 cta_box")
             self.assertLessEqual(cb[2], 1080, f"{layout}: CTA 右越界")
             self.assertLessEqual(cb[3], 1080, f"{layout}: CTA 下越界")
+            self.assertGreaterEqual(cb[0], 0, f"{layout}: CTA 左越界")
+            self.assertGreaterEqual(cb[1], 0, f"{layout}: CTA 上越界")
             cont = trace["render"]["text_container"]
-            self.assertLessEqual(cb[3], cont[3], f"{layout}: CTA 超出文字安全容器底（越界到硬边）")
+            overlap = not (cb[2] <= cont[0] + 8 or cont[2] <= cb[0] + 8
+                           or cb[3] <= cont[1] + 8 or cont[3] <= cb[1] + 8)
+            self.assertFalse(overlap, f"{layout}: CTA 与文字块相交（按钮压字）")
 
     def test_headline_font_capped(self):
         """核心修复③：标题字号受控，不再过大突兀。"""
@@ -108,8 +112,13 @@ class ImagingRenderTest(unittest.TestCase):
         for layout in self.LAYOUTS:
             _, trace = self._render(layout)
             r = trace.get("render", {})
-            for k in ("layout", "headline_font", "text_container", "scrim_alpha", "cta_box"):
+            for k in ("layout", "headline_font", "text_container", "scrim",
+                      "legibility", "cta_box"):
                 self.assertIn(k, r, f"{layout}: trace.render 缺字段 {k}")
+            self.assertFalse(r["scrim"], f"{layout}: 仍存在背景板（scrim 应为 False）")
+            self.assertTrue(r["legibility"].get("shadow")
+                            and r["legibility"].get("outline"),
+                            f"{layout}: 未启用投影 / 描边可读性保障")
 
     def test_long_headline_shrinks_without_overflow(self):
         """长标题触发自适应收缩，不抛 TextOverflowError（strict_text=False 默认）。"""

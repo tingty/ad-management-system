@@ -230,10 +230,31 @@ def _primary_font(size: int):
     return _default_font(size)
 
 
-def _draw_text(d: ImageDraw.ImageDraw, xy, text: str, size: int, fill):
-    """带逐字符字体回退的文字绘制：缺字字符不会变成豆腐块，而是被安全跳过并告警。"""
+def _draw_text(d: ImageDraw.ImageDraw, xy, text: str, size: int, fill,
+               shadow=None, outline=None):
+    """带逐字符字体回退的文字绘制：缺字字符不会变成豆腐块，而是被安全跳过并告警。
+
+    V4.64：新增「无背景板」可读性保障（对齐样例素材的浮字风格）：
+    - `shadow=(dx, dy, (r,g,b))`：文字整体向右下偏移并填暗色，形成投影，使浮在
+      照片上的文字不依赖任何底板即可辨读；
+    - `outline=(width, (r,g,b))`：在文字 8 邻域各偏移绘制描边，形成 1–2px 描边光晕，
+      在亮/暗背景上都能把字「勾」出来（白字配暗描边，通用且最稳）。
+    投影与描边均在每字符循环内完成，逐字符字体回退仍然成立。
+    """
     x, y = xy
     missing: list[str] = []
+    # 构建绘制批次：描边(8 邻域) -> 投影(1 偏移) -> 主填充(最后画，保证清晰)
+    passes: list[tuple[int, int, tuple]] = []
+    if outline:
+        ow, oc = outline
+        ow = max(1, int(ow))
+        for dx in (-ow, 0, ow):
+            for dy in (-ow, 0, ow):
+                if dx or dy:
+                    passes.append((dx, dy, oc))
+    if shadow:
+        passes.append((int(shadow[0]), int(shadow[1]), tuple(shadow[2])))
+    passes.append((0, 0, fill))
     for ch in (text or ""):
         if ch == "\n":
             continue
@@ -243,7 +264,8 @@ def _draw_text(d: ImageDraw.ImageDraw, xy, text: str, size: int, fill):
                 missing.append(ch)
             x += size * 0.5
             continue
-        d.text((x, y), ch, font=f, fill=fill)
+        for dx, dy, col in passes:
+            d.text((x + dx, y + dy), ch, font=f, fill=col)
         x += f.getlength(ch)
     if missing:
         uniq = "".join(dict.fromkeys(missing))
@@ -253,6 +275,47 @@ def _draw_text(d: ImageDraw.ImageDraw, xy, text: str, size: int, fill):
             len(missing), uniq,
         )
     return x
+
+
+def _legibility(size: int) -> dict:
+    """按字号推导「无板可读」所需的投影 / 描边强度（样图风格：浮字 + 轻描边）。"""
+    sh = max(2, int(size * 0.035))          # 投影偏移
+    ow = max(1, int(size * 0.022))          # 描边宽度
+    return {
+        "shadow": (sh, sh, (0, 0, 0)),      # 右下暗投影
+        "outline": (ow, (0, 0, 0)),         # 暗描边（白字通用）
+    }
+
+
+def _boxes_overlap(a, b, gap: int = 6) -> bool:
+    """两矩形是否相交（带间隙 gap，用于「按钮不与文字交叠」判定）。"""
+    return not (a[2] <= b[0] + gap or b[2] <= a[0] + gap
+                or a[3] <= b[1] + gap or b[3] <= a[1] + gap)
+
+
+def _place_cta(w: int, h: int, margin: int, bw: int, bh: int,
+               text_box: list, spec: dict) -> list:
+    """V4.64：把 CTA 放在「不与文字块交叠」的清晰区，优先对齐样例的底边两端布局。
+
+    候选顺序：右下角（样例：文字左下、按钮右下）→ 文字正下方 → 左下角 → 右上角 →
+    底部居中兜底。每个候选先夹回画布，再判是否与文字块相交；首个不相交者即用。
+    从而保证按钮永远浮在照片上且不压字。
+    """
+    m = max(2, margin // 2)
+    cands = []
+    cands.append([w - margin - bw, h - margin - bh, w - margin, h - margin])   # 右下
+    if text_box and text_box[3] + margin + bh <= h:                            # 文字正下方
+        tx = text_box[0]
+        cands.append([tx, text_box[3] + int(margin * 0.6),
+                      tx + bw, text_box[3] + int(margin * 0.6) + bh])
+    cands.append([margin, h - margin - bh, margin + bw, h - margin])           # 左下
+    cands.append([w - margin - bw, margin, w - margin, margin + bh])           # 右上
+    for c in cands:
+        c = [max(m, c[0]), max(m, c[1]), min(w - m, c[2]), min(h - m, c[3])]
+        if not _boxes_overlap(c, text_box or [0, 0, 0, 0], gap=8):
+            return c
+    cx = int((w - bw) / 2)                                                    # 兜底：底部居中
+    return [cx, max(m, h - margin - bh), cx + bw, min(h - m, h - margin)]
 
 
 def _has_cjk() -> bool:
@@ -647,7 +710,10 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
             pf = _primary_font(fs)
         if strict_text and d.textlength(line, font=pf) > avail:
             raise TextOverflowError("小横幅标题超出可排版宽度")
-        _draw_text(d, (margin, (h - fs * 1.2) / 2), line, fs, pal["fg"])
+        # V4.64：浮字 + 投影描边（无底板），与常规版式一致的"无板可读"风格
+        lleg = _legibility(fs)
+        _draw_text(d, (margin, (h - fs * 1.2) / 2), line, fs, pal["fg"],
+                    shadow=lleg["shadow"], outline=lleg["outline"])
         if cta:
             cfs = max(9, int(h * 0.26))
             cf = _primary_font(cfs)
@@ -659,18 +725,24 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
             bw = d.textlength(cta, font=cf) + cfs * 1.4
             bh = min(h - 8, cfs * 2.0)
             bx, by = cta_x, (h - bh) / 2
+            sd = max(1, int(cfs * 0.18))
+            d.rounded_rectangle([bx + sd, by + sd, bx + bw + sd, by + bh + sd],
+                                radius=int(bh / 2), fill=(0, 0, 0))
             d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=int(bh / 2),
                                 fill=accent_c)
+            cleg = _legibility(cfs)
             _draw_text(d, (bx + cfs * 0.7, by + bh / 2 - cfs * 0.62),
-                       cta, cfs, pal["on_accent"])
+                       cta, cfs, pal["on_accent"],
+                       shadow=cleg["shadow"], outline=cleg["outline"])
     else:
         spec = LAYOUT_SPEC[eff]
         pad = max(margin, int(w * spec["x"]))
         text_w = max(12, min(int(w * spec["w"]), w - pad - margin))
-        light_card = spec["panel"] == "card"
-        fg_c, sub_c = (pal["on_accent"], pal["on_accent"]) if light_card else (pal["fg"], pal["sub"])
+        # V4.64：不再使用任何背景板（实心 / 半透明遮罩均移除），文字直接浮于照片之上，
+        # 可读性由「投影 + 描边」保障（对齐样例素材的浮字风格）。
+        fg_c, sub_c = pal["fg"], pal["sub"]
 
-        # ---- C. 字阶精修：基准 0.105 → 0.082，按行数 / 占用宽度自适应，避免过大突兀 ----
+        # ---- C. 字阶精修：基准 0.082，按行数 / 占用宽度自适应，避免过大突兀 ----
         dm = ImageDraw.Draw(img)  # 仅用于文字测量，不落像素
         fs = int(min(w, h) * 0.082)
         hf = _primary_font(fs)
@@ -693,10 +765,11 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
                            allow_ellipsis=not strict_text) if sub else [])
         cfs = max(12, int(fs * 0.46))
         cf = _primary_font(cfs)
-        bh = int(cfs * 2.0)
-        bw = int(dm.textlength(cta, font=cf) + cfs * 2.0) if cta else 0
-        if strict_text and bw > text_w:
-            raise TextOverflowError("CTA 超出该版式文字区宽度")
+
+        # 可读性参数（按字号推导：白字配暗投影 / 描边，通用且最稳，无需任何底板）
+        leg = _legibility(fs)
+        sub_leg = _legibility(sfs)
+        cta_leg = _legibility(cfs)
 
         # 行高精修：更紧凑的呼吸感
         line_h = int(fs * 1.12)
@@ -704,13 +777,12 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
         if brand:
             bf = max(11, int(h * 0.024))
             brand_h = bf + int(fs * 0.45)
+            brand_leg = _legibility(bf)
         block = brand_h + len(lines) * line_h
         if sub_lines:
             block += int(fs * 0.18) + len(sub_lines) * int(sfs * 1.20)
-        if cta:
-            block += int(h * 0.04) + bh
 
-        # ---- B. 安全容器：品牌 / 标题 / 副标 / CTA 整体落在画布安全区，CTA 永不越界 ----
+        # ---- B. 安全锚点：品牌 / 标题 / 副标 整体落在画布安全区（无板，纯坐标约束） ----
         container_bottom = h - margin
         top = int(h * spec["top"])
         if logo_box and pad + text_w > logo_box[0] - 4:
@@ -721,7 +793,7 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
             top_max = int(h * 0.04)
         top = max(int(h * 0.04), min(top, top_max))
 
-        # 品牌在上、标题 / 副标 / CTA 依次向下，统一锚点
+        # 品牌在上、标题 / 副标依序向下，统一锚点
         brand_y = top
         headline_y = top + brand_h
         y = headline_y
@@ -735,51 +807,62 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
         y_sub = y + len(lines) * line_h
         if sub_lines:
             y_sub += int(fs * 0.18)
-        cta_y = (y_sub + int(h * 0.04)) if cta else y_sub
-        cta_bottom = cta_y + bh if cta else cta_y
+        y_after_sub = y_sub + (len(sub_lines) * int(sfs * 1.20) if sub_lines else 0)
 
-        # 文字安全容器包围盒（用于半透明遮罩，确保文字区可读且场景透出）
-        sx0 = max(0, int(pad - pad * 0.6))
-        sy0 = max(0, int(min(brand_y, accent_box[1]) - fs * 0.6))
-        sx1 = min(w, int((pad + text_w) + pad * 0.6))
-        sy1 = min(h, int(cta_bottom + fs * 0.6))
-        scrim_color = pal["card"] if light_card else pal["bg1"]
-        scrim_alpha = 175 if light_card else 135
-        feather = min(w, h) * 0.025
-        img = _draw_scrim(img, [sx0, sy0, sx1, sy1],
-                          radius=max(2, int(min(w, h) * 0.035)),
-                          color=scrim_color, alpha=scrim_alpha, feather=feather)
+        # 文字块包围盒（不含 CTA）：用于「按钮不与文字交叠」的约束与排障
+        text_box = [max(0, int(text_x - fs * 0.3)),
+                    max(0, int(min(brand_y, accent_box[1]) - fs * 0.5)),
+                    min(w, int(text_x + text_w + fs * 0.3)),
+                    min(h, int(y_after_sub + sfs * 0.5))]
+
         d = ImageDraw.Draw(img)
 
         if spec["band"] == "top":
             d.rectangle([0, 0, w, max(2, int(h * 0.018))], fill=accent_c)
 
         if brand:
-            _draw_text(d, (pad, brand_y), brand, bf, sub_c)
+            _draw_text(d, (pad, brand_y), brand, bf, sub_c,
+                       shadow=brand_leg["shadow"], outline=brand_leg["outline"])
         d.rectangle(accent_box, fill=accent_c)
         y = headline_y
         for ln in lines:
-            _draw_text(d, (text_x, y), ln, fs, fg_c)
+            _draw_text(d, (text_x, y), ln, fs, fg_c,
+                       shadow=leg["shadow"], outline=leg["outline"])
             y += line_h
         if sub_lines:
             y = y_sub
             for ln in sub_lines:
-                _draw_text(d, (text_x, y), ln, sfs, sub_c)
+                _draw_text(d, (text_x, y), ln, sfs, sub_c,
+                           shadow=sub_leg["shadow"], outline=sub_leg["outline"])
                 y += int(sfs * 1.20)
+
+        # ---- 按钮：浮于照片、与文字块不交叠、自带投影（对齐样例的 pill 风格） ----
         if cta:
-            bx = text_x if spec["rule"] != "center" else int(pad + (text_w - bw) / 2)
-            d.rounded_rectangle([bx, cta_y, bx + bw, cta_y + bh], radius=int(bh / 2),
-                                fill=accent_c)
-            _draw_text(d, (bx + cfs * 1.0, cta_y + bh / 2 - cfs * 0.66),
-                       cta, cfs, pal["on_accent"])
+            bh = int(cfs * 2.0)
+            bw = int(dm.textlength(cta, font=cf) + cfs * 2.0)
+            if strict_text and bw > text_w:
+                raise TextOverflowError("CTA 超出该版式文字区宽度")
+            cta_box = _place_cta(w, h, margin, bw, bh, text_box, spec)
+            # 按钮投影（让 pill 在任意背景上都"浮"起来，不依赖底板）
+            sd = max(2, int(cfs * 0.18))
+            d.rounded_rectangle([cta_box[0] + sd, cta_box[1] + sd,
+                                 cta_box[2] + sd, cta_box[3] + sd],
+                                radius=int(bh / 2), fill=(0, 0, 0))
+            d.rounded_rectangle(cta_box, radius=int(bh / 2), fill=accent_c)
+            _draw_text(d, (cta_box[0] + cfs * 1.0, cta_box[1] + bh / 2 - cfs * 0.66),
+                       cta, cfs, pal["on_accent"],
+                       shadow=cta_leg["shadow"], outline=cta_leg["outline"])
+        else:
+            cta_box = None
 
         if trace is not None:
             trace["render"] = {
                 "layout": eff, "headline_font": fs, "sub_font": sfs, "cta_font": cfs,
-                "text_container": [sx0, sy0, sx1, sy1],
-                "scrim_alpha": scrim_alpha,
-                "cta_box": ([bx, cta_y, bx + bw, cta_y + bh] if cta else None),
-                "type_scale": "V4.63",
+                "text_container": text_box,
+                "scrim": False,
+                "legibility": {"shadow": True, "outline": True},
+                "cta_box": cta_box,
+                "type_scale": "V4.64",
             }
 
     img = _composite_logo(img, logo_path, w, h, logo_box, remove_white_logo_bg)
