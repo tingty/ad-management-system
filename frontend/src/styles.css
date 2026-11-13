@@ -1472,17 +1472,9 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cwb-gen-btn:disabled { opacity: .5; cursor: default; }
 .cwb-link-btn { background: transparent; border: 1px solid var(--border, #e5e7eb); color: var(--text, #1f2937); padding: 9px 14px; border-radius: 10px; font-size: 13px; cursor: pointer; }
 
-/* V4.62：素材图叠加模式选择（纯图片 / 图片+文字 / 图片+文字+按钮） */
-.cwb-overlay-modes { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 16px;
-  padding: 12px 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: #fbfdfc; }
-.cwb-overlay-title { font-size: 12px; font-weight: 600; color: var(--muted, #6b7280); letter-spacing: .02em; }
-.cwb-ov { display: flex; align-items: baseline; gap: 8px; cursor: pointer; padding: 6px 8px; border-radius: 9px;
-  border: 1.5px solid transparent; transition: .15s; }
-.cwb-ov:hover { background: #f1f8f4; }
-.cwb-ov.on { border-color: #16a34a; background: #f0faf4; }
-.cwb-ov input { margin: 0; accent-color: #16a34a; align-self: center; }
-.cwb-ov-label { font-size: 13.5px; font-weight: 600; color: var(--text, #1f2937); white-space: nowrap; }
-.cwb-ov-desc { font-size: 12px; color: var(--muted, #6b7280); }
+/* V4.65：素材图片选择（顶部输入框子模块下拉单选，默认 纯图片） */
+.cwb-ov-col { display: flex; flex-direction: column; gap: 6px; }
+.cwb-field-hint { font-size: 12px; color: var(--muted, #6b7280); line-height: 1.4; padding-left: 2px; }
 .cwb-link-btn:hover { border-color: #16a34a; color: #15803d; }
 
 .cwb-result-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }

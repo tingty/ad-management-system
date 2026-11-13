@@ -640,7 +640,22 @@ export default function CreativeWorkbench() {
                   </select>
                 </div>
               </div>
-              {/* 参考图（上传 / URL） */}
+              {/* 素材图片选择：下拉单选（默认 纯图片），开始分析即按此要求出图 */}
+              <div className="cwb-form-row">
+                <label className="cwb-field-label" htmlFor="cwb-ov">素材图片选择</label>
+                <div className="cwb-ov-col">
+                  <div className="cwb-select-wrap">
+                    <select id="cwb-ov" className="cwb-select" value={overlayMode}
+                      onChange={e => setOverlayMode(e.target.value as 'pure' | 'text' | 'text_button')}>
+                      <option value="pure">纯图片</option>
+                      <option value="text">图片+文字</option>
+                      <option value="text_button">图片+文字+按钮</option>
+                    </select>
+                  </div>
+                  <span className="cwb-field-hint">默认「纯图片」：生成素材不含文字 / 按钮 / logo</span>
+                </div>
+              </div>
+              {/* 参考图（upload / URL） */}
               <div className="cwb-form-row">
                 <label className="cwb-field-label">参考图</label>
                 <div className="cwb-ref-row cwb-ref-row2">
@@ -773,27 +788,6 @@ export default function CreativeWorkbench() {
                       </div>
                     </div>
                   ))}
-                </div>
-                <div className="cwb-overlay-modes">
-                  <span className="cwb-overlay-title">素材图叠加</span>
-                  <label className={`cwb-ov ${overlayMode === 'pure' ? 'on' : ''}`}>
-                    <input type="radio" name="overlay-mode" value="pure"
-                      checked={overlayMode === 'pure'} onChange={() => setOverlayMode('pure')} />
-                    <span className="cwb-ov-label">纯图片</span>
-                    <span className="cwb-ov-desc">只有纯图片，没有文字，没有按钮</span>
-                  </label>
-                  <label className={`cwb-ov ${overlayMode === 'text' ? 'on' : ''}`}>
-                    <input type="radio" name="overlay-mode" value="text"
-                      checked={overlayMode === 'text'} onChange={() => setOverlayMode('text')} />
-                    <span className="cwb-ov-label">图片+文字</span>
-                    <span className="cwb-ov-desc">有纯图片和文字，没有按钮</span>
-                  </label>
-                  <label className={`cwb-ov ${overlayMode === 'text_button' ? 'on' : ''}`}>
-                    <input type="radio" name="overlay-mode" value="text_button"
-                      checked={overlayMode === 'text_button'} onChange={() => setOverlayMode('text_button')} />
-                    <span className="cwb-ov-label">图片+文字+按钮</span>
-                    <span className="cwb-ov-desc">有纯图片，文字和按钮</span>
-                  </label>
                 </div>
                 <p className="cwb-foot-note">路线与平台均可在生成后继续调整</p>
                 <div className="cwb-confirm">
