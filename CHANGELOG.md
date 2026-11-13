@@ -2314,37 +2314,47 @@
 
 **验证**：`tsc --noEmit` 通过；`npm run build` 成功（dist 产出，CSS 90.9 kB / JS 321 kB）；投放平台下拉单选、工作流步骤状态切换、右侧简报聚合均为纯 UI 改动，不触达 `analyze` / `generate` 等处理函数。
 
-### 热修复（2026-11-12）：创意工作台素材图叠加模式（纯图片 / 图片+文字 / 图片+文字+按钮）
+## V4.63 创意工作台·素材图叠加模式（纯图片 / 图片+文字 / 图片+文字+按钮）
 
-**目标**：在「创意工作台」最后生成素材图片时，默认生成**纯图片**（不增加文字、不增加 logo、不增加按钮）；并在「为你规划了 N 条创意路线」子模块新增三个叠加勾选项，供用户按场景选择成图形态：
-- **纯图片**：只有纯图片，没有文字，没有按钮；
-- **图片+文字**：有纯图片和文字，没有按钮；
-- **图片+文字+按钮**：有纯图片、文字和按钮（即旧默认行为）。
+**发布日期**：2026-11-12
+**变更类型**：优化 / 新增
+**涉及模块**：素材创作平台、后端接口、数据模型、前端与菜单、系统版本、新版通知
+**变更摘要**：创意工作台生成素材图新增三种叠加形态，默认纯图片（不叠加文字 / logo / 按钮）；并在创意路线子模块提供「纯图片 / 图片+文字 / 图片+文字+按钮」三选项，按场景选择成图形态。
 
-**改动（后端 + 前端 + 样式）**
-- `backend/schemas.py`：`MediaImageRequest` 新增 `overlay_mode: str = "text_button"`（默认保持旧行为，向后兼容）。
-- `backend/imaging.py`：`render_ad_png` 新增 `overlay_mode` 参数，按 `pure / text / text_button` 三态控制绘制——
-  - `pure`：跳过全部文字（标题/副标/品牌）、CTA 按钮与 logo 合成，仅保留背景与商品合成；
-  - `text`：绘制文字（标题/副标/品牌）+ logo，跳过 CTA 按钮；
-  - `text_button`：绘制文字 + CTA 按钮 + logo（默认，与旧版一致）；
-  - banner 分支同样遵循三态（纯图片模式标题与 CTA 均不绘制）；`trace.render` 增加 `overlay_mode` 字段。
-- `backend/media_ad.py`：`generate_media_images` 透传 `overlay_mode`（默认 `"text_button"`），并在 `_render_one` 调用 `render_ad_png` 时传入。
-- `backend/routers.py` / `backend/job_service.py`：旧直接生成端点与持久任务 `run_job` 均从请求 `overlay_mode` 透传至 `generate_media_images`（缺省回落 `"text_button"`，无回归）。
-- `frontend/src/pages/CreativeWorkbench.tsx`：
-  · 新增 `overlayMode` 状态，**默认 `"pure"`**（满足「默认纯图片」要求）；
-  · 在「为你规划了 N 条创意路线」子模块增加三选项控件（纯图片 / 图片+文字 / 图片+文字+按钮）；
-  · 生成逻辑：当 `overlayMode === "pure"` 时跳过 `mediaCopy` 文案生成与 `invalid` 硬阻断（无需文案），直接以空文案出图；`copy_variants` 置空，且不填充「广告文案」展示区；
-  · 出图请求 `images_request` 携带 `overlay_mode: overlayMode`。
-- `frontend/src/styles.css`：新增 `.cwb-overlay-modes / .cwb-ov` 等样式（推荐态绿色边框 + 描述文案）。
+**更新要点**
+- 后端 `render_ad_png` 新增 `overlay_mode` 三态：`pure` 仅保留背景与商品合成，不绘制文字 / CTA / logo；`text` 叠加文字 + logo 无按钮；`text_button` 保留旧默认行为
+- 请求层全链路透传：`MediaImageRequest` / `generate_media_images` / `routers` / `job_service` 均透传 `overlay_mode`（默认 text_button，向后兼容）
+- 前端创意路线子模块新增三选项控件，默认「纯图片」；`pure` 模式跳过文案生成与 invalid 硬阻断，直接以空文案出图
 
-**验证**：`python3 -m py_compile` 五个后端文件全部通过；`tests/test_imaging_render.py` 现有 6 项断言全过（未回归）；新增脚本验证三种模式——`pure` 输出 `text_container=[0,0,0,0]`、`cta_box=None`、图片正常生成；`text` 有文字无 CTA；`text_button` 文字 + CTA 均存在。`overlay_mode` 缺省/旧调用回落 `"text_button"`，历史记录与旧接口保持兼容。
+**本次优化与更改的功能 / 模块**
+- 【优化】素材创作平台 / 版本更新：render_ad_png 按 overlay_mode 控制绘制形态
+- 【优化】后端接口 / 版本更新：generate_media_images 与出图端点透传 overlay_mode
+- 【优化】数据模型 / 版本更新：MediaImageRequest 新增 overlay_mode 字段
+- 【优化】前端与菜单 / 版本更新：创意路线子模块新增叠加模式三选项
 
-### 热修复（2026-11-12）：创意工作台移除生成成果区初始态静态引导文案
+**影响范围**
+- 前端 / 后端 / 数据 / 兼容性：本次改动涉及 素材创作平台、后端接口、数据模型、前端与菜单；旧数据与旧接口保持兼容（缺省 text_button）。
 
-**目标**：「创意工作台」最下方「生成成果」区在初始态（未分析/未生成）展示一句静态引导文案——「输入产品链接并选择媒体平台，点击「开始分析」后，生成的图片 / 视频素材将展示在这里。」。该提示与上方工作流步骤提示重复，且流程处理中（分析 / 生成）已有对应提示，故移除该初始态引导文案，避免冗余。
+**验证**
+- python3 -m py_compile 五个后端文件通过；tests/test_imaging_render.py 6 项断言全过；脚本验证 pure 输出 text_container=[0,0,0,0]、cta_box=None，text 有文字无 CTA，text_button 文字 + CTA 均存在。
 
-**改动（仅前端，纯 UI）**
-- `frontend/src/pages/CreativeWorkbench.tsx`：「生成成果」区 `cwb-results-empty` 区块原渲染逻辑为「没有素材时一律显示虚线提示框（含初始态静态文案 + analyzing/generating 流程文案）」。改为：**仅当处于分析/生成流程中（view 为 `analyzing` / `generating`）才渲染该提示框**，保留「正在分析产品…」「正在生成素材…」流程提示；初始态不再渲染空虚线框，对应静态文案整段删除。
-- 未改动上方分析抽屉区的另一句提示（「这里将展示产品分析与创意路线」），因其面向分析产物区、表述不同且未被要求移除。
+## V4.64 创意工作台·移除生成成果区初始态静态引导文案
 
-**验证**：`grep` 确认目标静态文案已从 `CreativeWorkbench.tsx` 移除（EXIT 1）；`cwb-results-empty` CSS 仍保留（仅用于流程中提示，初始态不再空渲染，避免多余虚线框）。
+**发布日期**：2026-11-12
+**变更类型**：优化
+**涉及模块**：前端与菜单、系统版本、后端接口、新版通知
+**变更摘要**：创意工作台「生成成果」区在初始态展示的静态引导文案与上方工作流提示重复，现已移除；仅保留分析 / 生成流程中的对应提示，初始态不再渲染空虚线框。
+
+**更新要点**
+- 「生成成果」区 `cwb-results-empty` 改为仅当处于分析 / 生成流程中（view 为 analyzing / generating）才渲染提示框，保留「正在分析产品…」「正在生成素材…」流程提示
+- 初始态不再渲染空虚线框，删除与流程提示重复的静态引导文案，避免冗余
+
+**本次优化与更改的功能 / 模块**
+- 【优化】前端与菜单 / 版本更新：生成成果区初始态静态引导文案移除，仅保留流程中提示
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.64
+
+**影响范围**
+- 前端 / 后端 / 数据 / 兼容性：本次改动仅涉及前端 UI；旧数据与旧接口保持兼容。
+
+**验证**
+- grep 确认目标静态文案已从 CreativeWorkbench.tsx 移除（EXIT 1）；cwb-results-empty CSS 仍保留仅用于流程中提示。
