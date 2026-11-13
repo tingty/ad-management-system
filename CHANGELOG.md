@@ -2481,3 +2481,35 @@
 **验证**
 - 后端集成测试 5 场景全部通过：① 无 video 配置 → 回退分镜；② generic-video + usages=[video] → ModelVideo；③ keling + usages=[video] → KlingVideo；④ 仅一个未激活 video 配置 → 回退分镜；⑤ 仅有文本模型(usages=[analysis]) → 不被误用于视频。
 - 前端 vite build 通过（48 模块，无 TS 错误）；routers 模块导入通过；系统版本与 CHANGELOG/发布数据一致性由发版校验强制检查。
+
+## V4.70 创意工作台·三步流程重构（素材类型 / 品牌 Logo 注入 / 双工作区 / 视频微调）
+
+**发布日期**：2026-11-13
+**变更类型**：重构 / 新增 / 删除 / 优化
+**涉及模块**：创意工作台（素材创作平台）、后端接口、数据模型、前端与菜单、系统版本
+**变更摘要**：对「创意工作台」按需求文档重构为「解析产品 → 规划创意 → 批量生成」三步流程，新增素材类型选择、品牌 Logo 上传与「注入生成链路」开关、图片/视频双工作区与视频生成后微调对话框；同步删除「更多选项」「历史」「新建项目」等冗余入口，补齐分析框架自检（5.1 自动阻断）与品牌 Logo 注入链路（网站分析=推理大模型 / 图片=文生图大模型 / 视频=视频大模型）。
+
+**更新要点**
+- 输入框子模块：保留落地页网址与投放平台，新增「素材类型」下拉（图片 / 视频 / 图片和视频，默认图片和视频）；品牌行改为 Logo 上传按钮，Logo 预览显示在品牌标题下方，并新增「注入生成链路」勾选（默认不勾选，勾选则 brand_logo 传入图片与视频生成链路）
+- 删除「更多选项」（复用产品 / 复用参考图 / 复用品牌）与「历史」「新建项目」入口，输入区更聚焦
+- 第二步规划创意分而治之：图片按现有 routes 规划并支持补充指令；视频通过受控 VideoStudio 对话式分镜规划，分别作用于图片与视频任务
+- 第三步批量生成双工作区：图片工作区按现有素材样式展示进度与成片；视频工作区直连视频大模型生成，并新增「生成后微调对话框」（输入新调整提示词后先精修分镜再重生成），仅展示进度不暴露内部流程
+- 品牌 Logo 注入贯通前后端：schemas（CWVideoPlanRequest / CWVideoGenerateRequest 新增 brand_logo）→ routers（注入视频 prompt 与 meta，图片经 style_opts.brand_logo / logo 字段）→ 生成链路
+- 自检 5.1 自动阻断：分析框架（title / summary / boxes×4 / brief×3）不完整则提示重新分析并停留输入态；5.2 图片定位与 5.3 视频流转仅人工查看，不硬拒
+
+**本次优化与更改的功能 / 模块**
+- 【重构】前端与菜单 / 创意工作台：输入模块、三步流程、图片/视频双工作区重写，VideoStudio 改为受控组件（plan/work 双模式共享分镜状态）
+- 【新增】前端与菜单 / 素材类型与品牌 Logo：素材类型下拉、Logo 上传与预览、注入生成链路开关
+- 【新增】后端接口 / 视频规划与生成：CWVideoPlanRequest、CWVideoGenerateRequest 新增 brand_logo 字段并注入 prompt/meta
+- 【删除】前端与菜单 / 冗余入口：移除「更多选项」「历史」「新建项目」
+- 【优化】前端与菜单 / 自检：isFrameOk 校验分析框架完整性，缺失时阻断并引导重新分析
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.70
+
+**影响范围**
+- 前端 / 后端 / 数据 / 兼容性：涉及创意工作台输入模块、三步流程、视频受控组件、相关样式，以及后端视频请求模型与路由注入；未改动数据模型表结构（schemas 仅新增可选字段、默认空串），旧接口与历史生成数据保持兼容；「更多选项 / 历史 / 新建项目」移除为纯前端入口删除，不影响后端接口。
+
+**验证**
+- 后端 py_compile 通过：backend/schemas.py、backend/routers.py、backend/version.py 编译无误；routers 视频生成函数已确认在构造 prompt 与 meta 处注入 brand_logo。
+- 前端类型检查 npx tsc --noEmit 0 错误；npx vite build 通过（48 模块，无 TS 错误），产出 dist 资源。
+- 分析框架自检：isFrameOk 校验 title/summary、boxes 四大项（industry/coreAudience/purchaseMotivation/priceBand）、brief 三项（promotionGoal/targetAudience/sellingPoints），与 cwAnalyze（_build_cw_result）返回结构一致，缺失时阻断进入下一步。
+- 系统版本与 CHANGELOG / 发布数据一致性由发版校验（prepare_release --check）强制检查；该条目由本次改动文件自动归纳（含后端接口、数据模型、前端与菜单、系统版本）。

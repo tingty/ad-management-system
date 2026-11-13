@@ -434,6 +434,7 @@ class CWVideoPlanRequest(BaseModel):
     analysis: dict = {}             # 创意工作台「统一分析来源」（同 cw/analyze 的 analysis 字段）
     platform: str = ""
     reference_image: str = ""      # /files/<name> 或 URL（图生视频参考图）
+    brand_logo: str = ""           # /files/<name> 或 URL（品牌 Logo，勾选「注入生成链路」时带入）
     messages: List[CWVideoMessage] = []   # 多轮对话（含 user 微调 + assistant 上一轮回复）
     current_plan: Optional[dict] = None   # 已有的分镜方案（微调时带入，由模型增量修订）
     options: dict = {}             # {mode, voiceover, duration, aspect, lang}
@@ -454,6 +455,7 @@ class CWVideoGenerateRequest(BaseModel):
     analysis: dict = {}
     platform: str = ""
     reference_image: str = ""
+    brand_logo: str = ""          # /files/<name> 或 URL（品牌 Logo，勾选「注入生成链路」时带入）
     plan: dict = {}                # 来自 /cw-video/plan 的 plan（含 shots / duration / aspect / ...）
     options: dict = {}             # {mode, voiceover, duration, aspect, lang, prompt_hint}
 

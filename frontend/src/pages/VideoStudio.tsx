@@ -1,18 +1,38 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useRef, useEffect } from 'react'
 import { api } from '../api'
 
-/* V4.66 创意工作台 · 视频素材创作区
- * 与「图片素材创作区」上下分区、互不干扰：本组件只负责视频，不改动既有图片流程。
- * ① 视频专属选项（表现形式 / 配音 / 时长 / 比例）
- * ② 对话式策划框：针对提示词、创作构想、分镜方案进行多轮微调
- * ③ 分镜预览 + 一键生成（直连视频模型 / 未配置则回退可执行分镜脚本）+ 视频结果网格
+/* V4.70 创意工作台 · 视频素材模块（受控组件，状态由父级 CreativeWorkbench 托管，便于 Step2 规划 → Step3 工作区共享分镜方案）
+ * mode="plan"：第二步「规划创意」中的视频策划对话框（逐镜规划 / 多轮微调），不触发生成；
+ * mode="work"：第三步「批量生成」中的视频工作区（生成进度 + 成片结果 + 生成后微调对话框）。
  */
 
 interface VideoMsg { role: 'user' | 'assistant'; content: string }
+
+// 父级托管的视频状态切片
+export interface VideoState {
+  messages: VideoMsg[]
+  plan: any
+  videos: any[]
+  options: any
+  note: string
+  modelInfo: any
+  planning: boolean
+  generating: boolean
+  error: string
+  refineInput: string
+}
+
 interface VideoStudioProps {
   analysis?: any
   platform?: string
   referenceImage?: string
+  brandLogo?: string
+  injectLogo?: boolean
+  mode: 'plan' | 'work'
+  state: VideoState
+  setState: (updater: (prev: VideoState) => VideoState) => void
+  // 工作区模式下，由父级注入「生成中」的聚合进度文本（可选）
+  progressText?: string
 }
 
 const MODE_OPTS = [
@@ -45,84 +65,101 @@ function providerLabel(mi: any) {
   return mi.provider || ''
 }
 
-export default function VideoStudio({ analysis, platform, referenceImage }: VideoStudioProps) {
-  const [options, setOptions] = useState({
-    mode: referenceImage ? 'image_to_video' : 'text_to_video',
-    voiceover: 'narration',
-    duration: 15,
-    aspect: '9:16',
-    lang: 'zh',
-    prompt_hint: '',
-  })
-  const [messages, setMessages] = useState<VideoMsg[]>([])
-  const [plan, setPlan] = useState<any>(null)
-  const [videos, setVideos] = useState<any[]>([])
-  const [planning, setPlanning] = useState(false)
-  const [generating, setGenerating] = useState(false)
-  const [error, setError] = useState('')
-  const [note, setNote] = useState('')
-  const [modelInfo, setModelInfo] = useState<any>(null)
-  const [input, setInput] = useState('')
+export default function VideoStudio({ analysis, platform, referenceImage, brandLogo, injectLogo, mode, state, setState }: VideoStudioProps) {
+  const { messages, plan, videos, options, note, modelInfo, planning, generating, error, refineInput } = state
   const chatRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight
   }, [messages, planning])
 
+  function setOpt(key: string, val: any) {
+    setState(s => ({ ...s, options: { ...s.options, [key]: val } }))
+  }
+
   async function planStoryboard(seed?: string) {
-    setError('')
-    const msgs = seed ? [...messages, { role: 'user', content: seed } as VideoMsg] : messages
+    setState(s => ({ ...s, error: '' }))
+    const msgs = seed ? [...s_messages(), { role: 'user', content: seed } as VideoMsg] : s_messages()
     if (!msgs.length) {
-      setError('请先输入创作构想，或点击「生成分镜草案」')
+      setState(s => ({ ...s, error: '请先输入创作构想，或点击「生成分镜草案」' }))
       return
     }
-    setPlanning(true)
+    setState(s => ({ ...s, planning: true }))
     try {
       const r: any = await api.cwVideoPlan({
         analysis: analysis || {},
         platform: platform || '',
         reference_image: referenceImage || '',
+        brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
         messages: msgs,
         current_plan: plan || undefined,
         options,
       })
       const next = [...msgs]
       if (r?.reply) next.push({ role: 'assistant', content: r.reply })
-      setMessages(next)
-      if (r?.plan) setPlan(r.plan)
-      setModelInfo(r?.model_info || null)
+      setState(s => ({ ...s, messages: next, plan: r?.plan || s.plan, modelInfo: r?.model_info || s.modelInfo, planning: false, error: '' }))
     } catch (e: any) {
-      setError('分镜规划失败：' + (e?.message || ''))
-    } finally {
-      setPlanning(false)
+      setState(s => ({ ...s, error: '分镜规划失败：' + (e?.message || ''), planning: false }))
     }
   }
+  function s_messages(): VideoMsg[] { return state.messages }
 
   async function generate() {
     if (!plan || !plan.shots?.length) {
-      setError('请先生成分镜方案（点击「生成分镜草案」或输入构想）')
+      setState(s => ({ ...s, error: '请先在第二步生成分镜方案（点击「生成分镜草案」或输入构想）' }))
       return
     }
-    setError('')
-    setGenerating(true)
-    setVideos([])
-    setNote('')
+    setState(s => ({ ...s, error: '', generating: true, videos: [], note: '' }))
     try {
       const r: any = await api.cwVideoGenerate({
         analysis: analysis || {},
         platform: platform || '',
         reference_image: referenceImage || '',
+        brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
         plan,
         options: { ...options, prompt_hint: options.prompt_hint },
       })
-      setVideos(r?.videos || [])
-      setNote(r?.note || '')
-      setModelInfo(r?.model_info || null)
-      if (r?.storyboard) setPlan(r.storyboard)
+      setState(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', modelInfo: r?.model_info || s.modelInfo, generating: false, plan: r?.storyboard || s.plan, error: '' }))
     } catch (e: any) {
-      setError('视频生成失败：' + (e?.message || ''))
-    } finally {
-      setGenerating(false)
+      setState(s => ({ ...s, error: '视频生成失败：' + (e?.message || ''), generating: false }))
+    }
+  }
+
+  // 生成后微调：基于当前分镜 + 新调整提示词，先精修分镜再重生成
+  async function refine() {
+    const seed = (refineInput || '').trim()
+    if (!seed) return
+    setState(s => ({ ...s, error: '' }))
+    const msgs = [...s_messages(), { role: 'user', content: seed } as VideoMsg]
+    setState(s => ({ ...s, planning: true, refineInput: '' }))
+    try {
+      const r: any = await api.cwVideoPlan({
+        analysis: analysis || {},
+        platform: platform || '',
+        reference_image: referenceImage || '',
+        brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
+        messages: msgs,
+        current_plan: plan || undefined,
+        options,
+      })
+      const next = [...msgs]
+      if (r?.reply) next.push({ role: 'assistant', content: r.reply })
+      const newPlan = r?.plan || plan
+      setState(s => ({ ...s, messages: next, plan: newPlan, modelInfo: r?.model_info || s.modelInfo, planning: false, error: '' }))
+      if (newPlan && newPlan.shots?.length) {
+        setState(s => ({ ...s, generating: true, videos: [], note: '' }))
+        const g: any = await api.cwVideoGenerate({
+          analysis: analysis || {},
+          platform: platform || '',
+          reference_image: referenceImage || '',
+          brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
+          plan: newPlan,
+          options: { ...options, prompt_hint: options.prompt_hint },
+        })
+        setState(s => ({ ...s, videos: g?.videos || [], note: g?.note || '', modelInfo: g?.model_info || s.modelInfo, generating: false, plan: g?.storyboard || s.plan, error: '' }))
+      }
+    } catch (e: any) {
+      setState(s => ({ ...s, error: '视频微调失败：' + (e?.message || ''), planning: false, generating: false }))
     }
   }
 
@@ -138,62 +175,56 @@ export default function VideoStudio({ analysis, platform, referenceImage }: Vide
   }
 
   function reset() {
-    setMessages([])
-    setPlan(null)
-    setVideos([])
-    setNote('')
-    setError('')
-    setModelInfo(null)
+    setState(s => ({ ...s, messages: [], plan: null, videos: [], note: '', error: '', modelInfo: null, refineInput: '' }))
   }
 
   const showRef = options.mode === 'image_to_video' && referenceImage
 
-  return (
-    <section className="vs-panel">
-      <div className="vs-head">
-        <h3 className="vs-title">🎬 视频素材创作区</h3>
-        {modelInfo && providerLabel(modelInfo) && (
-          <span className={`vs-model-chip ${modelInfo.provider}`}>{providerLabel(modelInfo)}</span>
-        )}
-        <span className="vs-sub">媒体推广 · 引流转化 · 独立于图片创作流程</span>
-      </div>
+  // ===== 规划模式（Step 2）=====
+  if (mode === 'plan') {
+    return (
+      <section className="vs-panel vs-plan">
+        <div className="vs-head">
+          <h4 className="vs-title">🎬 视频创意规划</h4>
+          {modelInfo && providerLabel(modelInfo) && (
+            <span className={`vs-model-chip ${modelInfo.provider}`}>{providerLabel(modelInfo)}</span>
+          )}
+          <span className="vs-sub">基于网站分析 + 媒体平台规则，逐镜规划视频分镜</span>
+        </div>
 
-      {/* ① 视频专属选项 */}
-      <div className="vs-options">
-        <label className="vs-opt">
-          <span>表现形式</span>
-          <select value={options.mode} onChange={(e) => setOptions({ ...options, mode: e.target.value })}>
-            {MODE_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-          </select>
-        </label>
-        <label className="vs-opt">
-          <span>配音</span>
-          <select value={options.voiceover} onChange={(e) => setOptions({ ...options, voiceover: e.target.value })}>
-            {VOICEOVER_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-          </select>
-        </label>
-        <label className="vs-opt">
-          <span>时长</span>
-          <select value={options.duration} onChange={(e) => setOptions({ ...options, duration: Number(e.target.value) })}>
-            {DURATION_OPTS.map((d) => <option key={d} value={d}>{d} 秒</option>)}
-          </select>
-        </label>
-        <label className="vs-opt">
-          <span>比例</span>
-          <select value={options.aspect} onChange={(e) => setOptions({ ...options, aspect: e.target.value })}>
-            {ASPECT_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-          </select>
-        </label>
-        {showRef && (
-          <div className="vs-ref">
-            <img src={fileUrl(referenceImage)} alt="参考图" />
-            <span>参考图（图生视频驱动）</span>
-          </div>
-        )}
-      </div>
+        <div className="vs-options">
+          <label className="vs-opt">
+            <span>表现形式</span>
+            <select value={options.mode} onChange={(e) => setOpt('mode', e.target.value)}>
+              {MODE_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+            </select>
+          </label>
+          <label className="vs-opt">
+            <span>配音</span>
+            <select value={options.voiceover} onChange={(e) => setOpt('voiceover', e.target.value)}>
+              {VOICEOVER_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+            </select>
+          </label>
+          <label className="vs-opt">
+            <span>时长</span>
+            <select value={options.duration} onChange={(e) => setOpt('duration', Number(e.target.value))}>
+              {DURATION_OPTS.map((d) => <option key={d} value={d}>{d} 秒</option>)}
+            </select>
+          </label>
+          <label className="vs-opt">
+            <span>比例</span>
+            <select value={options.aspect} onChange={(e) => setOpt('aspect', e.target.value)}>
+              {ASPECT_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+            </select>
+          </label>
+          {showRef && (
+            <div className="vs-ref">
+              <img src={fileUrl(referenceImage)} alt="参考图" />
+              <span>参考图（图生视频驱动）</span>
+            </div>
+          )}
+        </div>
 
-      <div className="vs-body">
-        {/* ② 对话式策划框 */}
         <div className="vs-chat">
           <div className="vs-chat-head">对话式策划 · 针对提示词 / 创作构想 / 方案微调</div>
           <div className="vs-chat-log" ref={chatRef}>
@@ -212,18 +243,18 @@ export default function VideoStudio({ analysis, platform, referenceImage }: Vide
           </div>
           <div className="vs-chat-input">
             <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
+              value={state.refineInput}
+              onChange={(e) => setState(s => ({ ...s, refineInput: e.target.value }))}
               placeholder="输入提示词微调 / 创作构想 / 方案修改…"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                  const s = input.trim()
-                  if (s) { setInput(''); planStoryboard(s) }
+                  const s = e.currentTarget.value.trim()
+                  if (s) planStoryboard(s)
                 }
               }}
             />
             <div className="vs-chat-actions">
-              <button onClick={() => { const s = input.trim(); if (!s) return; setInput(''); planStoryboard(s) }} disabled={planning}>
+              <button onClick={() => { const s = state.refineInput.trim(); if (s) planStoryboard(s) }} disabled={planning}>
                 {plan ? '发送并微调分镜' : '发送'}
               </button>
               <button className="vs-ghost" onClick={() => planStoryboard(`根据产品分析，帮我规划一个 ${options.duration} 秒、${options.aspect} 的推广视频分镜，重点突出核心卖点与转化路径`)} disabled={planning}>
@@ -233,7 +264,6 @@ export default function VideoStudio({ analysis, platform, referenceImage }: Vide
           </div>
         </div>
 
-        {/* ③ 分镜预览 + 生成 + 结果 */}
         <div className="vs-preview">
           <div className="vs-preview-head">
             <span className="vs-preview-title">
@@ -241,13 +271,9 @@ export default function VideoStudio({ analysis, platform, referenceImage }: Vide
             </span>
             <div className="vs-preview-actions">
               {plan && <button className="vs-ghost" onClick={downloadJson}>下载分镜 JSON</button>}
-              <button className="vs-primary" onClick={generate} disabled={generating || !plan}>
-                {generating ? '生成中…' : '生成视频'}
-              </button>
               <button className="vs-ghost" onClick={reset}>重置</button>
             </div>
           </div>
-
           {plan ? (
             <div className="vs-shots">
               {(plan.shots || []).map((s: any) => (
@@ -267,28 +293,63 @@ export default function VideoStudio({ analysis, platform, referenceImage }: Vide
           ) : (
             <div className="vs-preview-empty">尚无分镜方案。在左侧输入构想或点击「生成分镜草案」。</div>
           )}
-
-          {generating && <div className="vs-gen-status">视频生成中（直连已配置的视频模型，通常需要 1–3 分钟）…</div>}
-          {note && <div className="vs-note">{note}</div>}
-
-          {videos.length > 0 && (
-            <div className="vs-videos">
-              <div className="vs-videos-head">生成结果</div>
-              <div className="vs-video-grid">
-                {videos.map((v, i) => (
-                  <div className="vs-video" key={i}>
-                    <video src={fileUrl(v.url)} controls preload="metadata" />
-                    <div className="vs-video-cap">{v.caption || `片段 ${i + 1}`}</div>
-                    <a className="vs-video-dl" href={fileUrl(v.url)} download target="_blank" rel="noreferrer">下载视频</a>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {error && <div className="vs-error">{error}</div>}
         </div>
+
+        {error && <div className="vs-error">{error}</div>}
+      </section>
+    )
+  }
+
+  // ===== 工作区模式（Step 3）=====
+  return (
+    <section className="vs-panel vs-work">
+      <div className="vs-head">
+        <h4 className="vs-title">🎬 视频生成工作区</h4>
+        {modelInfo && providerLabel(modelInfo) && (
+          <span className={`vs-model-chip ${modelInfo.provider}`}>{providerLabel(modelInfo)}</span>
+        )}
       </div>
+
+      {(generating || state.generating) && (
+        <div className="vs-gen-status">视频生成中（直连已配置的视频模型，通常需要 1–3 分钟，仅展示进度）…</div>
+      )}
+      {note && <div className="vs-note">{note}</div>}
+
+      {videos.length > 0 && (
+        <div className="vs-videos">
+          <div className="vs-videos-head">生成结果</div>
+          <div className="vs-video-grid">
+            {videos.map((v, i) => (
+              <div className="vs-video" key={i}>
+                <video src={fileUrl(v.url)} controls preload="metadata" />
+                <div className="vs-video-cap">{v.caption || `片段 ${i + 1}`}</div>
+                <a className="vs-video-dl" href={fileUrl(v.url)} download target="_blank" rel="noreferrer">下载视频</a>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 生成后微调对话框：针对已生成视频输入新调整提示词，重生成合规视频素材 */}
+      {videos.length > 0 && (
+        <div className="vs-refine">
+          <div className="vs-refine-head">微调已生成视频</div>
+          <p className="vs-refine-hint">输入新的调整提示词（如「节奏更紧凑」「突出价格优势」「换成竖版构图」），将基于当前分镜精修并重生成。</p>
+          <textarea
+            value={refineInput}
+            onChange={(e) => setState(s => ({ ...s, refineInput: e.target.value }))}
+            placeholder="输入微调提示词…"
+          />
+          <div className="vs-refine-actions">
+            <button className="vs-primary" onClick={refine} disabled={planning || generating || !refineInput.trim()}>
+              {planning || generating ? '重生成中…' : '微调并重生成'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && <div className="vs-error">{error}</div>}
+      {!plan && <div className="vs-preview-empty">尚未生成分镜方案。请返回第二步「视频创意规划」。</div>}
     </section>
   )
 }

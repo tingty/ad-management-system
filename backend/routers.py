@@ -818,6 +818,8 @@ async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depen
     prompt_parts.append(f"时长：{duration} 秒；比例：{aspect}")
     if seg_lines: prompt_parts.append("分镜：" + "；".join(seg_lines))
     if options.get("prompt_hint"): prompt_parts.append("补充要求：" + str(options["prompt_hint"]))
+    if req.brand_logo:
+        prompt_parts.append(f"品牌 Logo：{req.brand_logo}（如适用，将品牌标识有机融入画面与结尾定格，不得遮挡主体）")
     prompt = "\n".join(prompt_parts)
 
     meta = {
@@ -833,6 +835,9 @@ async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depen
     if str(plan.get("mode") or options.get("mode") or "") == "image_to_video" and req.reference_image:
         meta["image"] = req.reference_image
         meta["mode"] = "image_to_video"
+    # 品牌 Logo 注入：勾选「注入生成链路」时带入，供视频模型/分镜在结尾品牌定格使用
+    if req.brand_logo:
+        meta["brand_logo"] = req.brand_logo
 
     cfg = _active_config(db, "video")
     if cfg and cfg.api_key and cfg.base_url and cfg.model:

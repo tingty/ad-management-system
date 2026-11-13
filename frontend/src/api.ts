@@ -992,12 +992,12 @@ export const api = {
     req<{ ok: boolean }>(`/api/cw/library/${id}`, { method: 'DELETE' }),
   // V4.66 创意工作台 · 视频素材创作区：对话式分镜策划 + 生成（直连视频模型 / 回退分镜脚本）
   cwVideoPlan: (payload: {
-    analysis: any; platform: string; reference_image?: string;
+    analysis: any; platform: string; reference_image?: string; brand_logo?: string;
     messages: { role: string; content: string }[]; current_plan?: any; options?: any;
   }) =>
     req<any>('/api/cw-video/plan', { method: 'POST', body: JSON.stringify(payload) }),
   cwVideoGenerate: (payload: {
-    analysis: any; platform: string; reference_image?: string; plan: any; options?: any;
+    analysis: any; platform: string; reference_image?: string; brand_logo?: string; plan: any; options?: any;
   }) =>
     req<any>('/api/cw-video/generate', { method: 'POST', body: JSON.stringify(payload) }),
   updateCreationHistory: (id: number, payload: {
