@@ -43,7 +43,11 @@ def daily_hour() -> int:
 
 
 def _cfg_request(cfg: ModelConfig) -> dict:
-    """把一条落库配置还原为 test_llm_connection 所需的请求体（含图像/视频协议与 endpoint）。"""
+    """把一条落库配置还原为 test_llm_connection 所需的请求体（含图像/视频协议与 endpoint/params）。
+
+    params 整包透传，使视频模型配置里的 endpoint/body_shape/async_header 等开关
+    （如阿里云百炼 MaaS 的 dashscope_maas 契约）在「测试已保存配置 / 每日健康测试」时生效。
+    """
     params = cfg.params if isinstance(cfg.params, dict) else {}
     return {
         "provider": cfg.provider,
@@ -52,6 +56,7 @@ def _cfg_request(cfg: ModelConfig) -> dict:
         "base_url": cfg.base_url,
         "model": cfg.model,
         "endpoint": params.get("endpoint"),
+        "params": params,
     }
 
 

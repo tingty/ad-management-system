@@ -1553,6 +1553,7 @@ async def test_model(req: ModelTestIn):
         "model": req.model,
         "protocol": req.protocol,
         "endpoint": req.endpoint,
+        "params": req.params,
     })
     return result
 

@@ -2541,3 +2541,33 @@
 - 前端类型检查：api.ts 的 ModelPreset 增加可选 default_params 字段；LLMSettings.tsx 选中预设预填 default_params；npx tsc --noEmit 与 npx vite build 验证（构建含本次改动）。
 - 阿里云 MaaS 接口已实测闭环：提交（X-DashScope-Async: enable）→ 轮询 /api/v1/tasks/{id}（task_status: RUNNING→SUCCEEDED）→ 取回 9:16 竖屏 MP4（video_url 预签名 URL，HTTP 206 验证可下载）。
 - 系统版本与 CHANGELOG / 发布数据一致性由发版校验（prepare_release --check）强制检查；该条目由本次改动文件自动归纳。
+
+## V4.72 视频大模型连通测试修复（按真实调用契约提交，含请求头/参数）
+
+**发布日期**：2026-11-13
+**变更类型**：修复 / 优化
+**涉及模块**：大模型配置、后端连通测试、前端设置页、系统版本
+**变更摘要**：修复「大模型配置 → 视频模型」连通性测试不读取 params 开关，导致阿里云百炼 MaaS 等需要特殊端点/请求体/异步头的视频模型「保存并测试」必败的问题；测试链路透传 params，使测试按真实生成契约（ModelVideo 同款开关）提交，并正确判定通过，补齐视频模型「配置信息可视化」。
+
+**更新要点**
+- 后端 `_test_generic_video` 重构：读取 `params.endpoint`（提交路径）、`params.body_shape`（提交体形状，dashscope_maas → {model, input:{prompt}, parameters:{size,count}}）、`params.async_header`（true → 附加 `X-DashScope-Async: enable` 头）；识别到 `task_id` 即判通过（异步任务不阻塞轮询）；默认通用视频（无 params）仍走 /video/generations 契约，行为不变
+- 测试链路透传 params：路由 `test_model` 与 `model_health._cfg_request` 均把完整 `params` 传入 `test_llm_connection`，使「保存并测试」「测试已保存配置」「每日健康测试」三处均生效
+- 前端 `LLMSettings.testOnly` 提交时带上 `form.params`，保存前测试即可用预设开关
+- 阿里云预设 `notes` 显式补充【请求头】/【提交参数】/【轮询】三段说明，用户可在配置卡直接看清关键配置（无需翻 default_params 原始 JSON）
+
+**本次优化与更改的功能 / 模块**
+- 【修复】后端连通测试 / 视频：_test_generic_video 按 params 构造端点/请求体/请求头，与 ModelVideo 真实生成一致
+- 【优化】后端连通测试 / 透传：test_model 与 _cfg_request 透传完整 params
+- 【优化】前端设置页 / 测试：testOnly 携带 form.params
+- 【优化】大模型配置 / 配置信息：阿里云预设 notes 显式列出请求头与参数
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.72
+
+**影响范围**
+- 前端 / 后端 / 数据 / 兼容性：仅改动视频连通测试函数与测试请求透传；旧通用视频配置（Pika/Luma/可灵聚合网关等）默认契约路径不变；未改动数据模型表结构；params 字段为既有 JSON 列，读取按 dict 容错。
+
+**验证**
+- 离线构造校验：对阿里云预设 params 复刻 _test_generic_video 的端点/请求体/头构造，输出 URL=`.../api/v1/services/aigc/video-generation/video-synthesis`、headers 含 `X-DashScope-Async: enable`、body=`{model,input:{prompt},parameters:{size,count}}`，与 V4.71 实测成功调用逐一一致。
+- 默认通用视频路径校验：无 params 时仍构造 /video/generations 契约且不含异步头，回归安全。
+- 真实联调：用真实 Key 调用 `test_llm_connection`，请求正确抵达阿里云网关（返回结构化 `AccessDenied` 而非 404/400 格式错），证明端点/请求体/请求头已被网关接受；仅剩「Key 的 IP 白名单」为账户侧配置（非代码缺陷）。
+- 后端 py_compile 通过：backend/llm_catalog.py、backend/routers.py、backend/model_health.py 编译无误。
+- 系统版本与 CHANGELOG / 发布数据一致性由发版校验（prepare_release --check）强制检查；该条目由本次改动文件自动归纳。

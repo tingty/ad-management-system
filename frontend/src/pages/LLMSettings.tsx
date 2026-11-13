@@ -288,7 +288,7 @@ export default function LLMSettings() {
       setErr('请先填写 API Key、模型请求链接与模型版本（Model）。'); return
     }
     await runTest({ provider: form.provider, protocol: form.provider, api_key: form.api_key, base_url: form.base_url,
-                    model: form.model, endpoint: form.params?.endpoint })
+                    model: form.model, endpoint: form.params?.endpoint, params: form.params })
   }
 
   const del = async (id: number) => {

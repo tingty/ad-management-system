@@ -815,8 +815,8 @@ VIDEO_PRESETS = [
         "api_key_label": "阿里云百炼 / DashScope API Key", "api_key_placeholder": "sk-...",
         "model_placeholder": "wan3.0-video",
         "docs_url": "https://help.aliyun.com/zh/model-studio/",
-        "setup_guide": "1) 阿里云百炼开通 wan3.0-video 并获取 API Key；2) 在 Key 所在资源组把部署机公网 IP 加入白名单；3) Base URL 默认已填本次实测网关地址，可改；4) Model 填 wan3.0-video；5) 保存并测试。",
-        "notes": "实测可用（2026-11-13）：提交后约 3 分钟出 5s/1080p/30fps/9:16 竖屏 MP4，成片 URL 有效期约 24h。⚠️ 兼容提示：本模型请求体为 {model,input:{prompt},parameters:{...}}、轮询地址为 /api/v1/tasks/{id}、且需 X-DashScope-Async 头，与 generic-video 默认契约（{model,prompt,duration,aspect_ratio} + /video/generations + /tasks/{id}）不同，已通过预设默认参数（body_shape/poll_path/async_header/endpoint）适配，选此预设即可直接驱动。",
+        "setup_guide": "1) 阿里云百炼开通 wan3.0-video 并获取 API Key；2) 在 Key 所在资源组把部署机公网 IP 加入白名单（否则 403 IP access denied）；3) Base URL 默认已填本次实测网关地址，可改；4) Model 填 wan3.0-video；5) 保存并测试。选此预设会自动填好下方请求头与参数，无需手改。",
+        "notes": "实测可用（2026-11-13）：提交后约 3 分钟出 5s/1080p/30fps/9:16 竖屏 MP4，成片 URL 有效期约 24h。\n【请求头】必须带 X-DashScope-Async: enable（由 async_header 参数控制，选预设已自动开启）。\n【提交参数】endpoint= /api/v1/services/aigc/video-generation/video-synthesis；body_shape= dashscope_maas → 请求体 {model,input:{prompt},parameters:{size,count}}（非通用 {model,prompt,duration,aspect_ratio}）。\n【轮询】poll_path= /api/v1/tasks（GET {base_url}/api/v1/tasks/{task_id}）。\n以上四项（endpoint/body_shape/poll_path/async_header）已写进预设默认参数，选此预设即自动装配；通用测试也会按这些开关提交，故「保存并测试」可直接通过。",
         "default_params": {
             "endpoint": "/api/v1/services/aigc/video-generation/video-synthesis",
             "body_shape": "dashscope_maas",
@@ -1104,27 +1104,58 @@ async def _test_dashscope_maas_image(req: dict, preset: Optional[dict]) -> dict:
 
 
 async def _test_generic_video(req: dict, preset: Optional[dict]) -> dict:
-    """通用视频：POST {base_url}/video/generations，验证可达性与鉴权。
+    """通用视频：按 params 决定端点 / 请求体 / 请求头，验证可达性与鉴权。
 
-    视频多为异步任务，这里以「能连通 + 鉴权通过」作为最小通过标准。
+    视频多为异步任务，这里以「能连通 + 鉴权通过 + 任务被受理」作为最小通过标准：
+    - 成功返回 task_id / 媒体即视为通过；不阻塞轮询（视频生成常需数分钟）。
+    - 兼容两种契约：
+        * 默认（无 body_shape）：POST {base_url}/video/generations，body={model,prompt,duration,aspect_ratio}
+        * body_shape=dashscope_maas：POST {base_url}{endpoint}，body={model,input:{prompt},parameters:{size,count}}，
+          并附加 X-DashScope-Async: enable 头（阿里云百炼 MaaS / wan3.0-video 实测所需）。
     """
-    api_key, base_url, model = req.get("api_key"), (req.get("base_url") or "").strip(), (req.get("model") or "").strip()
+    api_key = (req.get("api_key") or "").strip()
+    base_url = (req.get("base_url") or "").strip()
+    model = (req.get("model") or "").strip()
     if not (api_key and base_url and model):
         return {"ok": False, "error_type": "bad_request",
                 "message": "缺少必填项：api_key / base_url / model 均不能为空。", "hint_url": "", "hint_url_label": ""}
-    url = base_url.rstrip("/") + "/video/generations"
+    params = req.get("params") if isinstance(req.get("params"), dict) else {}
+    endpoint = (params.get("endpoint") or req.get("endpoint") or "/video/generations").strip()
+    body_shape = (params.get("body_shape") or "").strip()
+    if body_shape == "dashscope_maas":
+        # 阿里云百炼 MaaS（wan3.0-video 等）契约：提交体为 {model,input:{prompt},parameters:{size,count}}，
+        # 且需 X-DashScope-Async: enable 头。实测该端点忽略 size、固定输出 9:16 竖屏，这里仍推导一个合理 size。
+        aspect = (params.get("aspect") or "9:16")
+        size = params.get("size") or ("1080*1920" if aspect == "9:16" else "1280*720")
+        body = {"model": model, "input": {"prompt": "a short product intro"},
+                "parameters": {"size": size, "count": 1}}
+    else:
+        body = {"model": model, "prompt": "a short product intro", "duration": 5, "aspect_ratio": "9:16"}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if str(params.get("async_header") or "").strip().lower() in ("true", "1", "yes"):
+        headers["X-DashScope-Async"] = "enable"
+    url = base_url.rstrip("/") + endpoint
     try:
         t0 = time.time()
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(url,
-                             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                             json={"model": model, "prompt": "a short product intro", "duration": 5, "aspect_ratio": "9:16"})
+            r = await c.post(url, headers=headers, json=body)
             if r.status_code >= 400:
                 return _classify_error(None, r.status_code, _safe_body(r), preset)
+            data = {}
+            try:
+                data = r.json()
+            except Exception:
+                pass
+            out = data.get("output") if isinstance(data.get("output"), dict) else {}
+            task_id = out.get("task_id") or data.get("task_id") or data.get("id")
+            reply = "reachable (async video API, verify output structure)"
+            note = "视频端点已连通；视频多为异步任务，实际成片需轮询，请按厂商文档核对返回结构。"
+            if task_id:
+                reply = f"提交成功，异步任务已受理（task_id={task_id}）"
+                note = "已提交视频生成任务并获得任务 ID；实际出片为异步，需在生成流程中轮询取片。"
         return {"ok": True, "latency_ms": int((time.time() - t0) * 1000),
-                "reply": "reachable (async video API, verify output structure)",
-                "protocol": "generic-video", "provider": req.get("provider"),
-                "note": "通用视频端点已连通；视频多为异步任务，实际成片需轮询，请按厂商文档核对返回结构。"}
+                "reply": reply, "protocol": "generic-video", "provider": req.get("provider"),
+                "note": note}
     except Exception as e:  # noqa
         return _classify_error(e, getattr(e, "status_code", 0) or 0, "", preset)
 
