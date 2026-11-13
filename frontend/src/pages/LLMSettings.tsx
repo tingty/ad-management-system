@@ -47,6 +47,7 @@ type ProtocolOption = {
   notes?: string
   setup_guide?: string
   extra_fields?: { key: string; label: string; placeholder?: string; hint?: string }[]
+  default_params?: Record<string, string>
 }
 const PROTOCOL_OPTIONS: ProtocolOption[] = [
   { key: 'openai', name: 'OpenAI 兼容（GPT / DeepSeek / 通义 / Kimi / 本地 vLLM …）', modality: 'text',
@@ -78,8 +79,24 @@ const PROTOCOL_OPTIONS: ProtocolOption[] = [
   { key: 'generic-video', name: '文生视频 · 通用兼容', modality: 'video',
     default_base_url: 'https://', model_placeholder: 'your-video-model',
     models: [], api_key_label: 'API Key', api_key_placeholder: 'sk-...',
-    notes: '通用视频端点，多数视频模型为异步任务，测试仅验证可达性与鉴权。',
-    extra_fields: [{ key: 'endpoint', label: '自定义端点路径（可选）', placeholder: '/video/generations', hint: '留空使用默认端点 /video/generations。' }] },
+    notes: '通用视频端点，多数视频模型为异步任务，测试仅验证可达性与鉴权。不同厂商路径/请求体差异大，可在下方填写端点、请求体结构、异步头、轮询路径四项契约参数。',
+    extra_fields: [
+      { key: 'endpoint', label: '提交端点路径', placeholder: '/video/generations 或 /api/v1/services/.../video-synthesis', hint: '视频提交接口路径，拼接到 Base URL 后。聚合类填 /video/generations；阿里云百炼填 /api/v1/services/aigc/video-generation/video-synthesis。' },
+      { key: 'body_shape', label: '请求体结构', placeholder: 'default 或 dashscope_maas', hint: 'default={model,prompt,duration,aspect_ratio}；dashscope_maas={model,input:{prompt},parameters:{size,count}}（阿里云百炼等用）。' },
+      { key: 'async_header', label: '异步请求头 X-DashScope-Async', placeholder: 'true / false', hint: 'true 时提交附加 X-DashScope-Async: enable 头（阿里云百炼必需）。' },
+      { key: 'poll_path', label: '轮询路径', placeholder: '/tasks 或 /api/v1/tasks', hint: '任务轮询接口路径，拼接 Base URL 与 task_id。' },
+    ] },
+  { key: 'aliyun-maas-video', name: '文生视频 · 阿里云百炼 MaaS（wan3.0-video）', modality: 'video',
+    default_base_url: 'https://ws-4pdi7amcxvrey8qo.ap-southeast-1.maas.aliyuncs.com', model_placeholder: 'wan3.0-video',
+    models: ['wan3.0-video'],
+    api_key_label: '阿里云百炼 / DashScope API Key', api_key_placeholder: 'sk-...',
+    notes: '阿里云百炼 wan3.0-video：提交需 X-DashScope-Async 头，请求体 {model,input:{prompt},parameters:{...}}，轮询 /api/v1/tasks/{id}。选此协议将自动装配好端点 / 请求头 / 参数（见下方高级参数），仅需填 Key 与 Model 即可。出片约 5s / 1080p / 9:16 竖屏 / URL 24h 有效。注意：部署机公网 IP 须加入该 Key 白名单（否则 403 IP access denied）。',
+    default_params: {
+      endpoint: '/api/v1/services/aigc/video-generation/video-synthesis',
+      body_shape: 'dashscope_maas',
+      poll_path: '/api/v1/tasks',
+      async_header: 'true',
+    } },
   { key: 'keling', name: '文生视频 · 可灵 Kling（原生异步）', modality: 'video',
     default_base_url: 'https://api.klingai.com', model_placeholder: 'kling-v1',
     models: ['kling-v1', 'kling-v1-6', 'kling-v2-master'], api_key_label: '可灵 API Key（或 Access Key）', api_key_placeholder: 'sk-...',
@@ -169,13 +186,17 @@ export default function LLMSettings() {
     setForm(f => {
       // 仅当链接为空或仍为某个协议的默认值（即用户未手动改过）时，才用新协议默认链接覆盖
       const isBlankOrDefault = !f.base_url || PROTOCOL_OPTIONS.some(o => o.default_base_url === f.base_url)
+      // 选中协议时：把该协议的默认参数（default_params，如阿里云自动装配的 4 个契约开关）与
+      // 附加字段（extra_fields）一并带入 form.params，确保「选了就能用」，无需手敲 JSON。
+      const dp = (p?.default_params && typeof p.default_params === 'object') ? p.default_params : {}
+      const ef = Object.fromEntries((p?.extra_fields || []).map(e => [e.key, f.params[e.key] || '']))
       return {
         ...f,
         provider: key,
         base_url: isBlankOrDefault ? (p?.default_base_url || '') : f.base_url,
         model: f.model, // 模型版本由用户自行填写，切换协议不覆盖
         usages: defaultUsagesFor(p?.modality || 'text'),
-        params: Object.fromEntries((p?.extra_fields || []).map(ef => [ef.key, f.params[ef.key] || ''])),
+        params: { ...dp, ...ef },
       }
     })
   }
@@ -536,7 +557,7 @@ export default function LLMSettings() {
                    onChange={e => setForm({ ...form, api_key: e.target.value })}
                    placeholder={preset?.api_key_placeholder || 'sk-...'} />
 
-            {/* 协议专属附加字段（如通用图像/视频的自定义端点），按 extra_fields 动态渲染 */}
+            {/* 协议专属附加字段（如通用图像/视频的自定义端点/请求体结构），按 extra_fields 动态渲染 */}
             {preset?.extra_fields?.map(ef => (
               <div key={ef.key}>
                 <label>{ef.label}</label>
@@ -546,6 +567,24 @@ export default function LLMSettings() {
                 {ef.hint && <div className="muted" style={{ fontSize: 12 }}>{ef.hint}</div>}
               </div>
             ))}
+
+            {/* 高级参数：展示协议未以「附加字段」呈现、但已带入的契约参数
+                （如选阿里云百炼预设自动装配的 endpoint/body_shape/async_header/poll_path），可手动微调。
+                通用视频协议的四项已在上方的 extra_fields 呈现，这里不再重复。 */}
+            {Object.entries(form.params)
+              .filter(([k]) => !(preset?.extra_fields || []).some(ef => ef.key === k))
+              .map(([k, v]) => (
+                <div key={k}>
+                  <label>{k}（高级参数）</label>
+                  <input type="text" value={v}
+                         onChange={e => setForm({ ...form, params: { ...form.params, [k]: e.target.value } })}
+                         placeholder={k} />
+                  {k === 'body_shape' && <div className="muted" style={{ fontSize: 12 }}>default=通用视频契约；dashscope_maas=阿里云百炼契约（model + input.prompt + parameters）</div>}
+                  {k === 'async_header' && <div className="muted" style={{ fontSize: 12 }}>true=提交附加 X-DashScope-Async: enable 头（阿里云百炼必需）</div>}
+                  {k === 'poll_path' && <div className="muted" style={{ fontSize: 12 }}>任务轮询接口路径，拼接 Base URL 与 task_id</div>}
+                  {k === 'endpoint' && <div className="muted" style={{ fontSize: 12 }}>视频提交接口路径，拼接到 Base URL 后</div>}
+                </div>
+              ))}
 
             {preset?.setup_guide && <div className="guide">📋 {preset.setup_guide}</div>}
 

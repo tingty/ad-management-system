@@ -2571,3 +2571,35 @@
 - 真实联调：用真实 Key 调用 `test_llm_connection`，请求正确抵达阿里云网关（返回结构化 `AccessDenied` 而非 404/400 格式错），证明端点/请求体/请求头已被网关接受；仅剩「Key 的 IP 白名单」为账户侧配置（非代码缺陷）。
 - 后端 py_compile 通过：backend/llm_catalog.py、backend/routers.py、backend/model_health.py 编译无误。
 - 系统版本与 CHANGELOG / 发布数据一致性由发版校验（prepare_release --check）强制检查；该条目由本次改动文件自动归纳。
+
+## V4.73 视频大模型配置可用化：阿里云百炼做成「接口协议」一等公民，通用视频开放四项契约参数
+
+**发布日期**：2026-11-13
+**变更类型**：修复 / 优化
+**涉及模块**：大模型配置、前端设置页、后端预设目录、后端连通测试、系统版本
+**变更摘要**：修复「阿里云百炼 MaaS（wan3.0-video）」在「大模型配置」弹窗中无法被选择的问题——此前它仅登记在后端 VIDEO_PRESETS 目录，既不在前端协议下拉框，也因缺 modality/mainstream 标记而无法出现在快捷预设芯片，导致用户完全选不到；同时把「文生视频 · 通用兼容」协议开放 endpoint / body_shape / async_header / poll_path 四项契约参数，使用户可自主添加任意视频大模型并测试成功。
+
+**更新要点**
+- 阿里云百炼 MaaS 提升为「接口协议」下拉里的一等公民选项（key=aliyun-maas-video，名称「文生视频 · 阿里云百炼 MaaS（wan3.0-video）」），与 OpenAI / 可灵等并列直接可选，不再依赖隐藏的预设目录
+- 选中该协议即自动装配 default_params：endpoint=/api/v1/services/aigc/video-generation/video-synthesis、body_shape=dashscope_maas、poll_path=/api/v1/tasks、async_header=true，用户仅需填 Key 与 Model 即可保存并测试
+- 通用视频协议（generic-video）开放四项契约参数（extra_fields）：提交端点路径、请求体结构（default / dashscope_maas）、异步请求头（X-DashScope-Async）、轮询路径，满足「自主添加任意视频大模型」需求
+- 新增「高级参数」可编辑区：把已自动装配的契约参数（如阿里云的 4 项）以可编辑输入框呈现并附中文说明，用户可手动微调或排查
+- 后端测试路由补登记：_TESTERS 增加 aliyun-maas-video → _test_generic_video，使该 provider 的「保存并测试 / 仅测试」正确走视频契约而非误判为文本模型
+- 预设目录标注：阿里云预设补 modality=video 并加入 MAINSTREAM_KEYS，使其在「视频」模态下也出现在快捷预设芯片（与协议下拉双入口）
+
+**本次优化与更改的功能 / 模块**
+- 【修复】前端设置页 / 协议下拉：阿里云百炼 MaaS 成为可选协议选项，解决「选不到」
+- 【优化】前端设置页 / 通用视频：开放 endpoint / body_shape / async_header / poll_path 四项契约参数
+- 【新增】前端设置页 / 高级参数：已装配契约参数可编辑展示
+- 【修复】后端连通测试 / 路由：_TESTERS 登记 aliyun-maas-video，避免测试误走 OpenAI 文本路径
+- 【优化】后端预设目录 / 可见性：阿里云预设补 modality 与 mainstream，快捷预设芯片在视频模态下显示
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.73
+
+**影响范围**
+- 前端 / 后端 / 数据 / 兼容性：仅新增协议选项、扩展 generic-video 的 extra_fields、新增高级参数渲染、补测试路由映射与预设可见性标记；未改动数据模型表结构；旧 generic-video 配置（Pika/Luma/可灵聚合网关等）默认契约路径不变（空参数即走默认），已存 aliyun-maas-video 配置的 provider 字段保持原值、升级后测试/生成均按既有 params 生效。
+
+**验证**
+- 后端校验：py_compile 通过；`aliyun-maas-video` 已登记于 _TESTERS 并指向 _test_generic_video；get_all_presets 中该预设 modality=video、mainstream=True、default_params 四项完整；_resolve_protocol('aliyun-maas-video') 正确回退到 generic-video 协议。
+- 前端类型检查：npx tsc --noEmit 0 错误；npm run build（tsc && vite build）通过，产出 dist 资源；修复了一处 JSX 字面量花括号导致的 TS1005 解析错误。
+- 真实联调：以 provider=aliyun-maas-video + 真实 params 调用 test_llm_connection，请求正确抵达阿里云网关（HTTP 403 AccessDenied「IP access denied」），证明端点/请求体/异步头构造与 V4.71 实测成功调用完全一致；仅余 Key 的 IP 白名单为账户侧配置（部署机公网 IP 需加入白名单）。
+- 系统版本与 CHANGELOG / 发布数据一致性由发版校验（prepare_release --check）强制检查；该条目由本次改动文件自动归纳。

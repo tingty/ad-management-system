@@ -474,7 +474,7 @@ def modality_of(protocol: str) -> str:
 MAINSTREAM_KEYS = {
     "openai", "anthropic", "google", "xai", "cohere", "mistral", "meta-llama",
     "qwen", "qwen-maas", "moonshot", "deepseek", "zhipu", "ernie", "minimax", "doubao",
-    "hunyuan", "baichuan", "gemma",
+    "hunyuan", "baichuan", "gemma", "aliyun-maas-video",
 }
 
 
@@ -810,6 +810,7 @@ VIDEO_PRESETS = [
     },
     {
         "key": "aliyun-maas-video", "name": "阿里云百炼 MaaS（wan3.0-video）", "protocol": "generic-video",
+        "modality": "video",
         "default_base_url": "https://ws-4pdi7amcxvrey8qo.ap-southeast-1.maas.aliyuncs.com", "base_url_editable": True,
         "models": ["wan3.0-video"],
         "api_key_label": "阿里云百炼 / DashScope API Key", "api_key_placeholder": "sk-...",
@@ -1163,7 +1164,7 @@ async def _test_generic_video(req: dict, preset: Optional[dict]) -> dict:
 _TESTERS = {"openai": _test_openai, "anthropic": _test_anthropic, "gemini": _test_gemini,
             "openai-image": _test_openai_image, "generic-image": _test_generic_image,
             "dashscope-maas-image": _test_dashscope_maas_image,
-            "generic-video": _test_generic_video}
+            "generic-video": _test_generic_video, "aliyun-maas-video": _test_generic_video}
 
 
 async def test_llm_connection(req: dict) -> dict:
