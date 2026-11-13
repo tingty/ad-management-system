@@ -15,10 +15,12 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      CreativeAnalysisRequest, CreativeAnalysisResult,
                      CreativePlanRequest, CreativePlanResult, CreativeRoute,
                      CWAnalyzeRequest, CWAnalysisResult, CWRoutesRequest, CWRoute, CWRoutesResult,
-                     ProductSnapshot, CwLibraryOut, CwLibraryCreate)
+                     ProductSnapshot, CwLibraryOut, CwLibraryCreate,
+                     CWVideoPlanRequest, CWVideoPlanResult, CWVideoGenerateRequest, CWVideoGenerateResult,
+                     CWVideoAsset, ModelInfo)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
-from providers import get_llm_with_info, finalize_invocation, parse_json
+from providers import get_llm_with_info, finalize_invocation, parse_json, get_video, _active_config, StoryboardVideo
 from presets import creative_presets_payload
 from prompt_catalog import (library_dimensions, library_entries,
                             get_practice, target_key_for_kind, KINDS, FUNC_TYPES,
@@ -410,6 +412,36 @@ _CW_ROUTES_SYS = (
     "tags 2-3 个；不要编造数据。"
 )
 
+# V4.66 创意工作台·视频素材创作区：对话式分镜策划
+_CW_VIDEO_PLAN_SYS = (
+    "你是资深的出海效果广告视频创意导演。用户会给你：① 产品分析结论（定位/受众/卖点/平台打法）；"
+    "② 目标媒体平台；③ 参考图（可选，图生视频用）；④ 多轮对话（用户对提示词、创作构想、分镜方案的微调）；"
+    "⑤ 已有的分镜方案（微调时带入，你需要增量修订而非重写）。\n"
+    "你要始终围绕「媒体平台推广、吸引流量、完成转化」的目标，确保视频：贴合产品定位、精准捕捉信息、"
+    "表达产品核心卖点与转化路径，严禁使用静态推拉运镜冒充真实动态。\n"
+    "请只返回 JSON："
+    "{\"reply\": \"给用户的自然语言回复（建议 / 已做的调整 / 下一步），中文，≤120字\","
+    " \"plan\": {"
+    "   \"mode\": \"text_to_video | image_to_video\","
+    "   \"duration_sec\": 15,"
+    "   \"aspect\": \"9:16 | 1:1 | 16:9\","
+    "   \"voiceover\": \"none | narration | tts\","
+    "   \"hook\": \"前3秒钩子文案（抓注意力）\","
+    "   \"cta\": \"结尾行动号召文案\","
+    "   \"shots\": ["
+    "     {\"idx\": 1, \"t\": \"0-3s\", \"shot\": \"镜头方式(image_to_video|source_video|motion_graphics|scene_3d|text_to_video)\","
+    "      \"visual\": \"画面描述（动作/主体/场景，必须可动态呈现）\", \"text\": \"叠加字幕\", \"vo\": \"旁白文案\","
+    "      \"camera\": \"运镜（如手持跟随/推近/环绕）\", \"motion\": \"主体运动/转场\"},"
+    "     {\"idx\": 2, ...}, {\"idx\": 3, ...}, {\"idx\": 4, ...}"
+    "   ],"
+    "   \"deliverables\": [\"15s 主片\", \"6s 剪辑版\", \"首帧封面图\"],"
+    "   \"note\": \"制作须知（合规/节奏/音乐方向）\""
+    " }}"
+    "要求：shots 默认 4 镜覆盖 15 秒（0-3s 钩子 → 3-8s 真实功能 → 8-12s 可信支撑 → 12-15s 品牌收口）；"
+    "每镜 visual 必须描述真实可生成的动态画面，不能只是静态图；可按对话微调节奏/卖点/时长；"
+    "不要编造产品未提及的事实；信息不足时给合理默认。"
+)
+
 
 def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
                      analysis_meta=None, snapshot, info, db, user, platforms):
@@ -679,6 +711,173 @@ async def api_cw_routes(req: CWRoutesRequest, db: Session = Depends(get_db),
             db.commit(); db.refresh(r0)
             result["id"] = r0.id
     return CWRoutesResult(**result)
+
+
+# ----------------------------- V4.66 创意工作台 · 视频素材创作区（对话式分镜 + 生成） -----------------------------
+def _mini_model_info(info: dict) -> ModelInfo:
+    """从调用快照构造 ModelInfo（仅含非敏感字段）。"""
+    return ModelInfo(**{k: info.get(k) for k in
+                        ("provider", "model", "role", "fallback", "config_id", "source", "request_id", "error_type", "retries")})
+
+
+@router.post("/cw-video/plan", response_model=CWVideoPlanResult)
+async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_db),
+                            user: User = Depends(require_roles(*CAN_EDIT))):
+    """创意工作台·视频素材创作区：对话式分镜策划（多轮微调提示词 / 构想 / 方案）。
+
+    把产品分析 + 平台 + 参考图 + 对话历史 + 当前方案交给大模型，产出/微调一份 VIDEO_JSON v2
+    风格的分镜方案；返回的 plan 可直接喂给 /cw-video/generate 实际生成。无视频模型也可在此规划。
+    """
+    analysis = req.analysis or {}
+    platform = (req.platform or "").strip()
+    lang = str((req.options or {}).get("lang") or "zh")
+    convo = "\n".join(
+        f"{'用户' if m.role == 'user' else '助手'}: {m.content}"
+        for m in (req.messages or []) if m.content and m.content.strip()
+    )
+    payload = {
+        "analysis": analysis,
+        "platform": platform,
+        "reference_image": req.reference_image or "",
+        "options": req.options or {},
+        "current_plan": req.current_plan or None,
+        "conversation": convo,
+        "language": lang,
+    }
+    llm, info = get_llm_with_info(db, "analysis")
+    try:
+        resp = await llm.chat(_CW_VIDEO_PLAN_SYS, json.dumps(payload, ensure_ascii=False))
+        parsed = parse_json(resp) or {}
+        info = finalize_invocation(info, llm, bool(parsed))
+    except Exception:
+        parsed, info = {}, finalize_invocation(info, llm, False)
+    plan = parsed.get("plan") or {}
+    reply = str(parsed.get("reply") or "").strip()
+
+    # 兜底：未返回有效分镜时，给一份基于分析的 15 秒四镜默认模板（可在对话框继续微调）
+    if not plan.get("shots"):
+        a = (analysis.get("analysis") if isinstance(analysis.get("analysis"), dict) else analysis) or {}
+        product = a.get("product") or analysis.get("title") or "产品"
+        plan = {
+            "mode": "text_to_video",
+            "duration_sec": 15,
+            "aspect": "9:16",
+            "voiceover": (req.options or {}).get("voiceover", "none"),
+            "hook": f"{product}：真正解决你的痛点",
+            "cta": "立即下载 / 了解更多",
+            "shots": [
+                {"idx": 1, "t": "0-3s", "shot": "text_to_video", "visual": f"{product} 使用场景中的人物特写，情绪从困惑转为惊喜", "text": "还在为这件事烦恼？", "vo": "还在为这件事烦恼？", "camera": "手持跟随推近", "motion": "主体入画"},
+                {"idx": 2, "t": "3-8s", "shot": "text_to_video", "visual": f"{product} 核心功能两步演示，屏幕录制＋手指引导", "text": "三步完成", "vo": "Three steps, done.", "camera": "俯拍＋特写", "motion": "功能演示循环"},
+                {"idx": 3, "t": "8-12s", "shot": "text_to_video", "visual": "评分 / 用户好评 / 数据角标弹出", "text": "★★★★★ 4.8 · 100K+ users", "vo": "Loved by millions.", "camera": "定格推近", "motion": "角标弹入"},
+                {"idx": 4, "t": "12-15s", "shot": "text_to_video", "visual": f"{product} Logo ＋ 下载按钮动画 ＋ 端卡", "text": "立即下载", "vo": "Get it now.", "camera": "拉远收尾", "motion": "Logo 定格"},
+            ],
+            "deliverables": ["15s 主片", "6s 剪辑版", "首帧封面图"],
+            "note": "未配置 / 未返回视频分镜，已生成通用模板；在对话框继续微调（更具体的卖点 / 节奏 / 平台打法）。",
+        }
+        if not reply:
+            reply = "已基于产品分析生成一份默认 15 秒四镜分镜；告诉我你想强调的卖点或平台打法，我帮你微调。"
+
+    # 把平台 / 选项 / 参考图回填进 plan，便于前端展示与生成复用
+    plan["platform"] = platform
+    plan["options"] = req.options or {}
+    plan["reference_image"] = req.reference_image or ""
+    return CWVideoPlanResult(reply=reply, plan=plan,
+                             model_info=_mini_model_info(info), source=info.get("source", "local"))
+
+
+@router.post("/cw-video/generate", response_model=CWVideoGenerateResult)
+async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depends(get_db),
+                                user: User = Depends(require_roles(*CAN_EDIT))):
+    """创意工作台·视频素材创作区：按分镜方案调用真实视频模型（可灵 / 通用 /video/generations）生成视频。
+
+    - 配置了 video 用途模型 → 直连生成（可灵走原生异步 API，其余走通用 /video/generations）；
+    - 未配置 → 安全回退「可执行分镜脚本」，绝不阻断主流程。
+    返回的 storyboard 始终包含分镜 JSON（展示 + 可下载），videos 为实际成片（如有）。
+    """
+    plan = req.plan or {}
+    analysis = req.analysis or {}
+    platform = (req.platform or "").strip()
+    options = req.options or {}
+    a = (analysis.get("analysis") if isinstance(analysis.get("analysis"), dict) else analysis) or {}
+    product = a.get("product") or analysis.get("title") or "Product"
+    brief = analysis.get("brief") or {}
+
+    # 从分镜方案构造一段可供文生/图生视频模型消费的提示词
+    shots = plan.get("shots") or []
+    seg_lines = []
+    for s in shots:
+        seg = f"[{s.get('t') or ''}] {s.get('visual') or ''}"
+        if s.get("text"): seg += f"（字幕：{s['text']}）"
+        if s.get("vo"): seg += f"（旁白：{s['vo']}）"
+        seg_lines.append(seg)
+    aspect = str(plan.get("aspect") or options.get("aspect") or "9:16")
+    duration = int(plan.get("duration_sec") or options.get("duration") or 15)
+    prompt_parts = [f"产品：{product}"]
+    if brief.get("promotionGoal"): prompt_parts.append(f"推广目标：{brief.get('promotionGoal')}")
+    if brief.get("sellingPoints"): prompt_parts.append("核心卖点：" + "、".join(brief["sellingPoints"][:3]))
+    prompt_parts.append(f"时长：{duration} 秒；比例：{aspect}")
+    if seg_lines: prompt_parts.append("分镜：" + "；".join(seg_lines))
+    if options.get("prompt_hint"): prompt_parts.append("补充要求：" + str(options["prompt_hint"]))
+    prompt = "\n".join(prompt_parts)
+
+    meta = {
+        "product": product,
+        "headline": plan.get("hook") or product,
+        "cta": plan.get("cta") or "立即下载",
+        "spec": "1080x1920" if aspect == "9:16" else ("1080x1080" if aspect == "1:1" else "1920x1080"),
+        "lang": str(options.get("lang") or "en"),
+        "duration": duration,
+        "aspect": aspect,
+    }
+    # 图生视频：把参考图作为 image 带入（Kling / 通用模型据端点决定是否消费）
+    if str(plan.get("mode") or options.get("mode") or "") == "image_to_video" and req.reference_image:
+        meta["image"] = req.reference_image
+        meta["mode"] = "image_to_video"
+
+    cfg = _active_config(db, "video")
+    if cfg and cfg.api_key and cfg.base_url and cfg.model:
+        provider = get_video(db)
+        m_info = ModelInfo(provider=("kling" if (cfg.provider or "") == "keling" else "model"),
+                           model=cfg.model, role="video", fallback=False, config_id=cfg.id, source="llm")
+    else:
+        provider = StoryboardVideo()
+        m_info = ModelInfo(provider="storyboard", model="", role="video", fallback=True, source="local")
+
+    filename = f"cw_video_{user.id}_{int(time.time())}.mp4"
+    try:
+        res = await provider.generate(prompt, platform, filename, meta)
+    except Exception as e:
+        res = await StoryboardVideo().generate(prompt, platform, filename, meta)
+        res["note"] = f"视频生成异常（{str(e)[:80]}），已回退分镜脚本。"
+
+    # 若 provider 内部回退到分镜，则同步修正 model_info 标注
+    if res.get("provider") == "storyboard":
+        m_info = ModelInfo(provider="storyboard", model="", role="video", fallback=True, source="local")
+
+    videos: list = []
+    note = res.get("note") or ""
+    if res.get("file_path"):
+        rel = os.path.basename(res["file_path"])
+        videos.append(CWVideoAsset(type="video", url=f"/files/{rel}", caption=product, duration_sec=duration))
+    elif res.get("url"):
+        videos.append(CWVideoAsset(type="video", url=res["url"], caption=product, duration_sec=duration))
+    else:
+        note = note or "未配置视频模型，已输出可执行分镜脚本（在设置页配置 video 用途的模型后可直连生成）。"
+
+    # 始终回传分镜方案（展示 + 可下载 JSON）
+    storyboard = dict(plan)
+    storyboard["platform"] = platform
+    storyboard["options"] = options
+    storyboard["reference_image"] = req.reference_image or ""
+    storyboard.setdefault("duration_sec", duration)
+    storyboard.setdefault("aspect", aspect)
+    storyboard.setdefault("shots", [])
+    return CWVideoGenerateResult(
+        provider=res.get("provider", "storyboard"),
+        model=(cfg.model if (cfg and cfg.model) else ""),
+        videos=videos, storyboard=storyboard,
+        model_info=m_info, note=note, source=m_info.source,
+    )
 
 
 # ----------------------------- V4.61 / B4：创意工作台「素材沉淀库」接口 -----------------------------

@@ -990,6 +990,16 @@ export const api = {
     req<any>('/api/cw/library', { method: 'POST', body: JSON.stringify(payload) }),
   deleteCwLibrary: (id: number) =>
     req<{ ok: boolean }>(`/api/cw/library/${id}`, { method: 'DELETE' }),
+  // V4.66 创意工作台 · 视频素材创作区：对话式分镜策划 + 生成（直连视频模型 / 回退分镜脚本）
+  cwVideoPlan: (payload: {
+    analysis: any; platform: string; reference_image?: string;
+    messages: { role: string; content: string }[]; current_plan?: any; options?: any;
+  }) =>
+    req<any>('/api/cw-video/plan', { method: 'POST', body: JSON.stringify(payload) }),
+  cwVideoGenerate: (payload: {
+    analysis: any; platform: string; reference_image?: string; plan: any; options?: any;
+  }) =>
+    req<any>('/api/cw-video/generate', { method: 'POST', body: JSON.stringify(payload) }),
   updateCreationHistory: (id: number, payload: {
     // V4.38：copy 允许附带 selected_copy / copy_variants，记录本次选用的创意文案
     platform?: string; lang?: string; copy?: any

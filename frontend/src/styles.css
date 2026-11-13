@@ -1746,3 +1746,97 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
   .cwb-field-label { text-align: left; }
   .cwb-wf-steps { grid-template-columns: 1fr; }
 }
+
+/* ============================================================
+   V4.66 创意工作台 · 视频素材创作区（独立于图片创作流程，上下分区）
+   ============================================================ */
+.vs-panel {
+  margin-top: 18px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 18px 20px;
+  box-shadow: 0 1px 2px rgba(16, 32, 48, .04);
+}
+.vs-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.vs-title { margin: 0; font-size: 17px; color: var(--primary); }
+.vs-sub { font-size: 12px; color: var(--muted); }
+.vs-model-chip {
+  margin-left: auto; font-size: 11.5px; padding: 3px 10px; border-radius: 999px;
+  background: #eef2f7; color: var(--primary); border: 1px solid var(--border);
+}
+.vs-model-chip.storyboard { background: #fff7ed; color: var(--warn); border-color: #fde2cf; }
+.vs-model-chip.kling { background: #f0f5ff; color: #2e75b6; border-color: #d6e4ff; }
+
+/* ① 视频专属选项 */
+.vs-options { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; margin: 14px 0 4px; }
+.vs-opt { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.vs-opt select {
+  width: 180px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: #fff; color: var(--text); font-size: 13px; font-family: inherit;
+}
+.vs-ref { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.vs-ref img { width: 44px; height: 44px; object-fit: cover; border-radius: 7px; border: 1px solid var(--border); }
+
+/* ② 主体：左对话策划 / 右分镜预览 */
+.vs-body { display: grid; grid-template-columns: 1.05fr 1fr; gap: 16px; margin-top: 14px; }
+@media (max-width: 980px) { .vs-body { grid-template-columns: 1fr; } }
+
+.vs-chat, .vs-preview { background: #fbfcfe; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.vs-chat-head, .vs-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.vs-preview-title { font-size: 13.5px; font-weight: 700; color: var(--text); }
+.vs-preview-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.vs-chat-log {
+  height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 12px;
+}
+.vs-chat-empty { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.vs-msg { max-width: 92%; }
+.vs-msg-user { align-self: flex-end; }
+.vs-msg-assistant { align-self: flex-start; }
+.vs-msg-role { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.vs-msg-text {
+  font-size: 13px; line-height: 1.55; padding: 9px 12px; border-radius: 10px; white-space: pre-wrap;
+}
+.vs-msg-user .vs-msg-text { background: var(--primary); color: #fff; border-bottom-right-radius: 3px; }
+.vs-msg-assistant .vs-msg-text { background: #eef2f7; color: var(--text); border-bottom-left-radius: 3px; }
+
+.vs-chat-input { margin-top: 10px; }
+.vs-chat-input textarea {
+  width: 100%; min-height: 64px; resize: vertical; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 9px; font-family: inherit; font-size: 13px; color: var(--text);
+}
+.vs-chat-input textarea:focus { outline: none; border-color: var(--primary2); }
+.vs-chat-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+/* ③ 分镜预览 + 生成 + 结果 */
+.vs-shots { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 600px) { .vs-shots { grid-template-columns: 1fr; } }
+.vs-shot { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.vs-shot-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.vs-shot-t { font-weight: 700; color: var(--primary); font-size: 12.5px; }
+.vs-shot-kind { font-size: 10.5px; color: var(--muted); background: #eef2f7; border-radius: 5px; padding: 1px 7px; }
+.vs-shot-visual { font-size: 12.5px; color: var(--text); line-height: 1.5; margin-bottom: 6px; }
+.vs-shot-line { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+.vs-shot-line b { color: var(--text); margin-right: 4px; }
+
+.vs-preview-empty, .vs-chat-empty { padding: 8px 2px; }
+.vs-gen-status { margin-top: 12px; font-size: 13px; color: var(--primary2); background: #f0f5ff; border-radius: 9px; padding: 9px 12px; }
+.vs-note { margin-top: 10px; font-size: 12.5px; color: var(--warn); background: #fff7ed; border-radius: 9px; padding: 8px 12px; line-height: 1.55; }
+.vs-error { margin-top: 10px; font-size: 12.5px; color: #b91c1c; background: #fef2f2; border-radius: 9px; padding: 8px 12px; }
+
+.vs-videos { margin-top: 14px; }
+.vs-videos-head { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+.vs-video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.vs-video { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+.vs-video video { width: 100%; border-radius: 7px; background: #000; max-height: 320px; }
+.vs-video-cap { font-size: 12px; color: var(--text); margin: 6px 2px 2px; }
+.vs-video-dl { display: inline-block; font-size: 12px; color: var(--primary2); text-decoration: none; margin: 0 2px 4px; }
+.vs-video-dl:hover { text-decoration: underline; }
+
+/* 视频区按钮（与主区 .btn 体系保持一致） */
+.vs-primary { background: var(--primary); color: #fff; border: none; padding: 9px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; }
+.vs-primary:disabled { opacity: .55; cursor: not-allowed; }
+.vs-ghost { background: #eef2f7; color: var(--primary); border: 1px solid var(--border); padding: 9px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; }
+.vs-ghost:disabled { opacity: .55; cursor: not-allowed; }

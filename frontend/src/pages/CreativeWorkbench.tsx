@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
+import VideoStudio from './VideoStudio'
 
 type Route = {
   key: string
@@ -924,6 +925,13 @@ export default function CreativeWorkbench() {
           </section>
 
           {error && <div className="err" style={{ marginTop: 12 }}>{error}</div>}
+
+          {/* V4.66 视频素材创作区：与图片创作区上下分区、互不干扰，图片流程保持不变 */}
+          <VideoStudio
+            analysis={cw?.analysis}
+            platform={selectedPlatform}
+            referenceImage={referenceImage}
+          />
         </div>
 
         {/* 右侧「项目简报」面板：仅展示分析结果（推广目标 / 受众 / 卖点 / 产品定位），可收缩；不展示进度 / 选项 / 操作 */}

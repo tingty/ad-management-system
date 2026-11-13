@@ -339,9 +339,11 @@ class StoryboardVideo(VideoProvider):
         }
 
 class ModelVideo(VideoProvider):
-    """可配置视频模型：POST {base_url}/video/generations，支持 url 或 b64_json 返回。
+    """可配置视频模型：POST {base_url}{endpoint|/video/generations}，支持 url 或 b64_json 返回。
 
-    不同厂商（Runway / 可灵 / Pika）协议差异大，这里约定一个最小通用契约；
+    不同厂商（Runway / 可灵 / Pika / Luma 等）协议差异大，这里约定一个最小通用契约：
+    默认端点 /video/generations（可通过 params.endpoint 覆盖，如 /sdapi/v1/txt2video）；
+    兼容图生视频（params/body 带 image + mode=image_to_video）。
     调用失败或无返回时自动回退分镜脚本，绝不阻断主流程。
     """
     def __init__(self, api_key, base_url, model, params=None):
@@ -353,13 +355,22 @@ class ModelVideo(VideoProvider):
     async def generate(self, prompt, platform, filename, meta=None):
         meta = meta or {}
         try:
+            endpoint = (self.params.get("endpoint") or "/video/generations").strip()
+            body = {
+                "model": self.model,
+                "prompt": prompt,
+                "duration": meta.get("duration", 15),
+                "aspect_ratio": meta.get("aspect", "9:16"),
+            }
+            # V4.66 / 视频模块：图生视频支持——把参考图作为 image 字段带入（厂商忽略即视为文生视频）
+            if meta.get("image"):
+                body["image"] = meta["image"]
+                body["mode"] = meta.get("mode") or "image_to_video"
             async with httpx.AsyncClient(timeout=180) as c:
                 r = await c.post(
-                    self.base_url + "/video/generations",
+                    self.base_url + endpoint,
                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                    json={"model": self.model, "prompt": prompt,
-                          "duration": meta.get("duration", 15),
-                          "aspect_ratio": meta.get("aspect", "9:16")},
+                    json=body,
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -376,6 +387,125 @@ class ModelVideo(VideoProvider):
             sb["note"] = f"视频模型调用失败（{str(e)[:80]}），已回退分镜脚本。"
             return sb
         return await StoryboardVideo().generate(prompt, platform, filename, meta)
+
+
+class KlingVideo(VideoProvider):
+    """可灵（Kling AI）原生异步视频：提交 text2video / image2video 任务 → 轮询取片 → 下载落盘。
+
+    鉴权：Kling 官方 API 用 JWT（HS256），由 params.access_key + params.secret_key 签发；
+    若未配置 access/secret，则退化为把 api_key 当 Bearer、base_url 当 /video/generations 网关
+    （即复用 ModelVideo 的通用契约），保证「可灵」在聚合网关（如 302.ai）下也能直连。
+    任意环节失败 → 回退 StoryboardVideo，绝不阻断主流程。
+    """
+    def __init__(self, api_key, base_url, model, params=None):
+        self.api_key = api_key or ""
+        self.base_url = (base_url or "https://api.klingai.com").rstrip("/")
+        self.model = model or "kling-v1"
+        self.params = params or {}
+
+    # ---- JWT（不依赖 pyjwt，用标准库手动签 HS256）----
+    @staticmethod
+    def _jwt(access_key: str, secret_key: str) -> str:
+        import hmac as _hmac, hashlib as _hl, base64 as _b64, time as _t, json as _json
+        def b(d): return _b64.urlsafe_b64encode(d).rstrip(b"=")
+        header = b(_json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+        now = int(_t.time())
+        payload = b(_json.dumps({"iss": access_key, "exp": now + 1800, "nbf": now - 5}).encode())
+        signing_input = header + b"." + payload
+        sig = _hmac.new(secret_key.encode(), signing_input, _hl.sha256).digest()
+        return (signing_input + b"." + b(sig)).decode()
+
+    def _headers(self):
+        ak = self.params.get("access_key") or ""
+        sk = self.params.get("secret_key") or ""
+        if ak and sk:
+            return {"Authorization": f"Bearer {self._jwt(ak, sk)}", "Content-Type": "application/json"}
+        if self.api_key:
+            return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        return {"Content-Type": "application/json"}
+
+    def _resolve_image(self, ref):
+        """把参考图转成可灵可消费形态：本地文件 → base64 data URI；URL 原样。"""
+        if ref.startswith("http://") or ref.startswith("https://"):
+            return ref
+        p = os.path.join(UPLOAD_DIR, os.path.basename(ref))
+        if os.path.exists(p):
+            ext = os.path.splitext(p)[1].lower().lstrip(".")
+            mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "webp": "image/webp", "gif": "image/gif"}.get(ext, "image/png")
+            with open(p, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            return f"data:image/{'jpeg' if mime == 'image/jpeg' else ext};base64,{b64}"
+        return ref
+
+    async def generate(self, prompt, platform, filename, meta=None):
+        meta = meta or {}
+        ak = self.params.get("access_key") or ""
+        sk = self.params.get("secret_key") or ""
+        # 没有可灵鉴权信息（也不在 /video/generations 网关模式）→ 直接回退分镜
+        if not (ak and sk) and not self.api_key:
+            sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
+            sb["note"] = "未配置可灵鉴权（access_key/secret_key 或 api_key），已回退分镜脚本。"
+            return sb
+        image_ref = meta.get("image")
+        use_img = bool(image_ref)
+        sub_path = "/v1/videos/image2video" if use_img else "/v1/videos/text2video"
+        duration = int(meta.get("duration", 10)) if str(meta.get("duration", "")).isdigit() else 10
+        duration = 10 if duration not in (5, 10) else duration  # 可灵仅支持 5/10 秒
+        aspect = meta.get("aspect", "9:16")
+        body = {
+            "model": self.model,
+            "prompt": prompt,
+            "mode": self.params.get("mode") or "std",
+            "duration": str(duration),
+        }
+        if not use_img:
+            body["aspect_ratio"] = aspect
+        if use_img:
+            body["image"] = self._resolve_image(image_ref)
+            if meta.get("image_fidelity") is not None:
+                body["image_fidelity"] = meta.get("image_fidelity")
+        try:
+            async with httpx.AsyncClient(timeout=60) as c:
+                r = await c.post(self.base_url + sub_path, headers=self._headers(), json=body)
+                r.raise_for_status()
+                data = r.json()
+                task_id = (data.get("data") or {}).get("task_id")
+                if not task_id:
+                    raise RuntimeError("可灵未返回 task_id：" + str(data)[:120])
+                # 轮询（最多 ~6 分钟）
+                for _ in range(120):
+                    await asyncio.sleep(3)
+                    q = await c.get(self.base_url + sub_path + "/" + task_id, headers=self._headers())
+                    qd = q.json().get("data") or {}
+                    status = qd.get("task_status")
+                    if status == "succeed":
+                        result = qd.get("task_result") or {}
+                        videos = result.get("videos") or [
+                            (w.get("resource") or {}).get("resource_url")
+                            for w in (result.get("works") or [])
+                        ]
+                        url = None
+                        if isinstance(videos, list) and videos:
+                            if isinstance(videos[0], str):
+                                url = videos[0]
+                            elif isinstance(videos[0], dict):
+                                url = videos[0].get("resource_url")
+                        if not url:
+                            raise RuntimeError("可灵成片 URL 缺失")
+                        out = os.path.join(UPLOAD_DIR, filename.rsplit(".", 1)[0] + ".mp4")
+                        dl = await c.get(url)
+                        dl.raise_for_status()
+                        with open(out, "wb") as f:
+                            f.write(dl.content)
+                        return {"provider": "kling", "file_path": out, "model": self.model}
+                    if status == "failed":
+                        raise RuntimeError("可灵任务失败：" + str(qd.get("task_status_msg") or "")[:120])
+                raise RuntimeError("可灵任务轮询超时")
+        except Exception as e:
+            sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
+            sb["note"] = f"可灵调用失败（{str(e)[:80]}），已回退分镜脚本。"
+            return sb
 
 
 # ----------------------------- 真实 OpenAI 兼容 -----------------------------
@@ -819,9 +949,16 @@ def get_image(db) -> Optional[ImageProvider]:
     return None
 
 def get_video(db) -> VideoProvider:
+    """按「大模型配置」的 video 用途返回视频 Provider。
+    - provider == 'keling' → 可灵原生异步 API（KlingVideo）
+    - 其余 generic-video（Runway / Pika / Luma / 302.ai 等）→ 通用 /video/generations（ModelVideo）
+    - 未配置 Key/URL/Model → 回退 StoryboardVideo（输出可执行分镜脚本）
+    """
     cfg = _active_config(db, "video")
     if cfg and cfg.api_key and cfg.base_url and cfg.model:
         try:
+            if (cfg.provider or "") == "keling":
+                return KlingVideo(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
             return ModelVideo(cfg.api_key, cfg.base_url, cfg.model, cfg.params)
         except Exception:
             pass

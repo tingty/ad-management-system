@@ -23,7 +23,8 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
-_ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif"}
+_ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif",
+                 ".mp4", ".webm", ".mov", ".m4v"}
 
 
 # ----------------------------- 时间 / 序列化 -----------------------------

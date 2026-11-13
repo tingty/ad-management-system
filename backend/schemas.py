@@ -419,3 +419,61 @@ class CWRoutesResult(BaseModel):
     routes: List[CWRoute] = []
     model_info: ModelInfo = ModelInfo()
     source: str = "local"
+
+
+# ----------------------------- V4.66 创意工作台 · 视频素材创作区 -----------------------------
+class CWVideoMessage(BaseModel):
+    """视频策划对话的一条消息（多轮微调提示词 / 构想 / 方案）。"""
+    role: str = "user"          # user / assistant
+    content: str = ""
+
+
+class CWVideoPlanRequest(BaseModel):
+    """视频分镜策划请求：产品分析 + 平台 + 参考图 + 对话历史 + 当前方案（可空）→ 大模型产出/微调分镜 JSON。"""
+    model_config = {"protected_namespaces": ()}
+    analysis: dict = {}             # 创意工作台「统一分析来源」（同 cw/analyze 的 analysis 字段）
+    platform: str = ""
+    reference_image: str = ""      # /files/<name> 或 URL（图生视频参考图）
+    messages: List[CWVideoMessage] = []   # 多轮对话（含 user 微调 + assistant 上一轮回复）
+    current_plan: Optional[dict] = None   # 已有的分镜方案（微调时带入，由模型增量修订）
+    options: dict = {}             # {mode, voiceover, duration, aspect, lang}
+
+
+class CWVideoPlanResult(BaseModel):
+    """视频分镜策划结果：自然语言回复 + 分镜方案 JSON + 模型快照。"""
+    model_config = {"protected_namespaces": ()}
+    reply: str = ""                # 给用户的自然语言回复 / 建议
+    plan: dict = {}                # VIDEO_JSON v2 风格的分镜方案（duration/shots/...）
+    model_info: ModelInfo = ModelInfo()
+    source: str = "local"          # llm / mock / local
+
+
+class CWVideoGenerateRequest(BaseModel):
+    """视频生成请求：分镜方案 + 选项 + 分析/平台/参考图 → 调用真实视频模型或回退分镜脚本。"""
+    model_config = {"protected_namespaces": ()}
+    analysis: dict = {}
+    platform: str = ""
+    reference_image: str = ""
+    plan: dict = {}                # 来自 /cw-video/plan 的 plan（含 shots / duration / aspect / ...）
+    options: dict = {}             # {mode, voiceover, duration, aspect, lang, prompt_hint}
+
+
+class CWVideoAsset(BaseModel):
+    """单个视频产物（本地 /files 直链或外部 URL）。"""
+    type: str = "video"
+    url: str = ""
+    caption: str = ""
+    shot_index: Optional[int] = None
+    duration_sec: int = 0
+
+
+class CWVideoGenerateResult(BaseModel):
+    """视频生成结果：实际视频产物（若有）+ 分镜方案（始终返回）+ 模型快照。"""
+    model_config = {"protected_namespaces": ()}
+    provider: str = "storyboard"   # model / kling / storyboard
+    model: str = ""
+    videos: List[CWVideoAsset] = []
+    storyboard: dict = {}          # VIDEO_JSON v2 分镜方案（展示 + 可下载）
+    model_info: ModelInfo = ModelInfo()
+    note: str = ""                 # 人类可读说明（如「未配置视频模型，已回退分镜」）
+    source: str = "local"
