@@ -2572,7 +2572,41 @@
 - 后端 py_compile 通过：backend/llm_catalog.py、backend/routers.py、backend/model_health.py 编译无误。
 - 系统版本与 CHANGELOG / 发布数据一致性由发版校验（prepare_release --check）强制检查；该条目由本次改动文件自动归纳。
 
-## V4.73 视频大模型配置可用化：阿里云百炼做成「接口协议」一等公民，通用视频开放四项契约参数
+## V4.74 视频生成链路「输出比例 9:16」显式标注（模型固定比例如实标注）
+
+**发布日期**：2026-11-13
+**变更类型**：优化 / 透明度增强
+**涉及模块**：后端视频 Provider、后端视频生成路由、后端视频预设目录、前端视频工作室、前端样式
+**变更摘要**：实测阿里云百炼 MaaS（wan3.0-video）忽略提交体中的 size、固定输出 9:16 竖屏——即使分镜/用户在「比例」里选了 16:9 或 1:1，出片仍是 9:16。此前链路只在 size 推导里隐式按宽高比给一个 size，既未向用户说明、也未在结果上标注真实比例。本次把「实际输出比例」做成显式、可信的标注：后端据模型配置参数 `output_aspect`（dashscope_maas 默认 9:16）推导真实输出比例，贯穿「分镜规划 → 生成提示词 → 成片结果」全链路；前端在规划头、生成工作区头、生成结果区都以标签明示「输出比例 9:16（竖屏）」，并在所选比例与模型固定比例不一致时给出醒目提示，杜绝“选了横版却出竖版”的困惑。
+
+**更新要点**
+- 后端 `ModelVideo` 新增「实际输出比例」推导：读配置参数 `output_aspect`，未显式声明且 `body_shape=dashscope_maas` 时默认 `9:16`；命中后强制把 meta.aspect 覆写为该比例，使提交提示词、size 推导、回传结果三处一致。
+- `ModelVideo` 全部返回路径（同步直出 / 异步轮询取片 / 各类回退分镜）统一携带 `output_aspect` 字段，保证结果比例可追溯。
+- 后端 `api_cw_video_generate`：据视频配置参数推导 `output_aspect`，提示词与 storyboard 的比例一律标注为实际输出比例；当模型固定比例与用户所选比例不一致时，拼接醒目 note（如「⚠️ 当前视频模型固定输出 9:16（竖屏），已按实际比例标注（与所选「16:9」不一致）」）。
+- 后端 `api_cw_video_plan`：分镜规划阶段即据当前视频配置返回 `output_aspect`，规划头可提前明示真实比例。
+- 阿里云百炼 MaaS 预设（`aliyun-maas-video`）的 `default_params` 新增 `output_aspect: "9:16"`，使「选预设即声明固定竖屏」；该参数为通用开关，任意固定比例模型均可声明。
+- 前端 `VideoStudio` 新增 `AspectChip`：在「视频创意规划」头、「视频生成工作区」头、「生成结果」区三段均显式标注「输出比例 9:16（竖屏）」，并按竖屏/方版/横版着色；`VideoState` 新增 `outputAspect` 并在规划、生成、微调、父级 CreativeWorkbench 各入口贯通。
+- `CWVideoPlanResult` / `CWVideoGenerateResult` 新增 `output_aspect` 字段；`CreativeWorkbench` 两处生成入口均透传该字段。
+
+**本次优化与更改的功能 / 模块**
+- 【优化】后端 / 视频 Provider：引入 output_aspect 推导与强制覆写，结果全链路携带真实比例
+- 【优化】后端 / 视频生成路由：提示词、storyboard、note 按实际输出比例标注；比例不一致时给出提示
+- 【优化】后端 / 视频规划路由：规划阶段即回传 output_aspect
+- 【新增】后端 / 视频预设：阿里云预设声明 output_aspect=9:16（通用开关）
+- 【新增】前端 / 视频工作室：AspectChip 在三段显式标注实际输出比例（竖屏/方版/横版着色）
+- 【优化】前端 / 状态贯通：VideoState.outputAspect 在规划/生成/微调/父级入口贯通
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.74
+
+**影响范围**
+- 前端 / 后端 / 数据 / 兼容性：仅新增 `output_aspect` 字段与展示标签，未改动数据模型表结构；旧 generic-video 配置（Pika/Luma/可灵聚合网关等）为空参数时 `output_aspect` 取用户所选比例，行为不变；已存 aliyun-maas-video 配置若未带 `output_aspect`，后端仍据 `body_shape=dashscope_maas` 默认 9:16，升级后自动如实标注。
+
+**验证**
+- 后端校验：py_compile 通过；`ModelVideo.generate` 在 `params.output_aspect=9:16` 或 `body_shape=dashscope_maas`（无 output_aspect）时，返回 dict 含 `output_aspect=9:16` 且 meta.aspect 被覆写；非固定比例模型返回用户所选比例。
+- 前端类型检查：npx tsc --noEmit 0 错误；npm run build（tsc && vite build）通过，产出 dist 资源。
+- 逻辑自检：`api_cw_video_generate` 当 `forced != requested_aspect` 时，note 含「固定输出 9:16」一致性提示；storyboard.aspect/output_aspect 均被覆写为实际比例；`api_cw_video_plan` 的 `output_aspect` 在视频模型配置存在时等于声明/默认比例。
+- 系统版本与 CHANGELOG / 发布数据一致性由发版校验（prepare_release --check）强制检查；该条目由本次改动文件自动归纳。
+
+
 
 **发布日期**：2026-11-13
 **变更类型**：修复 / 优化

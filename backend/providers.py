@@ -460,12 +460,12 @@ class ModelVideo(VideoProvider):
         ]
         return urls
 
-    async def _finalize(self, url, b64, filename):
+    async def _finalize(self, url, b64, filename, output_aspect="9:16"):
         if b64:
             out = os.path.join(UPLOAD_DIR, filename.rsplit(".", 1)[0] + ".mp4")
             with open(out, "wb") as f:
                 f.write(base64.b64decode(b64))
-            return {"provider": "model", "file_path": out, "model": self.model}
+            return {"provider": "model", "file_path": out, "model": self.model, "output_aspect": output_aspect}
         if url:
             try:
                 async with httpx.AsyncClient(timeout=600) as cc:
@@ -474,11 +474,12 @@ class ModelVideo(VideoProvider):
                     out = os.path.join(UPLOAD_DIR, filename)
                     with open(out, "wb") as f:
                         f.write(d.content)
-                return {"provider": "model", "file_path": out, "model": self.model}
+                return {"provider": "model", "file_path": out, "model": self.model, "output_aspect": output_aspect}
             except Exception:
-                return {"provider": "model", "url": url, "model": self.model}
+                return {"provider": "model", "url": url, "model": self.model, "output_aspect": output_aspect}
         sb = await StoryboardVideo().generate("", "", filename, {})
         sb["note"] = "视频任务已完成但未解析到成片地址，已回退分镜脚本。"
+        sb["output_aspect"] = output_aspect
         return sb
 
     async def generate(self, prompt, platform, filename, meta=None):
@@ -486,9 +487,20 @@ class ModelVideo(VideoProvider):
         if not self.base_url:
             sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
             sb["note"] = "视频模型未配置 base_url，已回退分镜脚本。"
+            sb["output_aspect"] = meta.get("aspect", "9:16")
             return sb
         endpoint = (self.params.get("endpoint") or "/video/generations").strip()
         body_shape = (self.params.get("body_shape") or "").strip()
+        # 实际输出比例：部分厂商（如阿里云百炼 MaaS / wan3.0-video）忽略 size、固定输出
+        # 9:16 竖屏。通过参数 output_aspect 显式声明固定比例（dashscope_maas 默认 9:16），
+        # 生成链路据此把比例标注为 9:16，而非用户所选比例。
+        forced = (self.params.get("output_aspect") or "").strip()
+        if not forced and body_shape == "dashscope_maas":
+            forced = "9:16"
+        out_aspect = forced or meta.get("aspect", "9:16")
+        if forced:
+            meta = dict(meta)
+            meta["aspect"] = forced
         if body_shape == "dashscope_maas":
             # 阿里云百炼 MaaS（wan3.0-video 等）契约：提交体为
             # {model, input:{prompt}, parameters:{size,count}}，且需 X-DashScope-Async 头。
@@ -525,7 +537,7 @@ class ModelVideo(VideoProvider):
                 # 1) 同步直出
                 url, b64 = _video_find_media(data)
                 if url or b64:
-                    return await self._finalize(url, b64, filename)
+                    return await self._finalize(url, b64, filename, out_aspect)
                 # 2) 异步任务：轮询取片
                 task_id = _video_find_task_id(data)
                 if task_id:
@@ -546,16 +558,18 @@ class ModelVideo(VideoProvider):
                             if st in ("succeeded", "success", "complete", "completed", "ready", "finished"):
                                 fu, fb = _video_find_media(obj)
                                 if fu or fb:
-                                    return await self._finalize(fu, fb, filename)
+                                    return await self._finalize(fu, fb, filename, out_aspect)
                                 raise RuntimeError("视频任务完成但未找到成片地址")
                             if st in ("failed", "error", "cancelled", "canceled"):
                                 raise RuntimeError("视频任务失败：" + str(_video_find_msg(obj))[:120])
         except Exception as e:
             sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
             sb["note"] = f"视频模型调用失败（{str(e)[:80]}），已回退分镜脚本。"
+            sb["output_aspect"] = out_aspect
             return sb
         sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
         sb["note"] = "视频模型未返回可消费视频或任务标识，已回退分镜脚本。"
+        sb["output_aspect"] = out_aspect
         return sb
 
 

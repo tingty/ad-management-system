@@ -16,6 +16,7 @@ export interface VideoState {
   options: any
   note: string
   modelInfo: any
+  outputAspect: string
   planning: boolean
   generating: boolean
   error: string
@@ -65,6 +66,23 @@ function providerLabel(mi: any) {
   return mi.provider || ''
 }
 
+// 输出比例标签：显式标注实际出片比例（如 9:16 竖屏）
+function aspectKind(a?: string): string {
+  if (a === '9:16') return '竖屏'
+  if (a === '1:1') return '方版'
+  if (a === '16:9') return '横版'
+  return ''
+}
+function AspectChip({ aspect }: { aspect?: string }) {
+  if (!aspect) return null
+  const kind = aspectKind(aspect)
+  return (
+    <span className={`vs-aspect-chip ${aspect === '9:16' ? 'portrait' : aspect === '16:9' ? 'landscape' : 'square'}`}>
+      输出比例 {aspect}{kind ? `（${kind}）` : ''}
+    </span>
+  )
+}
+
 export default function VideoStudio({ analysis, platform, referenceImage, brandLogo, injectLogo, mode, state, setState }: VideoStudioProps) {
   const { messages, plan, videos, options, note, modelInfo, planning, generating, error, refineInput } = state
   const chatRef = useRef<HTMLDivElement>(null)
@@ -97,7 +115,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
       })
       const next = [...msgs]
       if (r?.reply) next.push({ role: 'assistant', content: r.reply })
-      setState(s => ({ ...s, messages: next, plan: r?.plan || s.plan, modelInfo: r?.model_info || s.modelInfo, planning: false, error: '' }))
+      setState(s => ({ ...s, messages: next, plan: r?.plan || s.plan, modelInfo: r?.model_info || s.modelInfo, outputAspect: r?.output_aspect || s.outputAspect, planning: false, error: '' }))
     } catch (e: any) {
       setState(s => ({ ...s, error: '分镜规划失败：' + (e?.message || ''), planning: false }))
     }
@@ -119,7 +137,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
         plan,
         options: { ...options, prompt_hint: options.prompt_hint },
       })
-      setState(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', modelInfo: r?.model_info || s.modelInfo, generating: false, plan: r?.storyboard || s.plan, error: '' }))
+      setState(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', modelInfo: r?.model_info || s.modelInfo, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '' }))
     } catch (e: any) {
       setState(s => ({ ...s, error: '视频生成失败：' + (e?.message || ''), generating: false }))
     }
@@ -145,7 +163,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
       const next = [...msgs]
       if (r?.reply) next.push({ role: 'assistant', content: r.reply })
       const newPlan = r?.plan || plan
-      setState(s => ({ ...s, messages: next, plan: newPlan, modelInfo: r?.model_info || s.modelInfo, planning: false, error: '' }))
+      setState(s => ({ ...s, messages: next, plan: newPlan, modelInfo: r?.model_info || s.modelInfo, outputAspect: r?.output_aspect || s.outputAspect, planning: false, error: '' }))
       if (newPlan && newPlan.shots?.length) {
         setState(s => ({ ...s, generating: true, videos: [], note: '' }))
         const g: any = await api.cwVideoGenerate({
@@ -156,7 +174,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
           plan: newPlan,
           options: { ...options, prompt_hint: options.prompt_hint },
         })
-        setState(s => ({ ...s, videos: g?.videos || [], note: g?.note || '', modelInfo: g?.model_info || s.modelInfo, generating: false, plan: g?.storyboard || s.plan, error: '' }))
+        setState(s => ({ ...s, videos: g?.videos || [], note: g?.note || '', modelInfo: g?.model_info || s.modelInfo, outputAspect: g?.output_aspect || s.outputAspect, generating: false, plan: g?.storyboard || s.plan, error: '' }))
       }
     } catch (e: any) {
       setState(s => ({ ...s, error: '视频微调失败：' + (e?.message || ''), planning: false, generating: false }))
@@ -189,6 +207,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
           {modelInfo && providerLabel(modelInfo) && (
             <span className={`vs-model-chip ${modelInfo.provider}`}>{providerLabel(modelInfo)}</span>
           )}
+          <AspectChip aspect={state.outputAspect} />
           <span className="vs-sub">基于网站分析 + 媒体平台规则，逐镜规划视频分镜</span>
         </div>
 
@@ -308,6 +327,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
         {modelInfo && providerLabel(modelInfo) && (
           <span className={`vs-model-chip ${modelInfo.provider}`}>{providerLabel(modelInfo)}</span>
         )}
+        <AspectChip aspect={state.outputAspect} />
       </div>
 
       {(generating || state.generating) && (
@@ -317,7 +337,10 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
 
       {videos.length > 0 && (
         <div className="vs-videos">
-          <div className="vs-videos-head">生成结果</div>
+          <div className="vs-videos-head">
+            生成结果
+            {state.outputAspect && <AspectChip aspect={state.outputAspect} />}
+          </div>
           <div className="vs-video-grid">
             {videos.map((v, i) => (
               <div className="vs-video" key={i}>

@@ -823,6 +823,7 @@ VIDEO_PRESETS = [
             "body_shape": "dashscope_maas",
             "poll_path": "/api/v1/tasks",
             "async_header": "true",
+            "output_aspect": "9:16",
         },
     },
 ]

@@ -781,7 +781,14 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
     plan["platform"] = platform
     plan["options"] = req.options or {}
     plan["reference_image"] = req.reference_image or ""
-    return CWVideoPlanResult(reply=reply, plan=plan,
+    # 实际输出比例：当前视频模型固定比例时显式标注（如阿里云百炼 MaaS → 9:16）
+    vcfg = _active_config(db, "video")
+    vparams = (vcfg.params if (vcfg and isinstance(getattr(vcfg, "params", None), dict)) else {}) or {}
+    vforced = (vparams.get("output_aspect") or "").strip()
+    if not vforced and (vparams.get("body_shape") or "").strip() == "dashscope_maas":
+        vforced = "9:16"
+    plan_output_aspect = vforced or plan.get("aspect") or (req.options or {}).get("aspect") or "9:16"
+    return CWVideoPlanResult(reply=reply, plan=plan, output_aspect=plan_output_aspect,
                              model_info=_mini_model_info(info), source=info.get("source", "local"))
 
 
@@ -802,6 +809,17 @@ async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depen
     product = a.get("product") or analysis.get("title") or "Product"
     brief = analysis.get("brief") or {}
 
+    # 解析当前视频配置，确定「实际输出比例」并显式标注：
+    # 部分厂商（阿里云百炼 MaaS / wan3.0-video 等）忽略 size、固定输出某一比例；
+    # 通过模型配置参数 output_aspect 显式声明，缺省时 dashscope_maas 默认 9:16 竖屏。
+    cfg = _active_config(db, "video")
+    requested_aspect = str(plan.get("aspect") or options.get("aspect") or "9:16")
+    cfg_params = (cfg.params if (cfg and isinstance(getattr(cfg, "params", None), dict)) else {}) or {}
+    forced = (cfg_params.get("output_aspect") or "").strip()
+    if not forced and (cfg_params.get("body_shape") or "").strip() == "dashscope_maas":
+        forced = "9:16"
+    output_aspect = forced or requested_aspect
+
     # 从分镜方案构造一段可供文生/图生视频模型消费的提示词
     shots = plan.get("shots") or []
     seg_lines = []
@@ -810,12 +828,11 @@ async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depen
         if s.get("text"): seg += f"（字幕：{s['text']}）"
         if s.get("vo"): seg += f"（旁白：{s['vo']}）"
         seg_lines.append(seg)
-    aspect = str(plan.get("aspect") or options.get("aspect") or "9:16")
     duration = int(plan.get("duration_sec") or options.get("duration") or 15)
     prompt_parts = [f"产品：{product}"]
     if brief.get("promotionGoal"): prompt_parts.append(f"推广目标：{brief.get('promotionGoal')}")
     if brief.get("sellingPoints"): prompt_parts.append("核心卖点：" + "、".join(brief["sellingPoints"][:3]))
-    prompt_parts.append(f"时长：{duration} 秒；比例：{aspect}")
+    prompt_parts.append(f"时长：{duration} 秒；比例：{output_aspect}")
     if seg_lines: prompt_parts.append("分镜：" + "；".join(seg_lines))
     if options.get("prompt_hint"): prompt_parts.append("补充要求：" + str(options["prompt_hint"]))
     if req.brand_logo:
@@ -826,10 +843,10 @@ async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depen
         "product": product,
         "headline": plan.get("hook") or product,
         "cta": plan.get("cta") or "立即下载",
-        "spec": "1080x1920" if aspect == "9:16" else ("1080x1080" if aspect == "1:1" else "1920x1080"),
+        "spec": "1080x1920" if output_aspect == "9:16" else ("1080x1080" if output_aspect == "1:1" else "1920x1080"),
         "lang": str(options.get("lang") or "en"),
         "duration": duration,
-        "aspect": aspect,
+        "aspect": output_aspect,
     }
     # 图生视频：把参考图作为 image 带入（Kling / 通用模型据端点决定是否消费）
     if str(plan.get("mode") or options.get("mode") or "") == "image_to_video" and req.reference_image:
@@ -839,7 +856,6 @@ async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depen
     if req.brand_logo:
         meta["brand_logo"] = req.brand_logo
 
-    cfg = _active_config(db, "video")
     if cfg and cfg.api_key and cfg.base_url and cfg.model:
         provider = get_video(db)
         m_info = ModelInfo(provider=("kling" if (cfg.provider or "") == "keling" else "model"),
@@ -869,19 +885,28 @@ async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depen
     else:
         note = note or "未配置视频模型，已输出可执行分镜脚本（在设置页配置 video 用途的模型后可直连生成）。"
 
-    # 始终回传分镜方案（展示 + 可下载 JSON）
+    # 实际输出比例：优先取 provider 回传，其次用本次推导的 output_aspect
+    actual_aspect = res.get("output_aspect") or output_aspect
+    # 当模型固定比例与用户所选比例不一致时，显式提示并统一标注为实际比例
+    if forced and forced != requested_aspect:
+        label = "竖屏" if actual_aspect == "9:16" else ("方版" if actual_aspect == "1:1" else "横版")
+        forced_note = f"⚠️ 当前视频模型固定输出 {actual_aspect}（{label}），已按实际比例 {actual_aspect} 标注（与所选「{requested_aspect}」不一致）。"
+        note = (note + " " + forced_note).strip() if note else forced_note
+
+    # 始终回传分镜方案（展示 + 可下载 JSON），比例标注为实际输出比例
     storyboard = dict(plan)
     storyboard["platform"] = platform
     storyboard["options"] = options
     storyboard["reference_image"] = req.reference_image or ""
     storyboard.setdefault("duration_sec", duration)
-    storyboard.setdefault("aspect", aspect)
+    storyboard["aspect"] = actual_aspect
+    storyboard["output_aspect"] = actual_aspect
     storyboard.setdefault("shots", [])
     return CWVideoGenerateResult(
         provider=res.get("provider", "storyboard"),
         model=(cfg.model if (cfg and cfg.model) else ""),
         videos=videos, storyboard=storyboard,
-        model_info=m_info, note=note, source=m_info.source,
+        model_info=m_info, note=note, output_aspect=actual_aspect, source=m_info.source,
     )
 
 

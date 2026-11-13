@@ -446,6 +446,7 @@ class CWVideoPlanResult(BaseModel):
     reply: str = ""                # 给用户的自然语言回复 / 建议
     plan: dict = {}                # VIDEO_JSON v2 风格的分镜方案（duration/shots/...）
     model_info: ModelInfo = ModelInfo()
+    output_aspect: str = ""        # 实际输出比例（如 9:16）；视频模型固定比例时显式标注
     source: str = "local"          # llm / mock / local
 
 
@@ -478,4 +479,5 @@ class CWVideoGenerateResult(BaseModel):
     storyboard: dict = {}          # VIDEO_JSON v2 分镜方案（展示 + 可下载）
     model_info: ModelInfo = ModelInfo()
     note: str = ""                 # 人类可读说明（如「未配置视频模型，已回退分镜」）
+    output_aspect: str = ""        # 实际输出比例（如 9:16）；视频模型固定比例时显式标注
     source: str = "local"
