@@ -808,6 +808,22 @@ VIDEO_PRESETS = [
         "setup_guide": "1) 302.ai 获取 Key；2) Base URL 默认 https://api.302.ai/v1；3) Model 填 kling/runway/luma 等；4) 端点默认 /video/generations，如不同请在「参数(JSON)」填 endpoint。",
         "notes": "聚合多家视频模型，兼容 /video/generations 最小契约；异步任务式。",
     },
+    {
+        "key": "aliyun-maas-video", "name": "阿里云百炼 MaaS（wan3.0-video）", "protocol": "generic-video",
+        "default_base_url": "https://ws-4pdi7amcxvrey8qo.ap-southeast-1.maas.aliyuncs.com", "base_url_editable": True,
+        "models": ["wan3.0-video"],
+        "api_key_label": "阿里云百炼 / DashScope API Key", "api_key_placeholder": "sk-...",
+        "model_placeholder": "wan3.0-video",
+        "docs_url": "https://help.aliyun.com/zh/model-studio/",
+        "setup_guide": "1) 阿里云百炼开通 wan3.0-video 并获取 API Key；2) 在 Key 所在资源组把部署机公网 IP 加入白名单；3) Base URL 默认已填本次实测网关地址，可改；4) Model 填 wan3.0-video；5) 保存并测试。",
+        "notes": "实测可用（2026-11-13）：提交后约 3 分钟出 5s/1080p/30fps/9:16 竖屏 MP4，成片 URL 有效期约 24h。⚠️ 兼容提示：本模型请求体为 {model,input:{prompt},parameters:{...}}、轮询地址为 /api/v1/tasks/{id}、且需 X-DashScope-Async 头，与 generic-video 默认契约（{model,prompt,duration,aspect_ratio} + /video/generations + /tasks/{id}）不同，已通过预设默认参数（body_shape/poll_path/async_header/endpoint）适配，选此预设即可直接驱动。",
+        "default_params": {
+            "endpoint": "/api/v1/services/aigc/video-generation/video-synthesis",
+            "body_shape": "dashscope_maas",
+            "poll_path": "/api/v1/tasks",
+            "async_header": "true",
+        },
+    },
 ]
 
 _IMAGE_PRESET_MAP = {p["key"]: p for p in IMAGE_PRESETS}

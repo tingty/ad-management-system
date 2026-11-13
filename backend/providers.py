@@ -430,6 +430,13 @@ class ModelVideo(VideoProvider):
       /tasks/{id}、{endpoint}/{id} 等常见形态，状态/URL 字段做通用递归匹配。
     图生视频：body 带 image + mode=image_to_video。
     任何环节失败或无视频产出 → 回退分镜脚本，绝不阻断主流程。
+
+    扩展开关（写在模型配置的「参数(JSON)」里，均为字符串）：
+    - endpoint：提交路径，默认 /video/generations；
+    - body_shape="dashscope_maas"：改用阿里云百炼 MaaS 契约
+      {model, input:{prompt}, parameters:{size,count}}（图生视频再补 input.image / parameters.mode）；
+    - async_header="true"：提交时附加 X-DashScope-Async: enable 头（阿里云 MaaS 异步必需）；
+    - poll_path：自定义轮询路径（如 /api/v1/tasks），优先于内置候选地址尝试。
     """
     def __init__(self, api_key, base_url, model, params=None):
         self.api_key = api_key
@@ -439,13 +446,19 @@ class ModelVideo(VideoProvider):
 
     def _poll_urls(self, task_id, endpoint):
         ep = endpoint or "/video/generations"
-        return [
+        urls = []
+        # 厂商自定义轮询路径（如阿里云百炼 MaaS 的 /api/v1/tasks/{id}），优先尝试
+        poll_path = (self.params.get("poll_path") or "").strip()
+        if poll_path:
+            urls.append(f"{self.base_url}{poll_path}/{task_id}")
+        urls += [
             f"{self.base_url}/v1/video/generations/tasks/{task_id}",
             f"{self.base_url}/video/generations/tasks/{task_id}",
             f"{self.base_url}/v1/video/generations/{task_id}",
             f"{self.base_url}{ep}/{task_id}",
             f"{self.base_url}/tasks/{task_id}",
         ]
+        return urls
 
     async def _finalize(self, url, b64, filename):
         if b64:
@@ -475,17 +488,35 @@ class ModelVideo(VideoProvider):
             sb["note"] = "视频模型未配置 base_url，已回退分镜脚本。"
             return sb
         endpoint = (self.params.get("endpoint") or "/video/generations").strip()
-        body = {
-            "model": self.model,
-            "prompt": prompt,
-            "duration": meta.get("duration", 15),
-            "aspect_ratio": meta.get("aspect", "9:16"),
-        }
-        # 图生视频支持——把参考图作为 image 字段带入（厂商忽略即视为文生视频）
-        if meta.get("image"):
-            body["image"] = meta["image"]
-            body["mode"] = meta.get("mode") or "image_to_video"
+        body_shape = (self.params.get("body_shape") or "").strip()
+        if body_shape == "dashscope_maas":
+            # 阿里云百炼 MaaS（wan3.0-video 等）契约：提交体为
+            # {model, input:{prompt}, parameters:{size,count}}，且需 X-DashScope-Async 头。
+            # 实测该端点忽略 size、固定输出 9:16 竖屏，这里仍按宽高比推导一个合理 size。
+            aspect = meta.get("aspect", "9:16")
+            size = meta.get("size") or ("1080*1920" if aspect == "9:16" else "1280*720")
+            body = {
+                "model": self.model,
+                "input": {"prompt": prompt},
+                "parameters": {"size": size, "count": 1},
+            }
+            if meta.get("image"):
+                body["input"]["image"] = meta["image"]
+                body["parameters"]["mode"] = "image_to_video"
+        else:
+            body = {
+                "model": self.model,
+                "prompt": prompt,
+                "duration": meta.get("duration", 15),
+                "aspect_ratio": meta.get("aspect", "9:16"),
+            }
+            # 图生视频支持——把参考图作为 image 字段带入（厂商忽略即视为文生视频）
+            if meta.get("image"):
+                body["image"] = meta["image"]
+                body["mode"] = meta.get("mode") or "image_to_video"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        if str(self.params.get("async_header") or "").strip().lower() in ("true", "1", "yes"):
+            headers["X-DashScope-Async"] = "enable"
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=600.0)) as c:
                 r = await c.post(self.base_url + endpoint, headers=headers, json=body)

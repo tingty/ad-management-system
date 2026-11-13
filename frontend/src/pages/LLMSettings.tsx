@@ -190,7 +190,7 @@ export default function LLMSettings() {
       base_url: p.default_base_url,                              // 带出该部署专属地址（千问 MaaS）
       model: p.model_placeholder || (p.models && p.models[0]) || '',
       usages: defaultUsagesFor(p.modality || 'text'),
-      params: {},
+      params: (p.default_params && typeof p.default_params === 'object') ? { ...p.default_params } : {},
     }))
     setTestResult(null); setErr(''); setOk('')
   }

@@ -77,6 +77,7 @@ export interface ModelPreset {
   setup_guide: string
   notes: string
   extra_fields: { key: string; label: string; placeholder?: string; hint?: string }[]
+  default_params?: Record<string, string>
 }
 
 export interface ModelTestResult {

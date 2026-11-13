@@ -2513,3 +2513,31 @@
 - 前端类型检查 npx tsc --noEmit 0 错误；npx vite build 通过（48 模块，无 TS 错误），产出 dist 资源。
 - 分析框架自检：isFrameOk 校验 title/summary、boxes 四大项（industry/coreAudience/purchaseMotivation/priceBand）、brief 三项（promotionGoal/targetAudience/sellingPoints），与 cwAnalyze（_build_cw_result）返回结构一致，缺失时阻断进入下一步。
 - 系统版本与 CHANGELOG / 发布数据一致性由发版校验（prepare_release --check）强制检查；该条目由本次改动文件自动归纳（含后端接口、数据模型、前端与菜单、系统版本）。
+
+## V4.71 视频 Provider 适配阿里云百炼 MaaS（wan3.0-video 开箱可用）
+
+**发布日期**：2026-11-13
+**变更类型**：新增 / 优化
+**涉及模块**：大模型配置、视频 Provider、前端设置页、系统版本
+**变更摘要**：在「大模型配置 → 视频模型」新增「阿里云百炼 MaaS（wan3.0-video）」预设，并扩展通用视频 Provider（ModelVideo）以参数化开关兼容阿里云 MaaS 契约，使该模型可在创意工作台视频素材区直接驱动出片，且不改动其它厂商路径。
+
+**更新要点**
+- 新增视频预设「阿里云百炼 MaaS（wan3.0-video）」：默认 base_url 为本次实测网关地址，选中即预填 endpoint / body_shape=dashscope_maas / poll_path=/api/v1/tasks / async_header=true 四个参数，用户只需补填 API Key 与 Model 即可保存测试
+- ModelVideo 扩展参数化开关（写在模型配置「参数(JSON)」中，均为字符串）：endpoint（提交路径，默认 /video/generations）、body_shape="dashscope_maas"（改用 {model, input:{prompt}, parameters:{size,count}} 提交体）、async_header="true"（附加 X-DashScope-Async: enable 头）、poll_path（自定义轮询路径，优先于内置候选）
+- 前端设置页：选中预设时若含 default_params 则自动带入参数，免去手敲 JSON
+- 实测：提交后约 3 分钟出 5s/1080p/30fps/9:16 竖屏 MP4，成片 URL 有效期约 24h；API Key 须将部署机公网 IP 加入白名单
+
+**本次优化与更改的功能 / 模块**
+- 【新增】大模型配置 / 视频预设：阿里云百炼 MaaS（wan3.0-video）预设与 default_params
+- 【优化】视频 Provider / ModelVideo：参数化兼容阿里云 MaaS 提交体、异步头与轮询路径，其它厂商契约不变
+- 【优化】前端设置页 / 大模型配置：预设选中时预填 default_params
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.71
+
+**影响范围**
+- 前端 / 后端 / 数据 / 兼容性：仅新增视频预设、扩展 ModelVideo 的 params 分支（默认分支行为不变）、前端预设参数预填；未改动数据模型表结构，旧 generic-video 配置（如 Pika/Luma/可灵聚合网关）行为完全不变。
+
+**验证**
+- 后端 py_compile 通过：backend/providers.py、backend/llm_catalog.py、backend/version.py 编译无误；ModelVideo 的 dashscope_maas 提交体 / 异步头 / 自定义轮询路径分支已按阿里云实测契约实现，且 _video_find_media/_video_find_status/_video_find_task_id 原生支持 video_url / task_status / task_id 字段，轮询可直接取片。
+- 前端类型检查：api.ts 的 ModelPreset 增加可选 default_params 字段；LLMSettings.tsx 选中预设预填 default_params；npx tsc --noEmit 与 npx vite build 验证（构建含本次改动）。
+- 阿里云 MaaS 接口已实测闭环：提交（X-DashScope-Async: enable）→ 轮询 /api/v1/tasks/{id}（task_status: RUNNING→SUCCEEDED）→ 取回 9:16 竖屏 MP4（video_url 预签名 URL，HTTP 206 验证可下载）。
+- 系统版本与 CHANGELOG / 发布数据一致性由发版校验（prepare_release --check）强制检查；该条目由本次改动文件自动归纳。
