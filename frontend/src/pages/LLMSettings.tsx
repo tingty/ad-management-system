@@ -5,21 +5,30 @@ const USAGE_LABEL: Record<string, string> = {
   analysis: '落地页分析 / 框架',
   copy: '文案 / 关键词',
   image: '推广图片',
-  video: '推广视频',
+  video: '视频模型',
 }
-// 按模态决定可选的「用途」范围：文本模型可同时服务分析与文案；图/视频各自独立。
+// 按模态决定「默认勾选」的用途范围：文本模型默认服务分析与文案；图/视频各自独立。
+// 注意：下方「用途」勾选区始终展示全部四种用途（含「视频模型」），让用户在任意协议下
+// 都能明确勾选「视频模型」，避免模态锁死导致无法新增视频生成模型（V4.68 修复点）。
 const USAGE_BY_MODALITY: Record<string, { v: string; label: string }[]> = {
   text: [
     { v: 'analysis', label: '落地页分析 / 框架' },
     { v: 'copy', label: '文案 / 关键词' },
   ],
   image: [{ v: 'image', label: '推广图片' }],
-  video: [{ v: 'video', label: '推广视频' }],
+  video: [{ v: 'video', label: '视频模型' }],
 }
+// 「用途」勾选区始终展示的全部可选项（多选用途：应用到哪些模块 / 功能）。
+const ALL_USAGE_OPTIONS: { v: string; label: string }[] = [
+  { v: 'analysis', label: '落地页分析 / 框架' },
+  { v: 'copy', label: '文案 / 关键词' },
+  { v: 'image', label: '推广图片' },
+  { v: 'video', label: '视频模型' },
+]
 const PROTOCOL_LABEL: Record<string, string> = {
   openai: 'OpenAI 兼容', anthropic: 'Anthropic', gemini: 'Google Gemini',
   'openai-image': 'OpenAI 图像', 'generic-image': '通用图像', 'dashscope-maas-image': 'DashScope MaaS',
-  'generic-video': '通用视频',
+  'generic-video': '通用视频', 'keling': '可灵 Kling',
 }
 const MODALITY_LABEL: Record<string, string> = { text: '文本大模型', image: '文生图大模型', video: '文生视频大模型' }
 
@@ -71,6 +80,14 @@ const PROTOCOL_OPTIONS: ProtocolOption[] = [
     models: [], api_key_label: 'API Key', api_key_placeholder: 'sk-...',
     notes: '通用视频端点，多数视频模型为异步任务，测试仅验证可达性与鉴权。',
     extra_fields: [{ key: 'endpoint', label: '自定义端点路径（可选）', placeholder: '/video/generations', hint: '留空使用默认端点 /video/generations。' }] },
+  { key: 'keling', name: '文生视频 · 可灵 Kling（原生异步）', modality: 'video',
+    default_base_url: 'https://api.klingai.com', model_placeholder: 'kling-v1',
+    models: ['kling-v1', 'kling-v1-6', 'kling-v2-master'], api_key_label: '可灵 API Key（或 Access Key）', api_key_placeholder: 'sk-...',
+    notes: '可灵官方 API 采用 JWT（HS256）鉴权，由下方 Access Key / Secret Key 自动签发；若留空则退化为 Bearer 网关模式（兼容 302.ai 等聚合网关）。',
+    extra_fields: [
+      { key: 'access_key', label: 'Access Key（JWT 鉴权，可选）', placeholder: '可灵控制台获取的 Access Key' },
+      { key: 'secret_key', label: 'Secret Key（JWT 鉴权，可选）', placeholder: '可灵控制台获取的 Secret Key', hint: 'access_key + secret_key 同时填写时启用原生 JWT 鉴权，最稳定；仅填 API Key 则走聚合网关模式。' },
+    ] },
 ]
 
 type FormState = {
@@ -131,7 +148,8 @@ export default function LLMSettings() {
 
   const preset = PROTOCOL_OPTIONS.find(p => p.key === form.provider) || allPresets.find(p => p.key === form.provider)
   const modality = preset?.modality || 'text'
-  const usageOptions = USAGE_BY_MODALITY[modality] || USAGE_BY_MODALITY.text
+  // 用途勾选区始终展示全部四种（含「视频模型」），不再因模态被锁死
+  const usageOptions = ALL_USAGE_OPTIONS
 
   // 「预设快捷选项」：按当前模态（默认文本）展示主流厂商 / 部署，点击即带出该厂商的默认
   // Base URL 与建议 Model（如「千问文本大模型（MaaS 专属部署）」选中即带出 MaaS 地址 + qwen-plus），
