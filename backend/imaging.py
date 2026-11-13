@@ -287,6 +287,24 @@ def _legibility(size: int) -> dict:
     }
 
 
+def _region_mean_luma(img, box) -> float:
+    """文字区平均亮度 0..255（0 黑 / 255 白）；空区域回退中值 128。"""
+    if img is None or not box or box[2] <= box[0] or box[3] <= box[1]:
+        return 128.0
+    x0, y0, x1, y1 = [max(0, int(v)) for v in box]
+    x1 = min(img.width, x1)
+    y1 = min(img.height, y1)
+    if x1 <= x0 or y1 <= y0:
+        return 128.0
+    crop = img.crop((x0, y0, x1, y1)).convert("L").resize((16, 16))
+    return sum(crop.getdata()) / max(1, len(list(crop.getdata())))
+
+
+def _text_color_for(img, box, light=(255, 255, 255), dark=(20, 22, 26)) -> tuple:
+    """V4.65：按文字区背景亮度选单一纯色——暗底→浅字、亮底→深字，不透明、无描边。"""
+    return light if _region_mean_luma(img, box) < 140 else dark
+
+
 def _boxes_overlap(a, b, gap: int = 6) -> bool:
     """两矩形是否相交（带间隙 gap，用于「按钮不与文字交叠」判定）。"""
     return not (a[2] <= b[0] + gap or b[2] <= a[0] + gap
@@ -563,25 +581,47 @@ def composition_regions(layout: str) -> tuple[tuple[float, ...], tuple[float, ..
     return COMPOSITION_REGIONS.get(layout, COMPOSITION_REGIONS["hero"])
 
 
+def _cover_fit(src: Image.Image, w: int, h: int) -> Image.Image:
+    """V4.65：等比缩放并居中裁切，恰好填满 (w,h)，不引入任何纯色边或蒙版。
+
+    替代旧「主体子矩形 + 纯色 fill」式构图，解决「实景只占一部分 + 大量纯色 /
+    渐变区」的问题——让落地页真实场景满铺整图，文字以浮字对比色呈现。
+    """
+    sw, sh = src.size
+    scale = max(w / max(1, sw), h / max(1, sh))
+    nw, nh = max(1, int(round(sw * scale))), max(1, int(round(sh * scale)))
+    resized = src.resize((nw, nh), Image.LANCZOS)
+    left, top = (nw - w) // 2, (nh - h) // 2
+    return resized.crop((left, top, left + w, top + h))
+
+
 def _prepare_bg(w: int, h: int, bg_path: str | None, pal: dict | None = None,
                 layout: str = "hero", dim_ratio: float = 0.28,
                 composition: dict | None = None,
-                trace: dict | None = None) -> Image.Image:
-    """V4.42 / F06：按主体保护框构图，而不是无条件 cover 居中裁切。
+                trace: dict | None = None,
+                full_bleed: bool = False) -> Image.Image:
+    """V4.42 / F06：背景构图。
 
-    - `composition` 由调用方（media_ad）按「实际返回底图尺寸」算好后传入；
-      为空时本函数自行按源图尺寸规划，保证旧调用也能得到主体保护。
-    - `trace` 为可写 dict，渲染后回填 `composition`（含 crop / anchor / mode /
-      requested_size / returned_size），供逐图归档满足 T08 的记录要求。
-    - 极端横幅或比例差过大时走扩图（contain + 边缘延展），源图内容一个像素都不裁。
+    - `full_bleed=True`（V4.65 起默认走此路径）：实景照片满铺整图（cover 居中裁切），
+      **不加任何纯色边、不做任何蒙版 / 柔化**，文字以对比色浮于其上；
+    - `full_bleed=False`：旧「主体保护框 + 局部蒙版」路径，仅用于兼容旧调用；
+    - 无底图时回退本地渐变模板。
     """
     p = pal or PALETTE
     if bg_path and os.path.exists(bg_path):
         try:
-            from image_capabilities import plan_composition, apply_composition
             with Image.open(bg_path) as probe:
-                sw, sh = probe.size
                 src = probe.convert("RGB")
+            if full_bleed:
+                if trace is not None:
+                    trace["composition"] = {
+                        "mode": "full_bleed", "crop": "center", "protected": True,
+                        "returned_size": list(src.size), "requested_size": [w, h],
+                        "capability_note": "实景照片满铺，无蒙版/纯色边",
+                    }
+                return _cover_fit(src, w, h)
+            from image_capabilities import plan_composition, apply_composition
+            sw, sh = src.size
             sb, tb = composition_regions(layout)
             comp = composition or plan_composition(
                 w, h, sw, sh, subject_box=sb, text_box=tb, layout=layout)
@@ -687,6 +727,12 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
       "pure"        — 纯图片，无文字、无按钮、无 logo
       "text"        — 图片 + 文字（标题/副标/品牌）+ logo，无按钮
       "text_button" — 图片 + 文字 + 按钮 + logo（默认，保持旧行为）
+
+    V4.65 渲染原则（按生成素材反馈修复）：
+      · 背景一律「实景照片满铺」（_cover_fit 居中裁切填满整图），不再使用主体子矩形 +
+        纯色 fill，也不叠加任何蒙版 / 柔化（_apply_local_veil 不再走）；
+      · 文字（text / text_button）使用「单一纯色浮字」：按文字区背景亮度自动选 浅字(亮底)
+        或 深字(暗底)，不透明、无描边、无投影；按钮文字为 on_accent 纯色同样无描边。
     """
     w, h = int(width), int(height)
     pal = resolve_palette(palette, accent)
@@ -701,7 +747,7 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
     draw_logo = mode != "pure"
 
     img = _prepare_bg(w, h, bg_path, pal, eff, dim_ratio,
-                      composition=composition, trace=trace)
+                      composition=composition, trace=trace, full_bleed=True)
     img = _composite_product(img, product_image_path, eff)
 
     if eff == "banner":
@@ -722,11 +768,13 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
                 pf = _primary_font(fs)
             if strict_text and d.textlength(line, font=pf) > avail:
                 raise TextOverflowError("小横幅标题超出可排版宽度")
-            # V4.64：浮字 + 投影描边（无底板），与常规版式一致的"无板可读"风格
+            # V4.65：浮字使用单一纯色（按标题区背景亮度选深/浅），无描边、无投影
             if draw_text and line:
-                lleg = _legibility(fs)
-                _draw_text(d, (margin, (h - fs * 1.2) / 2), line, fs, pal["fg"],
-                            shadow=lleg["shadow"], outline=lleg["outline"])
+                _tb = [margin, max(0, int((h - fs * 1.4) / 2)),
+                       margin + avail, int((h + fs * 1.4) / 2)]
+                fg_c = _text_color_for(img, _tb)
+                _draw_text(d, (margin, (h - fs * 1.2) / 2), line, fs, fg_c,
+                            shadow=None, outline=None)
             if cta and draw_cta:
                 cfs = max(9, int(h * 0.26))
                 cf = _primary_font(cfs)
@@ -743,16 +791,15 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
                                     radius=int(bh / 2), fill=(0, 0, 0))
                 d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=int(bh / 2),
                                     fill=accent_c)
-                cleg = _legibility(cfs)
                 _draw_text(d, (bx + cfs * 0.7, by + bh / 2 - cfs * 0.62),
                            cta, cfs, pal["on_accent"],
-                           shadow=cleg["shadow"], outline=cleg["outline"])
+                           shadow=None, outline=None)
     else:
         spec = LAYOUT_SPEC[eff]
         pad = max(margin, int(w * spec["x"]))
         text_w = max(12, min(int(w * spec["w"]), w - pad - margin))
-        # V4.64：不再使用任何背景板（实心 / 半透明遮罩均移除），文字直接浮于照片之上，
-        # 可读性由「投影 + 描边」保障（对齐样例素材的浮字风格）。
+        # V4.65：文字直接浮于照片之上，使用「单一纯色 + 对比色」——无描边、无投影、无蒙版。
+        # 具体颜色稍后按文字区背景亮度确定（暗底→浅字 / 亮底→深字）。
         fg_c, sub_c = pal["fg"], pal["sub"]
 
         cta_box = None
@@ -830,6 +877,12 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
                         min(w, int(text_x + text_w + fs * 0.3)),
                         min(h, int(y_after_sub + sfs * 0.5))]
 
+            # V4.65：按文字区背景亮度选单一纯色（暗底→浅字 / 亮底→深字），不透明、无描边。
+            _tb = [max(0, int(text_box[0] - w * 0.03)), max(0, int(text_box[1] - h * 0.03)),
+                   min(w, int(text_box[2] + w * 0.03)), min(h, int(text_box[3] + h * 0.03))]
+            fg_c = _text_color_for(img, _tb)
+            sub_c = fg_c
+
             d = ImageDraw.Draw(img)
 
             if spec["band"] == "top":
@@ -837,18 +890,18 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
 
             if brand:
                 _draw_text(d, (pad, brand_y), brand, bf, sub_c,
-                           shadow=brand_leg["shadow"], outline=brand_leg["outline"])
+                           shadow=None, outline=None)
             d.rectangle(accent_box, fill=accent_c)
             y = headline_y
             for ln in lines:
                 _draw_text(d, (text_x, y), ln, fs, fg_c,
-                           shadow=leg["shadow"], outline=leg["outline"])
+                           shadow=None, outline=None)
                 y += line_h
             if sub_lines:
                 y = y_sub
                 for ln in sub_lines:
                     _draw_text(d, (text_x, y), ln, sfs, sub_c,
-                               shadow=sub_leg["shadow"], outline=sub_leg["outline"])
+                               shadow=None, outline=None)
                     y += int(sfs * 1.20)
         else:
             # 纯图片模式：不绘制任何文字 / 装饰，仅保留背景与产品合成
@@ -871,7 +924,7 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
             d.rounded_rectangle(cta_box, radius=int(bh / 2), fill=accent_c)
             _draw_text(d, (cta_box[0] + cfs * 1.0, cta_box[1] + bh / 2 - cfs * 0.66),
                        cta, cfs, pal["on_accent"],
-                       shadow=cta_leg["shadow"], outline=cta_leg["outline"])
+                       shadow=None, outline=None)
 
         if trace is not None:
             trace["render"] = {
@@ -879,7 +932,7 @@ def render_ad_png(out_path: str, width: int, height: int, headline: str, sub: st
                 "text_container": text_box,
                 "scrim": False,
                 "overlay_mode": mode,
-                "legibility": {"shadow": True, "outline": True},
+                "legibility": {"shadow": False, "outline": False},
                 "cta_box": cta_box,
                 "type_scale": "V4.64",
             }

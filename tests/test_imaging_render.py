@@ -1,11 +1,11 @@
-"""V4.64 成像渲染回归：验证「无背景板浮字 + 投影描边可读 + 按钮不压字」统一修复。
+"""V4.65 成像渲染回归：验证「实景照片满铺 + 单一纯色对比字（无描边/无蒙版）+ 按钮不压字」。
 
 仅用 Pillow 本地合成（不依赖文生图供应商 / 网络），用一张合成「照片感」底图渲染各版式，
 断言（对齐样例素材风格：文字直接浮于照片、按钮为独立 pill 且不压字）：
 1. 文字区无任何背景板（场景像素方差显著 > 阈值，证明背景完全透出、无遮罩）；
 2. CTA 落在画布内，且与文字块包围盒不相交（按钮绝不压字 / 与文字交叉）；
 3. 标题字号受控（<= 0.09 * min(w,h)，不再过大突兀）；
-4. trace.render 字段完整（scrim=False / legibility / text_container / cta_box），供线上排障。
+4. trace.render 字段完整（scrim=False / legibility={shadow:False,outline:False} / text_container / cta_box / composition.mode=full_bleed），供线上排障。
 """
 import os
 import random
@@ -116,9 +116,8 @@ class ImagingRenderTest(unittest.TestCase):
                       "legibility", "cta_box"):
                 self.assertIn(k, r, f"{layout}: trace.render 缺字段 {k}")
             self.assertFalse(r["scrim"], f"{layout}: 仍存在背景板（scrim 应为 False）")
-            self.assertTrue(r["legibility"].get("shadow")
-                            and r["legibility"].get("outline"),
-                            f"{layout}: 未启用投影 / 描边可读性保障")
+            self.assertEqual(r["legibility"], {"shadow": False, "outline": False},
+                             f"{layout}: V4.65 起文字应为单一纯色对比字（无描边 / 无投影）")
 
     def test_long_headline_shrinks_without_overflow(self):
         """长标题触发自适应收缩，不抛 TextOverflowError（strict_text=False 默认）。"""
@@ -133,6 +132,35 @@ class ImagingRenderTest(unittest.TestCase):
                               "", "Shop", brand="petorldog", bg_path=self.bg,
                               layout="banner")
         self.assertTrue(os.path.isfile(out))
+
+    def test_full_bleed_no_solid_margins(self):
+        """V4.65：实景照片满铺整图，四角保持底图原色（无纯色填充边 / 无蒙版）。"""
+        bg = Image.new("RGB", (1080, 1080))
+        d = ImageDraw.Draw(bg)
+        d.rectangle([0, 0, 540, 540], fill=(20, 120, 200))
+        d.rectangle([540, 0, 1080, 540], fill=(220, 180, 30))
+        d.rectangle([0, 540, 540, 1080], fill=(40, 160, 90))
+        d.rectangle([540, 540, 1080, 1080], fill=(200, 60, 60))
+        bgp = os.path.join(self.tmp, "corner_bg.png")
+        bg.save(bgp)
+        corners = [((0, 0, 12, 12), (20, 120, 200), "左上"),
+                   ((1068, 0, 1080, 12), (220, 180, 30), "右上"),
+                   ((0, 1068, 12, 1080), (40, 160, 90), "左下"),
+                   ((1068, 1068, 1080, 1080), (200, 60, 60), "右下")]
+        for mode in ("pure", "text", "text_button"):
+            out = os.path.join(self.tmp, f"fb_{mode}.png")
+            trace = {}
+            imaging.render_ad_png(out, 1080, 1080, "Headline Here", "Sub text",
+                                  "Shop", brand="brand", bg_path=bgp,
+                                  layout="hero", trace=trace, overlay_mode=mode)
+            self.assertEqual(trace["composition"]["mode"], "full_bleed",
+                             f"{mode}: 未走 full_bleed 满铺")
+            im = Image.open(out).convert("RGB")
+            for box, target, name in corners:
+                px = list(im.crop(box).getdata())
+                avg = tuple(sum(ch) / len(px) for ch in zip(*px))
+                self.assertTrue(all(abs(avg[i] - target[i]) < 40 for i in range(3)),
+                                f"{mode}: {name}角非满铺原色（疑似纯色边/蒙版） avg={avg}")
 
 
 if __name__ == "__main__":
