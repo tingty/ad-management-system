@@ -338,55 +338,194 @@ class StoryboardVideo(VideoProvider):
             "note": "未配置视频模型，输出可执行分镜；在设置页配置 video 用途的模型后会自动调用真实生成。",
         }
 
-class ModelVideo(VideoProvider):
-    """可配置视频模型：POST {base_url}{endpoint|/video/generations}，支持 url 或 b64_json 返回。
+# ------------------------- 通用视频响应解析辅助（适配多厂商异步/同步形态） -------------------------
+_VIDEO_URL_KEYS = ("url", "video_url", "resource_url", "videoUrl", "video")
+_VIDEO_B64_KEYS = ("b64_json", "base64")
 
-    不同厂商（Runway / 可灵 / Pika / Luma 等）协议差异大，这里约定一个最小通用契约：
-    默认端点 /video/generations（可通过 params.endpoint 覆盖，如 /sdapi/v1/txt2video）；
-    兼容图生视频（params/body 带 image + mode=image_to_video）。
-    调用失败或无返回时自动回退分镜脚本，绝不阻断主流程。
+
+def _video_find_media(obj, _u=None, _b=None):
+    """递归在响应 JSON 中找首个视频 URL 与首个 b64_json（通用体，适配 OpenAI / Runway / Pika / Luma 等）。"""
+    if _u and _b:
+        return _u, _b
+    if isinstance(obj, str):
+        if _u is None and obj.startswith("http"):
+            return obj, _b
+        if _b is None and obj.startswith("data:"):
+            return _u, obj
+        return _u, _b
+    if isinstance(obj, dict):
+        for k in _VIDEO_URL_KEYS:
+            if _u is None and k in obj and isinstance(obj[k], str) and obj[k].startswith("http"):
+                _u = obj[k]
+        for k in _VIDEO_B64_KEYS:
+            if _b is None and k in obj and isinstance(obj[k], str) and obj[k]:
+                _b = obj[k]
+        if _u is None or _b is None:
+            for v in obj.values():
+                _u, _b = _video_find_media(v, _u, _b)
+    elif isinstance(obj, list):
+        for it in obj:
+            if _u is None or _b is None:
+                _u, _b = _video_find_media(it, _u, _b)
+    return _u, _b
+
+
+def _video_find_status(obj):
+    if isinstance(obj, dict):
+        for k in ("status", "task_status", "state"):
+            if k in obj and isinstance(obj[k], str):
+                return obj[k].lower()
+        for v in obj.values():
+            s = _video_find_status(v)
+            if s:
+                return s
+    elif isinstance(obj, list):
+        for it in obj:
+            s = _video_find_status(it)
+            if s:
+                return s
+    return ""
+
+
+def _video_find_msg(obj):
+    if isinstance(obj, dict):
+        for k in ("message", "error", "task_status_msg", "status_msg", "msg"):
+            if k in obj and isinstance(obj[k], str) and obj[k]:
+                return obj[k]
+        for v in obj.values():
+            m = _video_find_msg(v)
+            if m:
+                return m
+    elif isinstance(obj, list):
+        for it in obj:
+            m = _video_find_msg(it)
+            if m:
+                return m
+    return ""
+
+
+def _video_find_task_id(obj):
+    """从提交响应里找任务标识（各厂商键名不一：id/task_id/uuid/job_id/generation_id/request_id）。"""
+    if isinstance(obj, dict):
+        for k in ("id", "task_id", "taskId", "uuid", "job_id", "generation_id", "request_id"):
+            if obj.get(k):
+                return str(obj[k])
+        data = obj.get("data")
+        if isinstance(data, dict):
+            for k in ("id", "task_id", "taskId", "uuid"):
+                if data.get(k):
+                    return str(data[k])
+        if isinstance(data, list) and data and isinstance(data[0], dict) and data[0].get("id"):
+            return str(data[0]["id"])
+    return None
+
+
+class ModelVideo(VideoProvider):
+    """可配置视频模型：POST {base_url}{endpoint|/video/generations}，兼容同步直出与异步任务两种形态。
+
+    厂商差异（Runway / Pika / Luma / 302.ai / 可灵聚合网关等）通过 params.endpoint 对齐：
+    - 同步网关（OpenAI / Sora 风格）直接返回视频 url / b64_json；
+    - 异步厂商（主流）提交后返回 task_id，本类自动轮询任务状态并取片，
+      轮询地址依次尝试 {base_url}/v1/video/generations/tasks/{id}、/{video/generations}/{id}、
+      /tasks/{id}、{endpoint}/{id} 等常见形态，状态/URL 字段做通用递归匹配。
+    图生视频：body 带 image + mode=image_to_video。
+    任何环节失败或无视频产出 → 回退分镜脚本，绝不阻断主流程。
     """
     def __init__(self, api_key, base_url, model, params=None):
         self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
+        self.base_url = (base_url or "").rstrip("/")
         self.model = model
         self.params = params or {}
 
+    def _poll_urls(self, task_id, endpoint):
+        ep = endpoint or "/video/generations"
+        return [
+            f"{self.base_url}/v1/video/generations/tasks/{task_id}",
+            f"{self.base_url}/video/generations/tasks/{task_id}",
+            f"{self.base_url}/v1/video/generations/{task_id}",
+            f"{self.base_url}{ep}/{task_id}",
+            f"{self.base_url}/tasks/{task_id}",
+        ]
+
+    async def _finalize(self, url, b64, filename):
+        if b64:
+            out = os.path.join(UPLOAD_DIR, filename.rsplit(".", 1)[0] + ".mp4")
+            with open(out, "wb") as f:
+                f.write(base64.b64decode(b64))
+            return {"provider": "model", "file_path": out, "model": self.model}
+        if url:
+            try:
+                async with httpx.AsyncClient(timeout=600) as cc:
+                    d = await cc.get(url)
+                    d.raise_for_status()
+                    out = os.path.join(UPLOAD_DIR, filename)
+                    with open(out, "wb") as f:
+                        f.write(d.content)
+                return {"provider": "model", "file_path": out, "model": self.model}
+            except Exception:
+                return {"provider": "model", "url": url, "model": self.model}
+        sb = await StoryboardVideo().generate("", "", filename, {})
+        sb["note"] = "视频任务已完成但未解析到成片地址，已回退分镜脚本。"
+        return sb
+
     async def generate(self, prompt, platform, filename, meta=None):
         meta = meta or {}
+        if not self.base_url:
+            sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
+            sb["note"] = "视频模型未配置 base_url，已回退分镜脚本。"
+            return sb
+        endpoint = (self.params.get("endpoint") or "/video/generations").strip()
+        body = {
+            "model": self.model,
+            "prompt": prompt,
+            "duration": meta.get("duration", 15),
+            "aspect_ratio": meta.get("aspect", "9:16"),
+        }
+        # 图生视频支持——把参考图作为 image 字段带入（厂商忽略即视为文生视频）
+        if meta.get("image"):
+            body["image"] = meta["image"]
+            body["mode"] = meta.get("mode") or "image_to_video"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         try:
-            endpoint = (self.params.get("endpoint") or "/video/generations").strip()
-            body = {
-                "model": self.model,
-                "prompt": prompt,
-                "duration": meta.get("duration", 15),
-                "aspect_ratio": meta.get("aspect", "9:16"),
-            }
-            # V4.66 / 视频模块：图生视频支持——把参考图作为 image 字段带入（厂商忽略即视为文生视频）
-            if meta.get("image"):
-                body["image"] = meta["image"]
-                body["mode"] = meta.get("mode") or "image_to_video"
-            async with httpx.AsyncClient(timeout=180) as c:
-                r = await c.post(
-                    self.base_url + endpoint,
-                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                    json=body,
-                )
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=600.0)) as c:
+                r = await c.post(self.base_url + endpoint, headers=headers, json=body)
                 r.raise_for_status()
                 data = r.json()
-                item = (data.get("data") or [{}])[0]
-                if item.get("b64_json"):
-                    path = os.path.join(UPLOAD_DIR, filename.rsplit(".", 1)[0] + ".mp4")
-                    with open(path, "wb") as f:
-                        f.write(base64.b64decode(item["b64_json"]))
-                    return {"provider": "model", "file_path": path, "model": self.model}
-                if item.get("url"):
-                    return {"provider": "model", "url": item["url"], "model": self.model}
+                # 1) 同步直出
+                url, b64 = _video_find_media(data)
+                if url or b64:
+                    return await self._finalize(url, b64, filename)
+                # 2) 异步任务：轮询取片
+                task_id = _video_find_task_id(data)
+                if task_id:
+                    for _ in range(120):  # 最多 ~6 分钟
+                        await asyncio.sleep(3)
+                        for u in self._poll_urls(task_id, endpoint):
+                            try:
+                                q = await c.get(u, headers=headers)
+                            except Exception:
+                                continue
+                            if q.status_code >= 400:
+                                continue
+                            try:
+                                obj = q.json()
+                            except Exception:
+                                continue
+                            st = _video_find_status(obj)
+                            if st in ("succeeded", "success", "complete", "completed", "ready", "finished"):
+                                fu, fb = _video_find_media(obj)
+                                if fu or fb:
+                                    return await self._finalize(fu, fb, filename)
+                                raise RuntimeError("视频任务完成但未找到成片地址")
+                            if st in ("failed", "error", "cancelled", "canceled"):
+                                raise RuntimeError("视频任务失败：" + str(_video_find_msg(obj))[:120])
         except Exception as e:
             sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
             sb["note"] = f"视频模型调用失败（{str(e)[:80]}），已回退分镜脚本。"
             return sb
-        return await StoryboardVideo().generate(prompt, platform, filename, meta)
+        sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
+        sb["note"] = "视频模型未返回可消费视频或任务标识，已回退分镜脚本。"
+        return sb
 
 
 class KlingVideo(VideoProvider):
