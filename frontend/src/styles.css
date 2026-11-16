@@ -1768,6 +1768,23 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .vs-model-chip.storyboard { background: #fff7ed; color: var(--warn); border-color: #fde2cf; }
 .vs-model-chip.kling { background: #f0f5ff; color: #2e75b6; border-color: #d6e4ff; }
 
+/* ===== V4.78 出片模型 / 分镜文本模型分开标注 ===== */
+.vs-chips { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.vs-chips .vs-model-chip { margin-left: 0; }
+.vs-model-chip.model { background: #eef7ff; color: #1f6fb2; border-color: #cfe4f7; }
+.vs-model-chip.analysis { background: #f5f3ff; color: #6b46c1; border-color: #e4dcff; }
+.vs-head .vs-diag-btn { margin-left: 0; }
+.vs-diag-rows { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.vs-diag-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 7px 10px; border-radius: 8px; border: 1px dashed var(--border); background: #fff;
+}
+.vs-diag-row.ok { border-style: solid; border-color: #cfe4f7; background: #f7fbff; }
+.vs-diag-row.skip { border-color: #fde2cf; background: #fffaf5; color: var(--warn); }
+.vs-diag-row > b { color: var(--primary); font-weight: 600; }
+.vs-diag-row > span { font-size: 11.5px; color: var(--muted); }
+.vs-diag-row.skip > span { color: #b45309; }
+
 /* 输出比例显式标注 */
 .vs-aspect-chip {
   font-size: 11.5px; padding: 3px 10px; border-radius: 999px; font-weight: 600;

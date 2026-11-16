@@ -15,7 +15,8 @@ export interface VideoState {
   videos: any[]
   options: any
   note: string
-  modelInfo: any
+  modelInfo: any       // V4.78：分镜策划（文本模型）的调用快照，role=analysis
+  videoModel: any      // V4.78：实际出片（视频模型）的快照，role=video；未配置时 provider=storyboard
   outputAspect: string
   planning: boolean
   generating: boolean
@@ -58,12 +59,24 @@ function fileUrl(u?: string) {
   return api.fileUrl(u)
 }
 
-function providerLabel(mi: any) {
+// V4.78：两个模型徽标必须分开——
+// · 分镜策划用的是「文本模型」（analysis/copy 用途，可能是 DeepSeek / 千问文本）；
+// · 出片用的是「视频模型」（video 用途，如阿里云百炼 wan3.0-video）。
+// 此前两者共用一个 modelInfo，视频面板把文本模型当成视频模型展示，用户看到的就是「视频模型是 deepseek」。
+function planModelLabel(mi: any) {
   if (!mi) return ''
-  if (mi.provider === 'storyboard') return '分镜脚本（未配置视频模型）'
-  if (mi.provider === 'kling') return `可灵 · ${mi.model || ''}`
-  if (mi.provider === 'model') return `视频模型 · ${mi.model || ''}`
-  return mi.provider || ''
+  if (mi.fallback) return '分镜模型（文本）· 兜底'
+  const name = mi.model || mi.provider || ''
+  if (!name) return ''
+  return `分镜模型（文本）· ${name}`
+}
+
+function videoModelLabel(mi: any) {
+  if (!mi) return ''
+  if (mi.provider === 'storyboard') return '出片模型 · 未配置（回退分镜）'
+  if (mi.provider === 'kling') return `出片模型 · 可灵 ${mi.model || ''}`.trim()
+  if (mi.provider === 'model') return `出片模型 · ${mi.model || '视频模型'}`
+  return `出片模型 · ${mi.model || mi.provider}`
 }
 
 // 输出比例标签：显式标注实际出片比例（如 9:16 竖屏）
@@ -84,11 +97,20 @@ function AspectChip({ aspect }: { aspect?: string }) {
 }
 
 export default function VideoStudio({ analysis, platform, referenceImage, brandLogo, injectLogo, mode, state, setState }: VideoStudioProps) {
-  const { messages, plan, videos, options, note, modelInfo, planning, generating, error, refineInput } = state
+  const { messages, plan, videos, options, note, modelInfo, videoModel, planning, generating, error, refineInput } = state
   const chatRef = useRef<HTMLDivElement>(null)
   // V4.75：视频链路自检结果（只读配置，不触发出片）
   const [diag, setDiag] = useState<any>(null)
   const [diagBusy, setDiagBusy] = useState(false)
+  // V4.78：进面板即静默读取「实际出片模型」，让用户随时能看到真正会被调用的视频模型
+  // （此前只有文本分镜模型可见，且被误标成「视频模型」，是「视频模型显示 deepseek」的直接来源）
+  const [route, setRoute] = useState<{ checked: boolean; ready: boolean; model: string; provider: string; id: number | null }>(
+    { checked: false, ready: false, model: '', provider: '', id: null })
+  useEffect(() => {
+    api.cwVideoDiagnose()
+      .then((r: any) => setRoute({ checked: true, ready: !!r?.configured, model: r?.model || '', provider: r?.provider || '', id: r?.config_id ?? null }))
+      .catch(() => setRoute(s => ({ ...s, checked: true })))
+  }, [])
   // V4.76：出片为后台任务，这里只展示已等待时长与阶段（避免用户以为卡死）
   const [genSec, setGenSec] = useState(0)
   const [genStage, setGenStage] = useState('')
@@ -133,7 +155,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
       })
       const next = [...msgs]
       if (r?.reply) next.push({ role: 'assistant', content: r.reply })
-      setState(s => ({ ...s, messages: next, plan: r?.plan || s.plan, modelInfo: r?.model_info || s.modelInfo, outputAspect: r?.output_aspect || s.outputAspect, planning: false, error: '' }))
+      setState(s => ({ ...s, messages: next, plan: r?.plan || s.plan, modelInfo: r?.model_info || s.modelInfo, videoModel: r?.video_model_info || s.videoModel, outputAspect: r?.output_aspect || s.outputAspect, planning: false, error: '' }))
     } catch (e: any) {
       setState(s => ({ ...s, error: '分镜规划失败：' + (e?.message || ''), planning: false }))
     }
@@ -157,7 +179,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
         plan,
         options: { ...options, prompt_hint: options.prompt_hint },
       }, info => { setGenSec(info.elapsed); setGenStage(info.stage || '') })
-      setState(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', modelInfo: r?.model_info || s.modelInfo, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '' }))
+      setState(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', modelInfo: r?.model_info || s.modelInfo, videoModel: r?.model_info || s.videoModel, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '' }))
     } catch (e: any) {
       setState(s => ({ ...s, error: '视频生成失败：' + (e?.message || ''), generating: false }))
     }
@@ -183,7 +205,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
       const next = [...msgs]
       if (r?.reply) next.push({ role: 'assistant', content: r.reply })
       const newPlan = r?.plan || plan
-      setState(s => ({ ...s, messages: next, plan: newPlan, modelInfo: r?.model_info || s.modelInfo, outputAspect: r?.output_aspect || s.outputAspect, planning: false, error: '' }))
+      setState(s => ({ ...s, messages: next, plan: newPlan, modelInfo: r?.model_info || s.modelInfo, videoModel: r?.video_model_info || s.videoModel, outputAspect: r?.output_aspect || s.outputAspect, planning: false, error: '' }))
       if (newPlan && newPlan.shots?.length) {
         setState(s => ({ ...s, generating: true, videos: [], note: '' }))
         setGenSec(0); setGenStage('提交中')
@@ -195,7 +217,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
           plan: newPlan,
           options: { ...options, prompt_hint: options.prompt_hint },
         }, info => { setGenSec(info.elapsed); setGenStage(info.stage || '') })
-        setState(s => ({ ...s, videos: g?.videos || [], note: g?.note || '', modelInfo: g?.model_info || s.modelInfo, outputAspect: g?.output_aspect || s.outputAspect, generating: false, plan: g?.storyboard || s.plan, error: '' }))
+        setState(s => ({ ...s, videos: g?.videos || [], note: g?.note || '', modelInfo: g?.model_info || s.modelInfo, videoModel: g?.model_info || s.videoModel, outputAspect: g?.output_aspect || s.outputAspect, generating: false, plan: g?.storyboard || s.plan, error: '' }))
       }
     } catch (e: any) {
       setState(s => ({ ...s, error: '视频微调失败：' + (e?.message || ''), planning: false, generating: false }))
@@ -214,10 +236,20 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
   }
 
   function reset() {
-    setState(s => ({ ...s, messages: [], plan: null, videos: [], note: '', error: '', modelInfo: null, refineInput: '' }))
+    setState(s => ({ ...s, messages: [], plan: null, videos: [], note: '', error: '', modelInfo: null, videoModel: null, refineInput: '' }))
   }
 
   const showRef = options.mode === 'image_to_video' && referenceImage
+
+  // 出片模型徽标：优先用规划/出片接口回传的视频模型，其次用进面板时静默拉取的诊断结果。
+  // 两者都没有（或未配置）时明确显示「未配置（回退分镜）」，不再拿文本模型顶替。
+  const vm = (videoModel && videoModel.provider && videoModel.provider !== 'storyboard')
+    ? { label: videoModelLabel(videoModel), ok: true }
+    : route.checked
+      ? (route.ready
+        ? { label: `出片模型 · ${route.model || route.provider}`, ok: true }
+        : { label: '出片模型 · 未配置（回退分镜）', ok: false })
+      : null
 
   // ===== 规划模式（Step 2）=====
   if (mode === 'plan') {
@@ -225,10 +257,13 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
       <section className="vs-panel vs-plan">
         <div className="vs-head">
           <h4 className="vs-title">🎬 视频创意规划</h4>
-          {modelInfo && providerLabel(modelInfo) && (
-            <span className={`vs-model-chip ${modelInfo.provider}`}>{providerLabel(modelInfo)}</span>
-          )}
-          <AspectChip aspect={state.outputAspect} />
+          <div className="vs-chips">
+            {vm && <span className={`vs-model-chip ${vm.ok ? 'model' : 'storyboard'}`}>{vm.label}</span>}
+            {modelInfo && planModelLabel(modelInfo) && (
+              <span className="vs-model-chip analysis">{planModelLabel(modelInfo)}</span>
+            )}
+            <AspectChip aspect={state.outputAspect} />
+          </div>
           <span className="vs-sub">基于网站分析 + 媒体平台规则，逐镜规划视频分镜</span>
         </div>
 
@@ -345,10 +380,13 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
     <section className="vs-panel vs-work">
       <div className="vs-head">
         <h4 className="vs-title">🎬 视频生成工作区</h4>
-        {modelInfo && providerLabel(modelInfo) && (
-          <span className={`vs-model-chip ${modelInfo.provider}`}>{providerLabel(modelInfo)}</span>
-        )}
-        <AspectChip aspect={state.outputAspect} />
+        <div className="vs-chips">
+          {vm && <span className={`vs-model-chip ${vm.ok ? 'model' : 'storyboard'}`}>{vm.label}</span>}
+          {modelInfo && planModelLabel(modelInfo) && (
+            <span className="vs-model-chip analysis">{planModelLabel(modelInfo)}</span>
+          )}
+          <AspectChip aspect={state.outputAspect} />
+        </div>
         <button className="vs-ghost vs-diag-btn" onClick={runDiagnose} disabled={diagBusy}>
           {diagBusy ? '诊断中…' : '诊断视频配置'}
         </button>
@@ -376,6 +414,27 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
             <ul className="vs-diag-hints">
               {(diag.hints as string[]).map((h, i) => <li key={i}>{h}</li>)}
             </ul>
+          )}
+          {/* V4.78：把「候选」与「被跳过」都摊开，避免用户误以为系统在用文本模型出片 */}
+          {((diag.candidates || []).length + (diag.skipped || []).length) > 0 && (
+            <div className="vs-diag-rows">
+              {(diag.candidates || []).map((c: any) => (
+                <div className="vs-diag-row ok" key={'c' + c.id}>
+                  <b>#{c.id} {c.name || c.model}</b>
+                  <span>{c.provider || '—'} · {c.model || '—'}</span>
+                  <span>用途 {((c.usages || []).join(' / ') || '—')}</span>
+                  <span>{c.is_active ? '已启用' : '已停用'}</span>
+                  <span>{c.id === diag.config_id ? '← 本次出片将使用' : '可用候选（未选中）'}</span>
+                </div>
+              ))}
+              {(diag.skipped || []).map((c: any) => (
+                <div className="vs-diag-row skip" key={'s' + c.id}>
+                  <b>#{c.id} {c.name || c.model}</b>
+                  <span>{c.provider || '—'} · {c.model || '—'}</span>
+                  <span>已跳过：{c.reason}</span>
+                </div>
+              ))}
+            </div>
           )}
           {diag.last_test_error && <pre className="vs-diag-err">{diag.last_test_error}</pre>}
         </div>

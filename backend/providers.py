@@ -1063,6 +1063,72 @@ def _usable(cfg) -> bool:
     return bool(cfg.api_key and cfg.base_url and cfg.model)
 
 
+# V4.78：视频模型「模态」识别。
+# 仅凭「用途 = video」不足以判定一条配置能出片——文本配置（deepseek-chat / qwen-plus …）
+# 一旦被误勾「视频模型」，出片就会拿它去打 /video/generations，必然失败并静默回退分镜，
+# 用户看到的现象就是「创意工作台调用的视频模型变成了 deepseek」。这里用协议 + 厂商 key +
+# 参数契约 + 模型名四路识别，把文本配置从视频候选里剔除。
+_VIDEO_MODEL_HINT = re.compile(
+    r"(video|cogvideo|veo|sora|runway|gen-?3|kling|keling|wanx|wan\d|pika|luma|vidu|"
+    r"hailuo|seedance|jimeng|zhiying|pixverse|haiper|higgsfield|seaweed|midjourney-video)",
+    re.I,
+)
+
+
+def is_video_capable(cfg) -> bool:
+    """判断一条模型配置是否**具备视频出片能力**（V4.78）。"""
+    from llm_catalog import _resolve_protocol, get_video_preset
+
+    prov = str(getattr(cfg, "provider", "") or "")
+    try:
+        if _resolve_protocol(prov) == "generic-video":
+            return True
+    except Exception:
+        pass
+    try:
+        if get_video_preset(prov):
+            return True
+    except Exception:
+        pass
+    low = prov.lower()
+    if "video" in low or "keling" in low or "kling" in low:
+        return True
+    params = getattr(cfg, "params", None)
+    if isinstance(params, dict):
+        # 视频厂商契约参数存在，即视为视频端点（阿里云百炼 MaaS / 异步轮询型网关）
+        if str(params.get("body_shape") or "").strip() == "dashscope_maas":
+            return True
+        if str(params.get("poll_path") or "").strip():
+            return True
+    return bool(_VIDEO_MODEL_HINT.search(str(getattr(cfg, "model", "") or "")))
+
+
+def video_route_report(db) -> dict:
+    """视频模型路由剖析（V4.78）：给出「实际选中谁、谁被跳过、为什么」。
+
+    供 /cw-video/diagnose 与出片失败提示共用，避免用户只能看到一句
+    「未配置视频模型」而无法判断到底命中了哪条配置。
+    """
+    from models import ModelConfig
+
+    rows = db.query(ModelConfig).all()
+    tagged = [c for c in rows if "video" in _usages_of(c)]
+    capable, skipped = [], []
+    for c in tagged:
+        if is_video_capable(c):
+            capable.append(c)
+        else:
+            reasons = []
+            if not c.is_active:
+                reasons.append("已停用")
+            if not _usable(c):
+                reasons.append("缺 API Key / 请求链接 / 模型版本")
+            reasons.append("不是视频协议或视频模型（文本模型不能用于出片）")
+            skipped.append({"cfg": c, "reason": "；".join(reasons)})
+    return {"picked": _pick_config(rows, "video"), "tagged": tagged,
+            "candidates": capable, "skipped": skipped}
+
+
 def _pick_config(rows, usage):
     """挑选某用途实际生效的配置（V4.39 / F10 修复）。
 
@@ -1073,6 +1139,11 @@ def _pick_config(rows, usage):
     """
     candidates = [c for c in rows
                   if c.is_active and usage in _usages_of(c) and _usable(c)]
+    # V4.78：video 用途必须再过一道模态校验。文本配置（deepseek / qwen-plus …）即使被
+    # 误勾「视频模型」，也不能接管出片——否则会把 /chat/completions 的模型打到
+    # /video/generations 上，失败后静默回退分镜，表现为「视频模型变成了 deepseek」。
+    if usage == "video":
+        candidates = [c for c in candidates if is_video_capable(c)]
     if not candidates:
         return None
     oks = [c for c in candidates if c.last_test_ok is True]

@@ -445,11 +445,19 @@ class CWVideoPlanRequest(BaseModel):
 
 
 class CWVideoPlanResult(BaseModel):
-    """视频分镜策划结果：自然语言回复 + 分镜方案 JSON + 模型快照。"""
+    """视频分镜策划结果：自然语言回复 + 分镜方案 JSON + 模型快照。
+
+    V4.78 起把「分镜文案模型」与「出片模型」彻底分开：
+    - `model_info`：本次分镜策划实际调用的**文本**模型（role=analysis）——它只写分镜文案；
+    - `video_model_info`：真正负责出片的**视频**模型（role=video），未配置时 provider=storyboard。
+    此前两者共用 `model_info`，导致视频面板把文本模型（如 deepseek）显示成视频模型。
+    """
     model_config = {"protected_namespaces": ()}
     reply: str = ""                # 给用户的自然语言回复 / 建议
     plan: dict = {}                # VIDEO_JSON v2 风格的分镜方案（duration/shots/...）
     model_info: ModelInfo = ModelInfo()
+    video_model_info: ModelInfo = ModelInfo()   # 实际出片模型（V4.78）
+    video_model_ready: bool = False             # 出片模型是否就绪（未就绪将回退分镜）
     output_aspect: str = ""        # 实际输出比例（如 9:16）；视频模型固定比例时显式标注
     source: str = "local"          # llm / mock / local
 

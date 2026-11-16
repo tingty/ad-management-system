@@ -179,7 +179,7 @@ export default function CreativeWorkbench() {
       mode: referenceImage ? 'image_to_video' : 'text_to_video',
       voiceover: 'narration', duration: 15, aspect: '9:16', lang: 'zh', prompt_hint: '',
     },
-    note: '', modelInfo: null, outputAspect: '', planning: false, generating: false, error: '', refineInput: '',
+    note: '', modelInfo: null, videoModel: null, outputAspect: '', planning: false, generating: false, error: '', refineInput: '',
   })
 
   useEffect(() => {
@@ -488,7 +488,7 @@ export default function CreativeWorkbench() {
         brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
         plan: vs.plan, options: { ...vs.options, prompt_hint: vs.options.prompt_hint },
       }, info => setProgressText(`视频出片中（已等待 ${info.elapsed} 秒${info.stage ? ' · ' + info.stage : ''}）…`))
-      setVs(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', modelInfo: r?.model_info || s.modelInfo, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '' }))
+      setVs(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', videoModel: r?.model_info || s.videoModel, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '' }))
       return (r?.videos || []).length > 0
     } catch (e: any) {
       setVs(s => ({ ...s, generating: false, error: '视频生成失败：' + (e?.message || '') }))
@@ -574,7 +574,7 @@ export default function CreativeWorkbench() {
     setVs({ messages: [], plan: null, videos: [], options: {
       mode: referenceImage ? 'image_to_video' : 'text_to_video',
       voiceover: 'narration', duration: 15, aspect: '9:16', lang: 'zh', prompt_hint: '' },
-      note: '', modelInfo: null, outputAspect: '', planning: false, generating: false, error: '', refineInput: '' })
+      note: '', modelInfo: null, videoModel: null, outputAspect: '', planning: false, generating: false, error: '', refineInput: '' })
     setBrandLogo(''); setBrandLogoName('')
     setAnalysisValid(false)
   }

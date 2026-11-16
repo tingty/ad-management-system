@@ -20,7 +20,8 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      CWVideoAsset, CWVideoJobOut, ModelInfo)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
-from providers import get_llm_with_info, finalize_invocation, parse_json, get_video, _active_config, StoryboardVideo
+from providers import (get_llm_with_info, finalize_invocation, parse_json, get_video,
+                       _active_config, StoryboardVideo, video_route_report)
 from presets import creative_presets_payload
 from prompt_catalog import (library_dimensions, library_entries,
                             get_practice, target_key_for_kind, KINDS, FUNC_TYPES,
@@ -788,30 +789,51 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
     if not vforced and (vparams.get("body_shape") or "").strip() == "dashscope_maas":
         vforced = "9:16"
     plan_output_aspect = vforced or plan.get("aspect") or (req.options or {}).get("aspect") or "9:16"
+
+    # V4.78：分镜文案（文本模型）与出片（视频模型）分开回传。
+    # 此前两者共用 model_info —— 分镜规划用的是 analysis 文本模型（如 deepseek），
+    # 视频面板据此把「视频模型」显示成了 deepseek，与实际出片模型根本不是一回事。
+    video_info = ModelInfo(
+        provider=("kling" if (getattr(vcfg, "provider", "") or "") == "keling" else "model"),
+        model=(vcfg.model or ""), role="video", fallback=False,
+        config_id=vcfg.id, source="llm",
+    ) if vcfg else ModelInfo(provider="storyboard", model="", role="video",
+                             fallback=True, source="local")
     return CWVideoPlanResult(reply=reply, plan=plan, output_aspect=plan_output_aspect,
-                             model_info=_mini_model_info(info), source=info.get("source", "local"))
+                             model_info=_mini_model_info(info), video_model_info=video_info,
+                             video_model_ready=bool(vcfg), source=info.get("source", "local"))
 
 
 @router.get("/cw-video/diagnose")
 def api_cw_video_diagnose(db: Session = Depends(get_db),
                           user: User = Depends(require_roles(*CAN_EDIT))):
-    """视频生成链路自检（V4.75）：不发起真实出片，只报告「配置是否具备直连生成条件」。
+    """视频生成链路自检（V4.75 / V4.78 增强）：不发起真实出片，只报告「会命中哪条配置、谁被跳过、为什么」。
 
-    用户常见困惑是「已经在设置里加过视频大模型，却生成不出视频」。多数情况并非模型
-    不可用，而是：没有 video 用途、配置被停用、同用途下选中了别的配置，或者缺少
-    厂商契约参数（endpoint / async_header / poll_path）导致请求打错端点。
-    本接口把这些一次性摊开，便于页面直接给出可行动的修复建议。
+    用户常见困惑是「已经在设置里加过视频大模型，却生成不出视频」，或「配置的是千问视频模型，
+    实际却显示调用了 deepseek」。原因通常有三类：
+    1. 没有 video 用途、配置被停用、缺 Key/链接/模型 → 回退分镜；
+    2. 同用途下有多条，选中了 id 更大 / 测试通过的另一条；
+    3. **用途含 video 的其实是文本模型**（deepseek-chat 等误勾「视频模型」）→ V4.78 起会被自动
+       剔除，但必须在页面上说清楚，否则用户只会看到「视频模型变成了 deepseek」。
+    本接口把实际选中的配置、候选清单与被跳过原因一次性摊开。
     """
     from urllib.parse import urlparse
-    from models import ModelConfig
 
-    cfg = _active_config(db, "video")
-    all_video = [c for c in db.query(ModelConfig).all() if "video" in ([str(x) for x in (c.usages or [])] or [c.usage or ""])]
+    rep = video_route_report(db)
+    cfg = rep["picked"]
+    tagged, skipped = rep["tagged"], rep["skipped"]
     hints: list[str] = []
+
+    def brief(c) -> dict:
+        return {"id": c.id, "name": c.name or "", "provider": c.provider or "",
+                "model": c.model or "", "is_active": bool(c.is_active),
+                "last_test_ok": c.last_test_ok,
+                "usages": [str(x) for x in ((c.usages if isinstance(c.usages, list) else [c.usage]) or [])]}
+
     out: dict = {
         "configured": False,
-        "has_video_config": bool(all_video),
-        "video_config_count": len(all_video),
+        "has_video_config": bool(tagged),
+        "video_config_count": len(tagged),
         "config_id": None,
         "provider": "",
         "model": "",
@@ -822,15 +844,19 @@ def api_cw_video_diagnose(db: Session = Depends(get_db),
         "last_test_error": "",
         "params": {},
         "missing": [],
+        "candidates": [brief(c) for c in sorted(rep["candidates"], key=lambda c: -c.id)],
+        "skipped": [{"id": s["cfg"].id, "name": s["cfg"].name or "", "provider": s["cfg"].provider or "",
+                     "model": s["cfg"].model or "", "reason": s["reason"]} for s in skipped],
         "hints": hints,
     }
 
-    if not all_video:
-        hints.append("还没有任何「用途包含视频」的模型配置：到「系统设置 → 大模型配置」新增，用途勾选「视频」。")
+    if not tagged:
+        hints.append("还没有任何「用途包含视频」的模型配置：到「系统设置 → 大模型配置」新增，"
+                     "选「文生视频」类协议（如文生视频 · 阿里云百炼 MaaS），用途勾选「视频」。")
         return out
     if cfg is None:
-        hints.append("存在视频配置，但没有一条同时满足「已启用 + Key/链接/模型齐全 + 用途含 video」，"
-                     "因此生成时会回退分镜脚本。请检查是否被停用或缺少 API Key / 请求链接 / 模型版本。")
+        hints.append("有配置标了「视频」用途，但没有一条是可出片的视频模型，因此生成时会回退分镜脚本。"
+                     "常见原因：该配置其实是文本模型（见下方「已跳过」），或未启用、缺 API Key / 请求链接 / 模型版本。")
         return out
 
     params = cfg.params if isinstance(cfg.params, dict) else {}
@@ -862,6 +888,15 @@ def api_cw_video_diagnose(db: Session = Depends(get_db),
         "params": {k: str(v) for k, v in params.items()},
         "missing": missing,
     })
+    # V4.78：把「被跳过的文本配置」显式讲出来，避免用户误以为系统在用 deepseek 出片
+    if skipped:
+        names = "、".join(f"「{s['cfg'].name or s['cfg'].model or ('#' + str(s['cfg'].id))}」" for s in skipped[:4])
+        hints.append(f"{names} 的用途里勾了「视频」，但它们是文本模型，V4.78 起已自动跳过、不会再被用于出片。"
+                     "如不再需要，可在「大模型配置」中取消其「视频」用途，避免混淆。")
+    if len(rep["candidates"]) > 1:
+        others = "、".join(f"#{c.id} {c.name or c.model}" for c in sorted(rep["candidates"], key=lambda c: -c.id) if c.id != cfg.id)
+        hints.append(f"当前有多条可用视频配置，系统按「连通测试通过优先 → id 更大优先」选中 #{cfg.id}；"
+                     f"未选中的有：{others}。如选错了，请停用不需要的那条。")
     if missing:
         hints.append("该协议缺少契约参数：" + "、".join(missing) +
                      "。请在配置编辑弹窗的「高级参数」中补齐，或删除后重新选择该协议（会自动装配默认参数）。")
@@ -869,7 +904,8 @@ def api_cw_video_diagnose(db: Session = Depends(get_db),
         hints.append("最近一次连通测试未通过，通常是 Key 无效或部署机公网 IP 未加入厂商白名单；"
                      "原文见下方 last_test_error。")
     if not hints:
-        hints.append("配置齐全，可直接生成；若仍无成片，请查看生成结果里的失败原文（HTTP 状态 + 服务端返回）。")
+        hints.append(f"配置齐全，出片将使用 #{cfg.id}「{cfg.name or cfg.model}」（{cfg.model}），可直接生成；"
+                     "若仍无成片，请查看生成结果里的失败原文（HTTP 状态 + 服务端返回）。")
     return out
 
 
@@ -1015,6 +1051,24 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
     if req.brand_logo:
         meta["brand_logo"] = req.brand_logo
 
+    # V4.78：出片未命中视频模型时，明确区分「压根没配」与「配了但配错成文本模型」，
+    # 否则用户只会看到「调用了 deepseek」，却不知道文本模型根本不参与出片。
+    skip_note = ""
+    if not (cfg and cfg.api_key and cfg.base_url and cfg.model):
+        try:
+            rep = video_route_report(db)
+            skipped = rep.get("skipped") or []
+            if skipped:
+                names = "、".join(f"「{s['cfg'].name or s['cfg'].model or ('#' + str(s['cfg'].id))}」"
+                                  for s in skipped[:3])
+                skip_note = (f"{names} 的用途被勾成了「视频」，但它们是文本模型，无法出片，已自动跳过；"
+                             "请在「大模型配置」中新增一条文生视频模型（用途选「视频」）。")
+            elif rep.get("tagged"):
+                skip_note = ("存在标为「视频」用途的配置，但未启用或缺 API Key / 请求链接 / 模型版本，"
+                             "因此暂时只能出分镜脚本。")
+        except Exception:
+            pass
+
     if cfg and cfg.api_key and cfg.base_url and cfg.model:
         provider = get_video(db)
         m_info = ModelInfo(provider=("kling" if (cfg.provider or "") == "keling" else "model"),
@@ -1022,7 +1076,6 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
     else:
         provider = StoryboardVideo()
         m_info = ModelInfo(provider="storyboard", model="", role="video", fallback=True, source="local")
-
     filename = f"cw_video_{getattr(user, 'id', 0) or 0}_{int(time.time())}.mp4"
     try:
         res = await provider.generate(prompt, platform, filename, meta)
@@ -1042,7 +1095,7 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
     elif res.get("url"):
         videos.append(CWVideoAsset(type="video", url=res["url"], caption=product, duration_sec=duration))
     else:
-        note = note or "未配置视频模型，已输出可执行分镜脚本（在设置页配置 video 用途的模型后可直连生成）。"
+        note = note or (skip_note or "未配置视频模型，已输出可执行分镜脚本（在设置页配置 video 用途的模型后可直连生成）。")
 
     # 实际输出比例：优先取 provider 回传，其次用本次推导的 output_aspect
     actual_aspect = res.get("output_aspect") or output_aspect
