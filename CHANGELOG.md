@@ -2795,6 +2795,53 @@
 - 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
 - 补充：出片模型徽标只在「诊断成功」或「接口已回传视频模型」时展示；诊断请求失败（未授权 / 网络异常）不再显示「未配置（回退分镜）」，避免误报。
 
+## V4.81 P2+P3：出片任务持久化与「任务」抽屉——等待期间可以继续创作
+
+**发布日期**：2026-11-16 14:50
+**变更类型**：修复 / 优化 / 新增
+**涉及模块**：创意工作台（视频出片 / 后台任务）、创作批次与子任务、任务抽屉与顶部入口、后端接口、数据模型（批次表与任务执行字段）、大模型配置（视频 Provider 分步执行）、系统设置（后台 worker 启停）、前端与菜单、发版流程、系统版本
+**变更摘要**：P0 让失败说清楚、P1 让时长不作假，但视频任务仍活在进程内 `_CW_VIDEO_JOBS` 字典里：刷新靠前端 sessionStorage 续命、服务重启全丢、多进程部署会「查到另一个进程 404」，而且提交后页面必须挂着轮询，1–6 分钟内做不了下一份创作。本次把任务搬进数据库并用租约 + `next_poll_at` 驱动的 worker 分阶段推进（提交 / 查询 / 下载校验），提交即返回；前端顶部新增「＋ 新建创作」和「任务 N」两个入口，右侧 400px 抽屉按批次展示真实阶段与结果，视频在后台跑的同时可以继续开新的创作。
+
+**更新要点**
+- 任务持久化：新增 `creative_batches` 轻量批次表；`generation_jobs` 增补 `batch_id / stage / provider_config_id / provider_model / provider_task_id / provider_request_id / next_poll_at / heartbeat_at / lease_until / error_code / error_stage / error_message / error_action / last_provider_status / asset_ids / evidence_json` 16 个执行字段，`migrations.py` 自动补列
+- Provider 分步化：`ModelVideo` 拆出 `plan_request()` / `submit_job()` / `poll_job()` / `store_media()`，`generate()` 改为基于它们组合（同步接口行为不变）；供应商任务号在拿到的第一时间就落库，重启后按键续查
+- 启动恢复：租约过期的 `running` 任务重新排队；**有任务号的按原号继续查询，绝不重新提交**；提交后未及回写就崩溃的记为 `SUBMIT_UNKNOWN` 待核实，交人工确认，不自动重试避免重复收费
+- 提交即返回：`POST /cw-video/generate-jobs` 不再等出片，返回 `job_id + batch_id + status + stage`；页面提交后立即可用，不再被长轮询钉住
+- 顶部两个入口：`＋ 新建创作`（只建空白草稿，不动任何已有任务与结果）与 `任务 N`（N = 本人排队 + 进行中批次）；不新增一级导航
+- 任务抽屉：右侧 400px，三态筛选（进行中 / 已完成 / 需处理）+ 按产品名或任务号搜索；单行只给决策必需信息（产品名、类型、媒体、真实阶段、已等待、成功数）；阶段用「排队中 / 提交中 / 模型生成中 / 下载校验中」，**不把等待时长换算成百分比**
+- 分项重试严格区分：`继续查询`（按原厂商任务号续查，不重复收费）/ `重新下载`（只重下并校验）/ `重新生成`（新建执行 ID + 新费用），按钮文案与 title 各自说明；`停止后续步骤` 明确告知在途任务仍可能完成并计费
+- 混合批次：同一次创作的图片与视频作为子任务挂在同一批次下，图片先完成即可在抽屉里预览下载，视频独立继续（A10）
+- 幂等与归属：同幂等键同内容复用原任务、异内容返回 409；批次列表/详情/重试/停止全部按 owner 授权，他人一律 404
+- 并发与租约：worker 单进程按配置维度限并发（视频 2），超出排队不无限 `create_task`；领取走原子 `UPDATE` 租约，未到期不会被重复消费；运行中任务不参与任何容量/TTL 清理
+- 可灵分支同标准：不再「失败静默回退分镜」，下载改为走三层校验并回传实测时长；无鉴权时报 `CONFIG_MISSING` 而不是假装出了分镜
+- 其他修复：`req()` 的 headers 合并顺序（调用方传自定义头会把 `Content-Type` / `Authorization` 整块覆盖掉）；`?tasks=1` 可直接打开任务抽屉（可做书签）
+
+**本次优化与更改的功能 / 模块**
+- 【新增】后台任务：持久化任务服务 + 租约 worker（`creative_tasks.py`）
+- 【新增】任务抽屉：顶部「＋ 新建创作」「任务 N」两个入口，三态筛选 + 搜索 + 分项重试
+- 【新增】创作批次：`creative_batches` 表与 `GET/POST /api/creative-tasks`、`/{batch_id}`、`/retry`、`/cancel`
+- 【修复】视频任务不再随进程消失：重启后按供应商任务号续查，不重复提交收费任务
+- 【修复】提交后页面可继续创作：视频等待不再阻塞输入流程
+- 【修复】可灵链路失败不再静默换成「分镜」冒充交付
+- 【优化】阶段语义：submitting / provider_pending / downloading / validating 如实展示，不做假进度
+- 【优化】接口兼容：`/cw-video/generate-jobs` 与 `/{id}` 保留，内部转发持久化任务，响应结构向后兼容
+- 【优化】数据模型：批次表 + 任务执行字段（供应商任务号、租约、错误码与动作、资产引用）
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.81
+
+**影响范围**
+- 后端：新增 `creative_tasks.py`；`providers.py`（分步执行、`save_video_media`、可灵分支、`video_provider_of_config`）、`routers.py`（任务端点改走持久化、`_cw_video_request_build`、creative-tasks 接口、`POST /creative-tasks`）、`models.py`（`CreativeBatch` + 任务字段）、`schemas.py`（`CWVideoJobOut.batch_id`）、`job_service.py`（`create_job` 支持 `batch_id`）、`main.py`（启动/停止 worker）。
+- 前端：新增 `CreativeTasksDrawer.tsx`、`useCreativeTasks.ts`；`api.ts`（`submitVideoJob` / creative-tasks 方法与 headers 修复）、`CreativeWorkbench.tsx`（顶部两入口、批次创建、提交即返回、结果按 batch 回写、新建创作不删任务）、`styles.css`（`.cwb-new-btn` / `.cwb-task-btn` / `.cwb-submitted` / `.ctd*`）。
+- 行为变化（重要）：**视频生成按钮点完后不再原地等结果**，页面提示「任务已加入后台」并在抽屉里展示真实阶段；成片出现后自动回写到结果区。旧内存任务（V4.80 之前创建、仍在进行中的）无法自动找回，需等其结束或到厂商控制台按任务号取片。
+- 兼容性：`POST/GET /cw-video/generate-jobs` 保留且响应字段只增不改；图片生成接口未改动，仅新增可选 `batch_id`。
+- 部署：需 `docker compose up -d --build`；worker 随后端进程启动（日志出现 `[creative-tasks] worker 已启动`），单进程默认即可，多进程部署靠租约防止重复消费。
+
+**验证**
+- 持久化验收（本地假供应商，零费用）：`scripts/check_creative_tasks.py` **23/23 通过** —— 提交即返回、阶段推进与任务号落库、成片成功 + 资产落库 + 批次聚合 done、重启恢复按原任务号续查且不重新提交、超期转 `needs_attention` 并可 repoll、租约期内不被重复领取、同配置并发 ≤2、归属隔离（他人列表空 / 详情 404）、混合批次图片先就绪视频独立继续、停止后续步骤。
+- P0/P1 未退化：`check_video_pipeline_p0.py` 19/19、`check_video_p1.py` 14/14、`check_video_p0_api.py` 8/8（任务状态相关断言已迁到上面新增用例）。
+- HTTP 冒烟（临时库 + 真实鉴权）：建批次 → 提交视频（带 `X-Batch-Id` / `Idempotency-Key`）→ 列表可见该批次 → 无视频配置时报 `CONFIG_MISSING` 且给出唯一动作，批次归入「需处理」。
+- 无头浏览器渲染：登录态下工作台渲染出「＋ 新建创作」「任务」；`?tasks=1` 打开抽屉，筛选、搜索框、空态文案、需处理分组的任务行均正常渲染，无运行时报错。
+- 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
+
 ## V4.80 P1：交付时长按实测值、出片文件名唯一化——不再「计划 15s 当 15s 交付」
 
 **发布日期**：2026-11-16 14:33

@@ -840,12 +840,14 @@ export interface LoginLog {
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken()
   const res = await fetch(API_BASE + path, {
+    // V4.81：先展开 opts 再合并 headers —— 否则调用方传的自定义头会把
+    // Content-Type / Authorization 整块覆盖掉（幂等键请求头就是这么丢的）。
+    ...opts,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(opts.headers || {}),
     },
-    ...opts,
   })
   if (res.status === 401) {
     clearToken()
@@ -1056,10 +1058,34 @@ export const api = {
     req<any>('/api/cw-video/generate', { method: 'POST', body: JSON.stringify(payload) }),
   // V4.76 出片异步化：页面统一走这条（提交任务 + 轮询），避免反向代理 504
   cwVideoGenerateAsync,
+  // V4.81 / P2：提交即返回（不轮询），进度看「任务」抽屉；同一幂等键不会产生第二次收费任务
+  submitVideoJob: (payload: {
+    analysis: any; platform: string; reference_image?: string; brand_logo?: string; plan: any; options?: any;
+  }, opts: { idempotencyKey?: string; draftId?: string; batchId?: string } = {}) =>
+    req<any>('/api/cw-video/generate-jobs', {
+      method: 'POST', body: JSON.stringify(payload),
+      headers: {
+        ...(opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : {}),
+        ...(opts.draftId ? { 'X-Draft-Id': opts.draftId } : {}),
+        ...(opts.batchId ? { 'X-Batch-Id': opts.batchId } : {}),
+      },
+    }),
   cwVideoGenerateJob: (payload: {
     analysis: any; platform: string; reference_image?: string; brand_logo?: string; plan: any; options?: any;
   }) => req<any>('/api/cw-video/generate-jobs', { method: 'POST', body: JSON.stringify(payload) }),
   cwVideoJob: (jobId: string) => req<any>(`/api/cw-video/generate-jobs/${jobId}`),
+  // V4.81 / P3：创作任务列表（本人批次，服务端唯一事实）
+  createCreativeTask: (payload: { product_name?: string; source_url?: string; material_types?: string[]; platforms?: string[]; draft_id?: string }) =>
+    req<any>('/api/creative-tasks', { method: 'POST', body: JSON.stringify(payload) }),
+  creativeTasks: (params: { status?: string; cursor?: string; limit?: number } = {}) =>
+    req<any>('/api/creative-tasks' + qs(params)),
+  creativeTask: (batchId: string) => req<any>(`/api/creative-tasks/${batchId}`),
+  retryCreativeTask: (batchId: string, jobId: string, action: 'repoll' | 'redownload' | 'regenerate') =>
+    req<any>(`/api/creative-tasks/${batchId}/retry`,
+      { method: 'POST', body: JSON.stringify({ job_id: jobId, action }) }),
+  cancelCreativeTask: (batchId: string, jobId = '') =>
+    req<any>(`/api/creative-tasks/${batchId}/cancel`,
+      { method: 'POST', body: JSON.stringify({ job_id: jobId }) }),
   // V4.75 视频链路自检：报告当前生效的视频模型配置与契约参数是否齐备（不出片）
   cwVideoDiagnose: () => req<any>('/api/cw-video/diagnose'),
   updateCreationHistory: (id: number, payload: {

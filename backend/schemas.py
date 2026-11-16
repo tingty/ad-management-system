@@ -527,4 +527,5 @@ class CWVideoJobOut(BaseModel):
     error: str = ""
     error_code: str = ""
     error_action: str = ""
+    batch_id: str = ""             # V4.81：所属创作批次（任务抽屉按批次聚合展示）
     result: Optional[CWVideoGenerateResult] = None

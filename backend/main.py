@@ -261,10 +261,23 @@ async def start_model_health_scheduler():
     start_daily_scheduler()
 
 
+@app.on_event("startup")
+async def start_creative_worker():
+    """V4.81 / P2：启动持久化创作任务 worker（租约领取 + 按供应商任务号续查）。"""
+    import creative_tasks
+    creative_tasks.start_worker()
+
+
 @app.on_event("shutdown")
 async def stop_model_health_scheduler():
     from model_health import stop_daily_scheduler
     stop_daily_scheduler()
+
+
+@app.on_event("shutdown")
+async def stop_creative_worker():
+    import creative_tasks
+    creative_tasks.stop_worker()
 
 
 @app.get("/api/health")

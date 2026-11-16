@@ -2009,3 +2009,88 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 @media (max-width: 720px) {
   .cwtd { right: 10px; left: 10px; bottom: 10px; width: auto; }
 }
+
+/* ==================== V4.81 / P3：顶部入口 + 任务抽屉 ==================== */
+/* 顶部两个常驻入口：不新增一级导航，控制在标题行右侧 */
+.cwb-new-btn { background: var(--primary); color: #fff; border: none; padding: 8px 14px; border-radius: 9px;
+  font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.cwb-new-btn:hover:not(:disabled) { background: var(--primary2); }
+.cwb-new-btn:disabled { opacity: .5; cursor: not-allowed; }
+.cwb-task-btn { background: var(--card); color: var(--primary); border: 1px solid var(--border);
+  padding: 8px 14px; border-radius: 9px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.cwb-task-btn:hover { border-color: var(--primary2); }
+.cwb-task-btn.on { background: #eef4fb; border-color: var(--primary2); }
+
+/* 提交后的引导条：一句话 + 两个动作，不占额外导航位置 */
+.cwb-submitted { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: -6px 0 14px;
+  padding: 10px 14px; border-radius: 10px; background: #eef4fb; border: 1px solid #d7e5f5;
+  font-size: 13px; color: var(--text); }
+.cwb-link { background: none; border: none; padding: 0; color: var(--primary2); font-size: 13px;
+  font-weight: 600; cursor: pointer; font-family: inherit; }
+.cwb-link:hover { text-decoration: underline; }
+.cwb-link:disabled { opacity: .5; cursor: not-allowed; text-decoration: none; }
+.cwb-link.ghost { color: var(--muted); font-weight: 400; }
+
+/* 抽屉：右侧 400px，遮罩只盖视觉不阻塞底层数据（任务不依赖抽屉存活） */
+.ctd-mask { position: fixed; inset: 0; background: rgba(17, 24, 39, .28); z-index: 60; }
+.ctd { position: fixed; top: 0; right: 0; bottom: 0; width: 400px; max-width: 92vw; z-index: 61;
+  background: var(--card); border-left: 1px solid var(--border); box-shadow: -14px 0 34px rgba(15, 23, 42, .14);
+  display: flex; flex-direction: column; }
+.ctd-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px;
+  border-bottom: 1px solid var(--border); }
+.ctd-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.ctd-close { background: none; border: none; font-size: 22px; line-height: 1; color: var(--muted);
+  cursor: pointer; padding: 0 4px; font-family: inherit; }
+.ctd-close:hover { color: var(--text); }
+.ctd-filters { display: flex; align-items: center; gap: 6px; padding: 10px 16px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); }
+.ctd-chip { background: #f4f7fb; color: var(--muted); border: 1px solid transparent; border-radius: 999px;
+  padding: 5px 11px; font-size: 12px; cursor: pointer; font-family: inherit; }
+.ctd-chip:hover { color: var(--primary); }
+.ctd-chip.on { background: #eef4fb; color: var(--primary); border-color: var(--primary2); font-weight: 600; }
+.ctd-search { flex: 1; min-width: 120px; border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 10px; font-size: 12px; font-family: inherit; color: var(--text); }
+.ctd-search:focus { outline: none; border-color: var(--primary2); }
+.ctd-body { flex: 1; overflow-y: auto; padding: 8px 12px 12px; }
+.ctd-empty { padding: 28px 12px; text-align: center; font-size: 13px; color: var(--muted); line-height: 1.7; }
+.ctd-err { margin: 8px 4px; padding: 8px 10px; border-radius: 8px; background: #fdecec;
+  color: #b42318; font-size: 12px; }
+.ctd-row { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; overflow: hidden;
+  background: var(--card); }
+.ctd-row.open { border-color: var(--primary2); }
+.ctd-row-head { display: block; width: 100%; text-align: left; background: none; border: none;
+  padding: 10px 12px; cursor: pointer; font-family: inherit; }
+.ctd-row-head:hover { background: #f9fbfe; }
+.ctd-row-line1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ctd-prod { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.ctd-badge { flex: 0 0 auto; font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+.ctd-badge.active { background: #fff4e6; color: var(--warn); }
+.ctd-badge.done { background: #eaf7ee; color: var(--ok); }
+.ctd-badge.needs { background: #fdecec; color: #b42318; }
+.ctd-row-line2 { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 5px; font-size: 11px; color: var(--muted); }
+.ctd-detail { border-top: 1px dashed var(--border); padding: 10px 12px; background: #fcfdff; }
+.ctd-sub { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px;
+  background: var(--card); }
+.ctd-sub-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
+.ctd-sub-stage { color: var(--muted); }
+.ctd-sub-ok { margin-left: auto; color: var(--ok); }
+.ctd-assets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.ctd-assets a { display: block; width: 74px; height: 74px; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--border); background: #f4f7fb; }
+.ctd-assets img, .ctd-assets video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ctd-sub-err { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: #fdecec;
+  color: #b42318; font-size: 12px; line-height: 1.6; }
+.ctd-sub-msg { color: #7a271a; word-break: break-all; }
+.ctd-sub-act { color: #1f4e79; margin-top: 2px; }
+.ctd-sub-task { color: var(--muted); font-size: 11px; margin-top: 2px; }
+.ctd-sub-note { margin-top: 8px; font-size: 12px; color: var(--warn); }
+.ctd-sub-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.ctd-sub-actions .btn.small { padding: 4px 10px; font-size: 12px; }
+.ctd-detail-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; }
+.ctd-link { background: none; border: none; padding: 0; color: var(--primary2); font-size: 12px;
+  cursor: pointer; font-family: inherit; }
+.ctd-link:hover { text-decoration: underline; }
+.ctd-bid { margin-left: auto; color: var(--muted); font-size: 11px; }
+.ctd-foot { padding: 10px 16px; border-top: 1px solid var(--border); font-size: 11px;
+  color: var(--muted); line-height: 1.6; }

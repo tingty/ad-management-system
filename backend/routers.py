@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request, Response, Header
 from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -38,6 +38,11 @@ from creation_plan_service import (
     get_plan, plan_to_dict,
 )
 from version import ENABLE_AUTO_CREATION_PLAN
+
+# V4.81 / P2-P3：出片任务持久化（唯一任务事实在库，进程重启不丢）与创作批次列表
+import creative_tasks
+from creative_tasks import create_video_batch, STAGE_LABEL as CREATIVE_STAGE_LABEL
+from job_service import IdempotencyConflict
 from image_capabilities import public_capabilities
 import job_service
 from auth import (current_user, require_roles, verify_password, hash_password, create_token,
@@ -935,10 +940,10 @@ def api_cw_video_diagnose(db: Session = Depends(get_db),
     return out
 
 
-# ---------------------- V4.76 出片异步化：提交即返回 job_id + 前端轮询取结果 ----------------------
-_CW_VIDEO_JOBS: dict = {}
-_CW_VIDEO_JOB_TTL = 3 * 3600   # 任务与结果保留 3 小时：前端刷新/重进页面仍能取回
-_CW_VIDEO_JOB_MAX = 60         # 内存里最多保留 60 条，超出丢弃最旧的
+# ---------------------- V4.81 出片任务持久化（P2）：提交即返回，worker 驱动 ----------------------
+# V4.76 曾把任务放在进程内字典 `_CW_VIDEO_JOBS` 里：刷新页面靠前端 sessionStorage 续命，服务
+# 重启全丢，多进程部署还会「查到另一个进程 404」。现在唯一事实在数据库（creative_tasks），
+# 这里只负责把持久化任务映射成前端已用的响应结构，不再保留第二份内存状态。
 CW_VIDEO_EVIDENCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", "video_evidence")
 
 
@@ -961,93 +966,178 @@ def _persist_video_evidence(user_id: int, payload: dict) -> str:
     return name
 
 
-def _cw_video_job_sweep() -> None:
-    """清理过期任务（V4.79 / F06）：只清「已完成且过了 TTL」的，运行中的任务绝不清理。"""
-    now = time.time()
-    for jid in [k for k, v in _CW_VIDEO_JOBS.items()
-                if now - v["created_at"] > _CW_VIDEO_JOB_TTL
-                and v.get("status") not in ("queued", "running")]:
-        _CW_VIDEO_JOBS.pop(jid, None)
-    while len(_CW_VIDEO_JOBS) > _CW_VIDEO_JOB_MAX:
-        finished = [(k, v["created_at"]) for k, v in _CW_VIDEO_JOBS.items()
-                    if v.get("status") not in ("queued", "running")]
-        if not finished:
-            break
-        oldest = min(finished, key=lambda kv: kv[1])[0]
-        _CW_VIDEO_JOBS.pop(oldest, None)
-
-
-def _cw_video_job_view(job_id: str, user=None) -> CWVideoJobOut:
-    job = _CW_VIDEO_JOBS.get(job_id)
-    if not job:
-        raise HTTPException(404, "视频任务不存在或已过期，请重新生成")
-    # V4.79：任务归属校验。此前只校验角色，任何有编辑权的人拿到 job_id 就能读到他人任务
-    # 与成片。这里按 owner 比对，且用 404 而不是 403，避免泄露「该任务存在」。
-    owner = job.get("user_id")
-    if user is not None and owner and getattr(user, "id", None) != owner:
-        raise HTTPException(404, "视频任务不存在或已过期，请重新生成")
-    end = job.get("finished_at") or time.time()
-    return CWVideoJobOut(
-        job_id=job_id, status=job["status"], stage=job.get("stage", ""),
-        elapsed_sec=int(max(0.0, end - job["started_at"])),
-        error=job.get("error", ""),
-        error_code=job.get("error_code", ""),
-        error_action=job.get("error_action", ""),
-        result=CWVideoGenerateResult(**job["result"]) if job.get("result") else None,
+def _cw_video_result_of(job) -> CWVideoGenerateResult:
+    """把持久化任务还原成前端已用的结果结构（videos / storyboard / 错误字段 / 证据）。"""
+    snap = job.request_json or {}
+    res = job.result_json or {}
+    plan = dict(snap.get("plan") or {})
+    aspect = str(snap.get("aspect") or plan.get("aspect") or "")
+    storyboard = dict(plan)
+    storyboard.setdefault("platform", snap.get("platform") or "")
+    storyboard.setdefault("options", snap.get("options") or {})
+    storyboard.setdefault("shots", [])
+    storyboard.setdefault("duration_sec", snap.get("duration") or 15)
+    storyboard["duration_sec_actual"] = res.get("duration_sec") or 0
+    if aspect:
+        storyboard["aspect"] = aspect
+        storyboard["output_aspect"] = aspect
+    videos = [
+        CWVideoAsset(type="video", url=a.get("url") or "",
+                     caption=a.get("caption") or snap.get("product") or "",
+                     duration_sec=a.get("duration_sec") or 0,
+                     duration_source=a.get("duration_source") or "")
+        for a in (res.get("assets") or []) if isinstance(a, dict) and a.get("url")
+    ]
+    ev = dict(job.evidence_json or {})
+    if job.error_code and ev:
+        try:
+            ev["log_file"] = _persist_video_evidence(job.owner_id or 0, ev)
+        except Exception:
+            pass
+    provider = "kling" if (job.provider_model and "kling" in (job.provider_model or "").lower()) else "model"
+    return CWVideoGenerateResult(
+        provider=provider if res.get("assets") else "storyboard",
+        model=job.provider_model or "",
+        videos=videos, storyboard=storyboard,
+        model_info=ModelInfo(provider=provider if job.provider_model else "storyboard",
+                             model=job.provider_model or "", role="video",
+                             fallback=not job.provider_model,
+                             config_id=job.provider_config_id, source="llm" if job.provider_model else "local"),
+        note=res.get("note") or (job.error_message or ""),
+        output_aspect=aspect, source="llm" if job.provider_model else "local",
+        stage=job.error_stage or job.stage or "",
+        error_code=job.error_code or "",
+        error_message=job.error_message or "",
+        error_action=job.error_action or "",
+        error_task_id=job.provider_task_id or "",
+        evidence=ev,
     )
 
 
-async def _cw_video_job_runner(job_id: str, req: CWVideoGenerateRequest, user_id: Optional[int]) -> None:
-    """后台执行出片：自建 DB 会话（请求会话在接口返回时就已关闭）。"""
-    job = _CW_VIDEO_JOBS.get(job_id)
-    if not job:
-        return
-    job.update(status="running", stage="已提交，等待模型出片")
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter_by(id=user_id).first() if user_id else None
-        res = await _cw_video_generate_impl(req, db, user)
-        dump = res.model_dump()
-        if res.error_code:
-            # V4.79 / F03：链路跑完但没出片 → needs_attention，绝不写 done。
-            # 此前实现层永远不抛异常，runner 无条件写 done + videos=[]，界面显示「完成」却没有成片。
-            job.update(status="needs_attention", stage="未出片（需处理）", result=dump,
-                       error_code=res.error_code, error_action=res.error_action,
-                       error=res.error_message[:400], finished_at=time.time())
-        else:
-            job.update(status="done", stage="完成", result=dump, finished_at=time.time())
-    except Exception as e:
-        job.update(status="error", stage="失败",
-                   error=f"{type(e).__name__}: {str(e)[:400]}", finished_at=time.time())
-    finally:
-        db.close()
+_CW_JOB_STATUS = {"succeeded": "done", "failed": "needs_attention",
+                  "needs_attention": "needs_attention", "canceled": "needs_attention",
+                  "queued": "queued", "running": "running"}
+
+
+def _cw_video_job_out(job) -> CWVideoJobOut:
+    """持久化任务 → 兼容响应。status 沿用前端已有的 done / needs_attention 语义。"""
+    status = _CW_JOB_STATUS.get(job.status or "queued", "running")
+    started = job.created_at
+    end = job.finished_at or job.updated_at or started
+    elapsed = int(max(0.0, (end - started).total_seconds())) if (started and end) else 0
+    return CWVideoJobOut(
+        job_id=job.job_id, status=status,
+        stage=(CREATIVE_STAGE_LABEL.get(job.stage or "") or job.stage or ""),
+        elapsed_sec=elapsed,
+        error=(job.error_message or "")[:400],
+        error_code=job.error_code or "",
+        error_action=job.error_action or "",
+        batch_id=job.batch_id or "",
+        result=_cw_video_result_of(job),
+    )
+
+
+def _cw_owned_job(db: Session, job_id: str, user) -> GenerationJob:
+    job = db.query(GenerationJob).filter_by(job_id=job_id, kind="video").first()
+    # 归属校验：用 404 而不是 403，避免泄露「该任务存在」
+    if not job or (user is not None and job.owner_id
+                   and getattr(user, "id", None) != job.owner_id):
+        raise HTTPException(404, "视频任务不存在或已过期，请重新生成")
+    return job
 
 
 @router.post("/cw-video/generate-jobs", response_model=CWVideoJobOut)
-async def api_cw_video_create_job(req: CWVideoGenerateRequest,
-                                  user: User = Depends(require_roles(*CAN_EDIT))):
-    """提交视频出片任务并立即返回 job_id（V4.76，前端默认走这里）。
+async def api_cw_video_create_job(req: CWVideoGenerateRequest, db: Session = Depends(get_db),
+                                  user: User = Depends(require_roles(*CAN_EDIT)),
+                                  idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+                                  draft_id: str = Header(default="", alias="X-Draft-Id"),
+                                  batch_id: str = Header(default="", alias="X-Batch-Id")):
+    """提交视频出片任务并立即返回 job_id（V4.81 起落库，进程重启不丢）。
 
-    出片要等模型 1–6 分钟。若让 HTTP 请求一直挂着，反向代理会先超时——
-    宿主 nginx 默认 proxy_read_timeout 60s、Cloudflare 100s——前端只会看到
-    「504 Gateway Time-out」，而任务其实还在厂商侧跑。改为后台任务后，
-    代理超时与出片时长彻底解耦，前端每 2s 轮询一次状态即可。
+    出片要等模型 1–6 分钟。若让 HTTP 请求一直挂着，反向代理会先超时——宿主 nginx 默认
+    proxy_read_timeout 60s、Cloudflare 100s——前端只会看到 504，而任务其实还在厂商侧跑。
+    现在提交只做「落库 + 返回 ID」，出片由后台 worker 分阶段推进；同一幂等键重复提交
+    不会产生第二次收费任务。
     """
-    _cw_video_job_sweep()
-    job_id = uuid.uuid4().hex
-    now = time.time()
-    _CW_VIDEO_JOBS[job_id] = {"status": "queued", "stage": "排队中", "created_at": now,
-                              "started_at": now, "result": None, "error": "",
-                              "error_code": "", "error_action": "",
-                              "user_id": getattr(user, "id", None)}
-    asyncio.create_task(_cw_video_job_runner(job_id, req, getattr(user, "id", None)))
-    return _cw_video_job_view(job_id, user)
+    built = _cw_video_request_build(req, db)
+    payload = {
+        "product": built["product"], "platform": built["platform"],
+        "prompt": built["prompt"], "meta": built["meta"], "plan": built["plan"],
+        "analysis": built["analysis"], "options": built["options"],
+        "aspect": built["output_aspect"], "duration": built["duration"],
+        "reference_image": req.reference_image or "",
+        "source_url": str((built["analysis"] or {}).get("url") or ""),
+    }
+    try:
+        batch, job, _created = create_video_batch(db, user, payload,
+                                                 idempotency_key=idempotency_key,
+                                                 draft_id=draft_id, batch_id=batch_id)
+    except IdempotencyConflict as e:
+        raise HTTPException(409, str(e))
+    if built["has_video_cfg"] and job.status in ("queued", "running"):
+        # 提交后立即催一次，别等 worker 的下一拍（用户点了生成就该马上看到「提交中」）
+        job.next_poll_at = utcnow()
+        job.updated_at = utcnow()
+        db.commit()
+    return _cw_video_job_out(job)
 
 
 @router.get("/cw-video/generate-jobs/{job_id}", response_model=CWVideoJobOut)
-def api_cw_video_get_job(job_id: str, user: User = Depends(require_roles(*CAN_EDIT))):
-    """轮询出片任务：done 时 result 与同步接口结构完全一致；needs_attention 时带失败分类。"""
-    return _cw_video_job_view(job_id, user)
+def api_cw_video_get_job(job_id: str, db: Session = Depends(get_db),
+                         user: User = Depends(require_roles(*CAN_EDIT))):
+    """轮询出片任务：done 时 result 与同步接口结构一致；needs_attention 时带失败分类与动作。"""
+    return _cw_video_job_out(_cw_owned_job(db, job_id, user))
+
+
+# ---------------------- V4.81 / P3：创作任务列表（批次 + 子任务） ----------------------
+@router.post("/creative-tasks")
+def api_creative_task_create(body: dict, db: Session = Depends(get_db),
+                             user: User = Depends(require_roles(*CAN_EDIT))):
+    """先建批次头：图片与视频都要排队时，各子任务挂到同一批次上（A10 混合任务）。"""
+    return creative_tasks.create_batch(db, user, body or {})
+
+
+@router.get("/creative-tasks")
+def api_creative_tasks(db: Session = Depends(get_db), user: User = Depends(require_roles(*CAN_EDIT)),
+                       status: str = "", cursor: str = "", limit: int = 20):
+    """本人创作批次列表。status = active（进行中）/ done（已完成）/ needs（需处理）"""
+    return creative_tasks.list_batches(db, user, status=status, cursor=cursor, limit=limit)
+
+
+@router.get("/creative-tasks/{batch_id}")
+def api_creative_task_detail(batch_id: str, db: Session = Depends(get_db),
+                             user: User = Depends(require_roles(*CAN_EDIT))):
+    try:
+        return creative_tasks.get_batch(db, user, batch_id)
+    except LookupError:
+        raise HTTPException(404, "创作任务不存在")
+
+
+@router.post("/creative-tasks/{batch_id}/retry")
+def api_creative_task_retry(batch_id: str, body: dict, db: Session = Depends(get_db),
+                            user: User = Depends(require_roles(*CAN_EDIT))):
+    """分项重试：action = repoll（继续查询原任务）/ redownload（只重下）/ regenerate（重新生成）。"""
+    action = str((body or {}).get("action") or "").strip()
+    job_id = str((body or {}).get("job_id") or "").strip()
+    try:
+        out = creative_tasks.retry(db, user, batch_id, job_id, action)
+    except LookupError:
+        raise HTTPException(404, "创作任务不存在")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return out
+
+
+@router.post("/creative-tasks/{batch_id}/cancel")
+def api_creative_task_cancel(batch_id: str, body: dict | None = None, db: Session = Depends(get_db),
+                             user: User = Depends(require_roles(*CAN_EDIT))):
+    """停止后续步骤（不做供应商取消：厂商无取消接口时，在途任务仍可能完成并计费）。"""
+    job_id = str((body or {}).get("job_id") or "").strip()
+    try:
+        return creative_tasks.cancel(db, user, batch_id, job_id)
+    except LookupError:
+        raise HTTPException(404, "创作任务不存在")
 
 
 @router.post("/cw-video/generate", response_model=CWVideoGenerateResult)
@@ -1061,9 +1151,11 @@ async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depen
     return await _cw_video_generate_impl(req, db, user)
 
 
-async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user) -> CWVideoGenerateResult:
-    """出片主流程（同步接口与后台任务共用）：
-    解析视频配置 → 组装可消费提示词 → 调模型（含厂商侧异步轮询取片）→ 归一化产物与比例标注。
+def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
+    """出片请求构建（同步接口 / 后台任务共用）：提示词、元数据、实际比例、配置判定。
+
+    抽出来是为了让「手动出片」与「后台任务出片」用**同一份**提示词与比例推导：两边各写
+    一遍迟早漂移，用户会发现同一个分镜在两条链路里出的片子不一样。
     """
     plan = req.plan or {}
     analysis = req.analysis or {}
@@ -1138,7 +1230,27 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
         except Exception:
             pass
 
-    has_video_cfg = bool(cfg and cfg.api_key and cfg.base_url and cfg.model)
+    return {
+        "plan": plan, "analysis": analysis, "platform": platform, "options": options,
+        "product": product, "brief": brief, "cfg": cfg, "output_aspect": output_aspect,
+        "requested_aspect": requested_aspect, "duration": duration, "prompt": prompt,
+        "meta": meta, "skip_note": skip_note, "forced": forced, "cfg_params": cfg_params,
+        "has_video_cfg": bool(cfg and cfg.api_key and cfg.base_url and cfg.model),
+    }
+
+
+async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user) -> CWVideoGenerateResult:
+    """出片主流程（同步接口与后台任务共用）：
+    解析视频配置 → 组装可消费提示词 → 调模型（含厂商侧异步轮询取片）→ 归一化产物与比例标注。
+    """
+    built = _cw_video_request_build(req, db)
+    plan, analysis = built["plan"], built["analysis"]
+    platform, options = built["platform"], built["options"]
+    product, brief = built["product"], built["brief"]
+    cfg, output_aspect, requested_aspect = built["cfg"], built["output_aspect"], built["requested_aspect"]
+    duration, prompt, meta = built["duration"], built["prompt"], built["meta"]
+    skip_note, has_video_cfg = built["skip_note"], built["has_video_cfg"]
+    forced, cfg_params = built["forced"], built["cfg_params"]
     provider = get_video(db) if has_video_cfg else StoryboardVideo()
     if has_video_cfg:
         m_info = ModelInfo(provider=("kling" if (cfg.provider or "") == "keling" else "model"),
@@ -1339,7 +1451,8 @@ async def create_generation_job(body: dict, db: Session = Depends(get_db),
     try:
         job, created = job_service.create_job(
             db, body, user, idempotency_key=str(body.get("idempotency_key") or "").strip(),
-            kind=kind, plan_id=plan_id, plan_version=plan_version)
+            kind=kind, plan_id=plan_id, plan_version=plan_version,
+            batch_id=str(body.get("batch_id") or "").strip())
     except ValidationError as e:
         raise HTTPException(422, detail={
             "message": "生成任务入参不合法，已在排队前拒绝",

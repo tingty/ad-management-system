@@ -121,6 +121,47 @@ class GenerationJob(Base):
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
     finished_at = Column(DateTime, nullable=True)
+    # ---- V4.81 / P2：视频子任务的持久化执行字段（重启后可按供应商任务号继续查询）----
+    batch_id = Column(String(40), nullable=True, index=True)     # 所属创作批次
+    stage = Column(String(32), nullable=True)                    # submitting/provider_pending/downloading/validating
+    provider_config_id = Column(Integer, nullable=True, index=True)   # 用哪条模型配置（并发按此维度限制）
+    provider_model = Column(String(128), nullable=True)
+    provider_task_id = Column(String(200), nullable=True, index=True)  # 供应商任务号（拿片/续查的唯一凭据）
+    provider_request_id = Column(String(200), nullable=True)     # 脱敏请求追踪号，只做取证
+    next_poll_at = Column(DateTime, nullable=True, index=True)   # 下一次该被 worker 领取的时间
+    heartbeat_at = Column(DateTime, nullable=True)
+    lease_until = Column(DateTime, nullable=True, index=True)    # 租约：避免多 worker 重复消费
+    error_code = Column(String(40), nullable=True)
+    error_stage = Column(String(32), nullable=True)
+    error_message = Column(Text, nullable=True)
+    error_action = Column(Text, nullable=True)                   # 唯一可执行动作
+    last_provider_status = Column(String(40), nullable=True)     # 供应商最近一次回报的状态原文
+    asset_ids = Column(JSON, nullable=True)                      # 已归档资产（资产以 asset_id 命名）
+    evidence_json = Column(JSON, nullable=True)                  # 脱敏证据（提交/轮询/下载摘要）
+
+
+class CreativeBatch(Base):
+    """V4.81 / P2：一次「创作」的批次记录（一个批次可含图片、视频多个子任务）。
+
+    为什么单独建表：任务列表要按「创作」聚合展示（产品名 / 类型 / 真实阶段 / 已等待 /
+    成功数量），若每次列表都按 generation_jobs 分组聚合，页码与计数会随子任务写入抖动。
+    批次行只在创建时写入，状态由子任务聚合回写，列表直接读这一行。
+    草稿 `draft_id` 与 `batch_id` 独立：新建创作只换草稿，不动已有批次与结果。
+    """
+    __tablename__ = "creative_batches"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(String(40), unique=True, index=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    owner_name = Column(String(64), nullable=True)
+    draft_id = Column(String(40), nullable=True, index=True)
+    product_name = Column(String(200), nullable=True)
+    source_url = Column(String(1000), nullable=True)
+    material_types = Column(JSON, nullable=True)     # ["image","video"]
+    platforms = Column(JSON, nullable=True)          # ["TikTok", ...]
+    status = Column(String(24), default="queued")    # 聚合：queued/running/done/partial/needs_attention/canceled
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    finished_at = Column(DateTime, nullable=True)
 
 
 class CreativeAsset(Base):

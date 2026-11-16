@@ -33,7 +33,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{os.path.join(TMP, 'api.db')}"
 
 from database import Base, engine, SessionLocal  # noqa: E402
 import models  # noqa: E402
-from models import ModelConfig, User  # noqa: E402
+from models import GenerationJob, ModelConfig, User  # noqa: E402
 import routers  # noqa: E402
 from schemas import CWVideoGenerateRequest  # noqa: E402
 
@@ -142,49 +142,42 @@ async def main():
             persisted = bool(saved.get("submit")) and bool(saved.get("polls")) and "model" in saved
         record("A14 证据落盘（含 submit / polls）", persisted, detail)
 
-        print("\n[3] 后台任务状态（A13）")
-        job_id = "qa_job_1"
-        now = time.time()
-        routers._CW_VIDEO_JOBS[job_id] = {"status": "queued", "stage": "排队中", "created_at": now,
-                                          "started_at": now, "result": None, "error": "",
-                                          "error_code": "", "error_action": "", "user_id": uid}
-        await routers._cw_video_job_runner(job_id, req, uid)
-        view = routers._cw_video_job_view(job_id, db.query(User).first())
-        record("A13 失败任务 → needs_attention（不再是 done）",
-               view.status == "needs_attention" and view.error_code == "POLL_TIMEOUT"
-               and view.result is not None and not view.result.videos,
-               f"status={view.status} code={view.error_code}")
+        print("\n[3] 后台任务状态（V4.81 起改由持久化任务承载）")
+        # 任务状态语义（needs_attention / done / 越权 404）已迁到 creative_tasks，
+        # 由 scripts/check_creative_tasks.py 覆盖；这里只校验「入队即可查到」这一条链路。
+        import creative_tasks
+        payload = {
+            "product": "测试产品", "platform": "TikTok",
+            "prompt": "产品：测试产品", "meta": {"duration": 15, "aspect": "9:16"},
+            "plan": {"aspect": "9:16", "duration_sec": 15, "shots": []},
+            "analysis": {"product": "测试产品"}, "options": {}, "aspect": "9:16", "duration": 15,
+        }
+        batch, pjob, created = creative_tasks.create_video_batch(
+            db, db.query(User).first(), payload, idempotency_key="p0api")
+        record("A13 入队即落库（status=queued / stage=submitting / 带批次）",
+               created and pjob.status == "queued" and pjob.stage == "submitting"
+               and bool(pjob.batch_id),
+               f"batch={pjob.batch_id} status={pjob.status} stage={pjob.stage}")
 
-        print("\n[4] 成功任务状态")
-        wipe()
-        seed(name="阿里千问视频模型", provider="aliyun-maas-video", model="ok-async",
-             base_url=base, params=video_params)
-        job_id = "qa_job_2"
-        routers._CW_VIDEO_JOBS[job_id] = {"status": "queued", "stage": "排队中", "created_at": now,
-                                          "started_at": now, "result": None, "error": "",
-                                          "error_code": "", "error_action": "", "user_id": uid}
-        await routers._cw_video_job_runner(job_id, req, uid)
-        view = routers._cw_video_job_view(job_id, db.query(User).first())
-        vids = view.result.videos if view.result else []
-        fp = os.path.join(routers.UPLOAD_DIR, os.path.basename(vids[0].url)) if vids else ""
-        from providers import verify_video_file
-        vin = verify_video_file(fp) if fp else {"ok": False}
-        record("A10 成功任务 → done 且有可播放本地产物",
-               view.status == "done" and len(vids) == 1 and vin.get("ok") and not (view.result and view.result.error_code),
-               f"status={view.status} videos={len(vids)} container={vin.get('container')}")
-        if fp and os.path.exists(fp):
-            os.remove(fp)
+        print("\n[4] 兼容响应结构")
+        out = routers._cw_video_job_out(pjob)
+        record("兼容视图字段齐全（job_id / status / stage / result / batch_id）",
+               out.job_id == pjob.job_id and out.status == "queued" and out.batch_id == pjob.batch_id
+               and out.result is not None and bool(out.stage),
+               f"status={out.status} stage={out.stage} storyboard_shots={len(out.result.storyboard.get('shots') or [])}")
 
         print("\n[5] 越权读任务（F06）")
         other = User(username="other", email="o@test.local", display_name="O", role="editor", password_hash="x", salt="x")
         db.add(other); db.commit(); db.refresh(other)
         try:
-            routers._cw_video_job_view(job_id, other)
+            routers.api_cw_video_get_job(pjob.job_id, db=db, user=other)
             record("A15 他人任务不可读", False, "未拦截")
         except Exception as e:
-            record("A15 他人任务不可读", "404" in str(e) or getattr(e, "status_code", 0) == 404,
+            record("A15 他人任务不可读", getattr(e, "status_code", 0) == 404,
                    f"{type(e).__name__}: {e}")
-        routers._CW_VIDEO_JOBS.clear()
+        db.query(GenerationJob).filter_by(job_id=pjob.job_id).delete()
+        db.commit()
+
     finally:
         srv.shutdown()
         db.close()

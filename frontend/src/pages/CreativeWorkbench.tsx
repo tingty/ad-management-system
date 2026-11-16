@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import VideoStudio, { VideoState } from './VideoStudio'
 import { cwTaskBegin, cwTaskDismiss, cwTaskEnd, cwTaskReset, getCwTask, type CwStageStatus, type CwTaskStage } from '../cwTask'
+import CreativeTasksDrawer from '../CreativeTasksDrawer'
+import { useCreativeTasks } from '../useCreativeTasks'
 
 type Route = {
   key: string
@@ -161,6 +163,17 @@ export default function CreativeWorkbench() {
 
   const [toast, setToast] = useState<string | null>(null)
 
+  /* V4.81 / P3：多任务会话
+     - draftId：草稿标识，新建创作只换草稿，不动任何已有任务与结果；
+     - pendingBatch：本次提交的视频批次，服务端跑完后按 batch_id 回写结果（旧任务不会污染新草稿）；
+     - drawerOpen：任务抽屉开关（任务事实在服务端，见 useCreativeTasks）。 */
+  const [draftId, setDraftId] = useState(() => 'd_' + Math.random().toString(36).slice(2, 10))
+  const [pendingBatch, setPendingBatch] = useState('')
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [submittedBatch, setSubmittedBatch] = useState('')
+  const applyingRef = useRef('')
+  const tasks = useCreativeTasks(true)
+
   // V4.55 新增：单独放大查阅（灯箱）
   const [lightbox, setLightbox] = useState<any>(null)
 
@@ -209,6 +222,42 @@ export default function CreativeWorkbench() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // V4.81：支持 ?tasks=1 直接打开任务抽屉（可做书签 / 从通知里跳回来）
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search)
+      if (q.get('tasks') === '1') setDrawerOpen(true)
+    } catch { /* 忽略 */ }
+  }, [])
+
+  /* V4.81 / P3：视频任务在服务端跑，结果按 batch_id 回写。
+     只回写「本次草稿提交的那个批次」，旧任务完成后回到页面也不会覆盖当前空白草稿。 */
+  useEffect(() => {
+    if (!pendingBatch || applyingRef.current === pendingBatch) return
+    const b = tasks.items.find(x => x.batch_id === pendingBatch)
+    if (!b) return
+    if (['queued', 'running'].includes(b.status)) return
+    applyingRef.current = pendingBatch
+    ;(async () => {
+      const d = await tasks.detail(pendingBatch)
+      if (d && d.draft_id && d.draft_id !== draftId) { setPendingBatch(''); return }
+      const sub = (d?.subtasks || []).find((x: any) => x.kind === 'video')
+      if (!sub) { setPendingBatch(''); return }
+      const vids = (sub.assets || []).map((a: any) => ({
+        type: 'video', url: a.url, caption: a.caption || '',
+        duration_sec: sub.duration_sec || 0, duration_source: sub.duration_source || '',
+      }))
+      const fail = sub.error_code
+        ? { code: sub.error_code, message: sub.error_message || '', action: sub.error_action || '',
+            stage: sub.error_stage || '', taskId: sub.provider_task_id || '', evidence: null }
+        : null
+      setVs(s => ({ ...s, videos: vids, note: sub.note || '', generating: false, videoFail: fail }))
+      if (vids.length) showToast(`视频已生成 ${vids.length} 个（${sub.duration_sec ? sub.duration_sec + 's · 实测' : '可在结果区预览下载'}）`)
+      else if (fail) showToast(`视频未出片（${fail.code}）—— 点顶部「任务」查看原因与处理建议`)
+      setPendingBatch('')
+    })()
+  }, [tasks.items, pendingBatch, draftId])
 
   /* V4.77 素材创作任务常驻：把「批量生成」的实时进度同步到全局任务栏。
      切换菜单时工作台只是隐藏不卸载（见 App.tsx），请求与状态都在；
@@ -336,7 +385,7 @@ export default function CreativeWorkbench() {
     return selected.length * 2
   }
 
-  async function generateImages(hid: number | null): Promise<{ okImages: number; anyFailed: boolean; errs: string[] }> {
+  async function generateImages(hid: number | null, batchId = ''): Promise<{ okImages: number; anyFailed: boolean; errs: string[] }> {
     const errs: string[] = []
     // V4.60 / B3：归一化为合法 LandingAnalysis（channels 转成 [{platform,reason}]），否则文案 / 出图端点会 422。
     const analysis = normalizeAnalysis(cw?.analysis)
@@ -422,6 +471,7 @@ export default function CreativeWorkbench() {
               logo: (injectLogo && brandLogo) ? brandLogo : '',
             },
             archive: hid ? { history_id: hid, platform: p, lang: 'en' } : undefined,
+            batch_id: batchId || undefined,   // V4.81：并入同一次「创作」批次
             idempotency_key: `cw_${p}_${genIdx}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
           }
           setJobs(j => [...j, { platform: p, jobId: null, status: 'submitting', progress: 0, images: [], route }])
@@ -475,27 +525,30 @@ export default function CreativeWorkbench() {
     return { okImages, anyFailed, errs }
   }
 
-  async function generateVideo(hid: number | null): Promise<{ ok: boolean; fail: any }> {
+  async function generateVideo(hid: number | null, batchId = ''): Promise<{ ok: boolean; fail: any; submitted?: boolean }> {
     if (!vs.plan || !vs.plan.shots?.length) return { ok: false, fail: null }
     const analysis = normalizeAnalysis(cw?.analysis)
     if (selectedBrand && selectedBrand.trim()) analysis.brand = selectedBrand.trim()
     setVs(s => ({ ...s, generating: true, error: '', videos: [], note: '' }))
     try {
-      // V4.76：出片走「提交任务 + 轮询」，避免同步长请求被反向代理拦成 504
-      const r: any = await api.cwVideoGenerateAsync({
+      // V4.81 / P3：提交即返回，页面不再等 1–6 分钟；进度看顶部「任务」抽屉。
+      // 同一幂等键重复点击只会拿到同一任务，不会产生第二次收费出片。
+      const job: any = await api.submitVideoJob({
         analysis, platform: selectedPlatform,
         reference_image: referenceImage || '',
         brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
         plan: vs.plan, options: { ...vs.options, prompt_hint: vs.options.prompt_hint },
-      }, info => setProgressText(`视频出片中（已等待 ${info.elapsed} 秒${info.stage ? ' · ' + info.stage : ''}）…`))
-      const fail = r?.error_code
-        ? { code: String(r.error_code), message: r.error_message || '', action: r.error_action || '', stage: r.stage || '', taskId: r.error_task_id || '', evidence: r.evidence || null }
-        : null
-      setVs(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', videoModel: r?.model_info || s.videoModel, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '', videoFail: fail }))
-      return { ok: (r?.videos || []).length > 0, fail }
+      }, {
+        idempotencyKey: `cwvid_${batchId || draftId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        draftId, batchId,
+      })
+      setVs(s => ({ ...s, generating: false }))
+      if (job?.batch_id) { setPendingBatch(job.batch_id); setSubmittedBatch(job.batch_id) }
+      return { ok: false, fail: null, submitted: true }
     } catch (e: any) {
-      setVs(s => ({ ...s, generating: false, error: '视频生成失败：' + (e?.message || ''), videoFail: null }))
-      return { ok: false, fail: { code: 'CLIENT_ERROR', message: e?.message || '', action: '稍后重试；连续失败请展开「诊断视频配置」核对链路。' } }
+      const fail = { code: 'CLIENT_ERROR', message: e?.message || '', action: '稍后重试；连续失败请展开「诊断视频配置」核对链路。' }
+      setVs(s => ({ ...s, generating: false, error: '视频提交失败：' + (e?.message || ''), videoFail: fail }))
+      return { ok: false, fail }
     }
   }
 
@@ -509,24 +562,46 @@ export default function CreativeWorkbench() {
     let hid: number | null = null
     try { const h: any = await api.createCreationHistory({ analysis: cw?.analysis || {}, platform: selected[0] || '', lang: 'en' }).catch(() => null); hid = h?.id ?? null; setHistoryId(hid) } catch { /* 历史可选 */ }
     if (planId) await api.updateCreativePlan(planId, { status: 'generating', history_id: hid ?? undefined }).catch(() => {})
+    // V4.81：先建批次头，图片与视频子任务挂在同一次「创作」下（A10：图片先完成即可预览下载）
+    let batchId = ''
+    if (doImg || doVid) {
+      const bh: any = await api.createCreativeTask({
+        product_name: String((cw as any)?.title || (cw as any)?.analysis?.product || '').slice(0, 120),
+        source_url: String((cw as any)?.snapshot?.final_url || input || ''),
+        material_types: [...(doImg ? ['image'] : []), ...(doVid ? ['video'] : [])],
+        platforms: selected,
+        draft_id: draftId,
+      }).catch(() => null)
+      batchId = bh?.batch_id || ''
+      if (batchId) setSubmittedBatch(batchId)
+    }
     setProgressPct(10)
-    const imgRes = doImg ? await generateImages(hid) : { okImages: 0, anyFailed: false, errs: [] }
+    const imgRes = doImg ? await generateImages(hid, batchId) : { okImages: 0, anyFailed: false, errs: [] }
     setProgressPct(70)
-    const vid = doVid ? await generateVideo(hid) : { ok: true, fail: null }
-    const vidOk = doVid && vid.ok
+    const vid = doVid ? await generateVideo(hid, batchId) : { ok: true, fail: null }
+    const vidOk = doVid && !!vid.ok        // 提交成功 ≠ 出片成功：成片与否只认服务端任务结果
     // V4.79 / G01：纯图片模式下 `vidOk` 曾恒为 true，图片全失败也会判定「创作完成，视频已生成」。
     // 现在成功 = 真产出：要图片有图、要视频有成片。
     const totalOk = imgRes.okImages > 0 || vidOk
-    setProgressPct(100); setProgressText(totalOk ? '创作完成' : '未出片')
+    const vidQueued = doVid && !!vid.submitted
+    setProgressPct(100)
+    setProgressText(vidQueued ? '图片已出，视频在后台继续' : (totalOk ? '创作完成' : '未出片'))
     if (totalOk) {
-      showToast(`创作完成：图片 ${imgRes.okImages} 张${vidOk ? '，视频已生成' : ''}`)
+      showToast(vidQueued
+        ? `任务已加入后台，可继续创作：图片 ${imgRes.okImages} 张已完成，视频在「任务」里继续生成`
+        : `创作完成：图片 ${imgRes.okImages} 张`)
       if (planId) await api.updateCreativePlan(planId, { status: 'done', asset_count: imgRes.okImages, history_id: hid ?? undefined }).catch(() => {})
+      setView('result')
+    } else if (vidQueued && !imgRes.okImages) {
+      // 只有视频且已转入后台：不是失败，是「还没出片」，交给任务抽屉呈现真实阶段
+      setError('')
       setView('result')
     } else {
       const msgs = [...imgRes.errs]
-      if (doVid && !vidOk) {
+      if (doVid && !vidOk && !vidQueued) {
         const f = vid.fail
-        msgs.push(f ? `出片失败（${f.code}）：${f.message}` : '视频生成未返回成片（未配置视频模型，已回退分镜脚本）')
+        msgs.push(f ? `出片失败（${f.code}）：${f.message}`
+          : '视频未提交成功（未配置视频模型，可改出分镜脚本）')
         if (f?.action) msgs.push('建议：' + f.action)
       }
       setError(msgs.join('；') || '本次生成未返回素材，请调整媒体或重试')
@@ -588,6 +663,17 @@ export default function CreativeWorkbench() {
     setBrandLogo(''); setBrandLogoName('')
     setAnalysisValid(false)
   }
+  /** V4.81 / P3：新建创作只创建空白草稿，不删除任何已有任务与结果；后台任务继续执行。 */
+  function startNewCreation() {
+    resetAll()
+    setDraftId('d_' + Math.random().toString(36).slice(2, 10))
+    setPendingBatch('')
+    setSubmittedBatch('')
+    applyingRef.current = ''
+    showToast('已开始新的创作；后台任务仍在继续，可随时点「任务」查看进度与结果')
+  }
+  // 图片任务仍在前端等待返回：此时重置会把在跑的图片任务与界面状态断开，因此先拦住
+  const imgBusy = jobs.some(j => ['submitting', 'queued', 'running'].includes(String(j.status)))
   async function onRefFile(e: any) {
     const file = e.target.files?.[0]; if (!file) return
     setRefUploading(true)
@@ -630,13 +716,34 @@ export default function CreativeWorkbench() {
 
   return (
     <div className="cwb">
-      {/* ① 顶部：标题 + 一句话介绍，不堆叠其他内容 */}
+      {/* ① 顶部：标题 + 一句话介绍 + 两个常驻入口（新建创作 / 任务），不新增一级导航 */}
       <div className="cwb-top">
         <div>
           <h2 className="cwb-title-only">创意工作台</h2>
           <p className="cwb-intro">输入产品链接并选择投放平台，AI 自动完成产品分析、创意规划与素材生成。</p>
         </div>
+        <div className="cwb-top-actions">
+          <button className="cwb-new-btn" onClick={startNewCreation} disabled={imgBusy}
+            title={imgBusy ? '图片任务正在生成，完成后再开始新的创作（视频等待期间可随时新建）' : '新建一次空白创作，不会删除已有任务或结果'}>
+            ＋ 新建创作
+          </button>
+          <button className={'cwb-task-btn' + (tasks.activeCount ? ' on' : '')}
+            onClick={() => { setDrawerOpen(true); tasks.load({ silent: true }) }}
+            title="查看后台创作任务：进行中 / 已完成 / 需处理">
+            任务{tasks.activeCount ? ` ${tasks.activeCount}` : ''}
+          </button>
+        </div>
       </div>
+
+      {/* 提交后的引导：任务在服务端继续，页面可以继续用（不是假进度，也不阻塞输入） */}
+      {submittedBatch && (
+        <div className="cwb-submitted">
+          <span>任务已加入后台，可继续创作。图片先完成即可预览下载，视频在后台继续生成。</span>
+          <button className="cwb-link" onClick={() => setDrawerOpen(true)}>查看任务</button>
+          <button className="cwb-link" onClick={startNewCreation} disabled={imgBusy}>开始新创作</button>
+          <button className="cwb-link ghost" onClick={() => setSubmittedBatch('')}>知道了</button>
+        </div>
+      )}
 
       <div className="cwb-body">
         <div className="cwb-main">
@@ -1056,6 +1163,34 @@ export default function CreativeWorkbench() {
       )}
 
       {/* V4.70：历史弹窗已移除（历史 / 新建项目功能已取消） */}
+
+      {/* V4.81 / P3：任务抽屉（右侧 400px）。任务在服务端执行，关闭抽屉/切模块/刷新都不影响 */}
+      <CreativeTasksDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        items={tasks.items}
+        activeCount={tasks.activeCount}
+        loading={tasks.loading}
+        error={tasks.error}
+        loadDetail={tasks.detail}
+        onRetry={async (batchId, jobId, action) => {
+          try {
+            await tasks.retry(batchId, jobId, action)
+            showToast(action === 'regenerate' ? '已重新生成（会产生一次新的模型费用）'
+              : action === 'repoll' ? '已按原厂商任务号继续查询' : '已重新下载并校验')
+          } catch (e: any) { showToast('操作失败：' + (e?.message || '')) }
+        }}
+        onCancel={async (batchId, jobId) => {
+          try { await tasks.cancel(batchId, jobId); showToast('已停止后续步骤（在途任务仍可能完成并计费）') }
+          catch (e: any) { showToast('操作失败：' + (e?.message || '')) }
+        }}
+        onReuse={(b) => {
+          setDrawerOpen(false)
+          const url = String(b.source_url || '')
+          if (url) { setInput(url); setView('input'); showToast('已把该任务的产品链接填回输入区，可直接重新分析') }
+          else showToast('该任务没有保存产品链接，请手动输入后重新分析')
+        }}
+      />
 
       {toast && <div className="cwb-toast">{toast}</div>}
     </div>
