@@ -869,6 +869,53 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>
 }
 
+/**
+ * V4.76 视频出片异步化：提交任务 → 轮询状态 → 返回结果（结构与同步接口完全一致）。
+ *
+ * 出片需等模型 1–6 分钟。若让一个 HTTP 请求一直挂着等结果，反向代理会先超时
+ * （宿主 nginx 默认 60s、Cloudflare 100s），前端只会看到「504 Gateway Time-out」，
+ * 而任务其实还在厂商侧跑。改成「提交即返回 + 轮询」后，代理超时与出片时长彻底解耦。
+ */
+export async function cwVideoGenerateAsync(
+  payload: { analysis: any; platform: string; reference_image?: string; brand_logo?: string; plan: any; options?: any },
+  onTick?: (info: { elapsed: number; stage: string; status: string }) => void,
+  opts: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<any> {
+  const timeoutMs = opts.timeoutMs ?? 12 * 60 * 1000
+  const intervalMs = opts.intervalMs ?? 2500
+  const job = await req<any>('/api/cw-video/generate-jobs', {
+    method: 'POST', body: JSON.stringify(payload),
+  })
+  const jobId = job?.job_id
+  if (!jobId) throw new Error('提交视频任务失败：未拿到任务号')
+  const startedAt = Date.now()
+  let last: any = job
+  let fails = 0
+  onTick?.({ elapsed: 0, stage: job?.stage || '排队中', status: job?.status || 'queued' })
+  while (Date.now() - startedAt < timeoutMs) {
+    await new Promise(r => setTimeout(r, intervalMs))
+    try {
+      last = await req<any>(`/api/cw-video/generate-jobs/${jobId}`)
+      fails = 0
+    } catch (e: any) {
+      // 单次轮询抖动（网关限流 / 断网）不该终止出片；连续 3 次失败才放弃
+      if (++fails >= 3) throw e
+      continue
+    }
+    const elapsed = last?.elapsed_sec ?? Math.round((Date.now() - startedAt) / 1000)
+    onTick?.({ elapsed, stage: last?.stage || '', status: last?.status || '' })
+    if (last?.status === 'done') {
+      if (!last.result) throw new Error('视频任务已完成但未返回结果')
+      return last.result
+    }
+    if (last?.status === 'error') throw new Error(last.error || '视频生成失败')
+  }
+  throw new Error(
+    `视频任务仍在生成中（任务号 ${jobId}，已等待 ${Math.round(timeoutMs / 1000)} 秒）。` +
+    '厂商侧可能仍在渲染，可稍后到厂商控制台按该任务号取片。'
+  )
+}
+
 export const api = {
   login: (email: string, password: string) =>
     req<{ token: string; expires_in: number; user: User }>('/api/auth/login', {
@@ -1001,6 +1048,12 @@ export const api = {
     analysis: any; platform: string; reference_image?: string; brand_logo?: string; plan: any; options?: any;
   }) =>
     req<any>('/api/cw-video/generate', { method: 'POST', body: JSON.stringify(payload) }),
+  // V4.76 出片异步化：页面统一走这条（提交任务 + 轮询），避免反向代理 504
+  cwVideoGenerateAsync,
+  cwVideoGenerateJob: (payload: {
+    analysis: any; platform: string; reference_image?: string; brand_logo?: string; plan: any; options?: any;
+  }) => req<any>('/api/cw-video/generate-jobs', { method: 'POST', body: JSON.stringify(payload) }),
+  cwVideoJob: (jobId: string) => req<any>(`/api/cw-video/generate-jobs/${jobId}`),
   // V4.75 视频链路自检：报告当前生效的视频模型配置与契约参数是否齐备（不出片）
   cwVideoDiagnose: () => req<any>('/api/cw-video/diagnose'),
   updateCreationHistory: (id: number, payload: {

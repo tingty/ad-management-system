@@ -1849,6 +1849,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 
 .vs-preview-empty, .vs-chat-empty { padding: 8px 2px; }
 .vs-gen-status { margin-top: 12px; font-size: 13px; color: var(--primary2); background: #f0f5ff; border-radius: 9px; padding: 9px 12px; }
+.vs-gen-tip { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
 .vs-note { margin-top: 10px; font-size: 12.5px; color: var(--warn); background: #fff7ed; border-radius: 9px; padding: 8px 12px; line-height: 1.55; }
 .vs-error { margin-top: 10px; font-size: 12.5px; color: #b91c1c; background: #fef2f2; border-radius: 9px; padding: 8px 12px; }
 

@@ -485,3 +485,21 @@ class CWVideoGenerateResult(BaseModel):
     note: str = ""                 # 人类可读说明（如「未配置视频模型，已回退分镜」）
     output_aspect: str = ""        # 实际输出比例（如 9:16）；视频模型固定比例时显式标注
     source: str = "local"
+
+
+class CWVideoJobOut(BaseModel):
+    """视频出片后台任务状态（V4.76）。
+
+    出片是分钟级长任务，直接放在 HTTP 请求里会被反向代理（nginx 默认 60s、
+    Cloudflare 100s）掐断成 504。这里改为「提交即返回 + 前端轮询」：
+    - queued / running：任务在后台跑，前端按 elapsed_sec 展示已等待时长；
+    - done：result 即原同步接口的完整结果；
+    - error：error 为失败原因（含 HTTP 状态与服务端原文）。
+    """
+    model_config = {"protected_namespaces": ()}
+    job_id: str = ""
+    status: str = "queued"         # queued / running / done / error
+    stage: str = ""                # 阶段描述（提交中 / 等待模型出片 / 取片写入 / 完成）
+    elapsed_sec: int = 0
+    error: str = ""
+    result: Optional[CWVideoGenerateResult] = None

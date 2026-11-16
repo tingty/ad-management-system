@@ -2679,3 +2679,43 @@
 - 端到端验证：以本地假服务复刻阿里云契约（异步头 + {model,input,parameters} 提交体 + /api/v1/tasks 轮询 + 预签名取片），ModelVideo 全链路返回 provider=model 且落盘文件非空，output_aspect=9:16。
 - 前端类型检查：npx tsc --noEmit 0 错误；npm run build 通过。
 - 发版校验：prepare_release --sync 自动补齐时分并重建发布数据，--check 通过（系统版本 == CHANGELOG 最新 == 发布数据最新）。
+
+## V4.76 视频出片异步化：提交即返回任务号 + 轮询取结果，根治反向代理 504 超时
+
+**发布日期**：2026-11-16 10:47
+**变更类型**：修复 / 优化
+**涉及模块**：创意工作台、视频生成链路、前端 API 客户端、部署与反向代理、系统版本
+**变更摘要**：视频出片要等模型 1–6 分钟，此前占着一个 HTTP 请求不返回，宿主 nginx（Ubuntu 1.24，默认 proxy_read_timeout 60s）先回 504，页面只显示「Gateway Time-out」而任务其实还在厂商侧跑。改为「提交即返回 job_id + 前端每 2.5s 轮询状态」后，出片时长与任何代理超时彻底解耦，同时页面显示已等待秒数与阶段，任务失败也能拿到真实原因。
+
+**更新要点**
+- 新增异步出片接口：POST /api/cw-video/generate-jobs 立即返回 job_id（实测 0ms），GET /api/cw-video/generate-jobs/{id} 轮询状态与结果
+- 出片主流程抽取为同步/异步共用的 _cw_video_generate_impl，两条路径结果结构完全一致，不存在两套逻辑漂移
+- 后台任务自建数据库会话（请求会话在接口返回即关闭），不占用连接、不产生写锁
+- 任务注册表带 TTL 与上限（3 小时 / 60 条），过期自动清理，长时间运行不会堆积成片结果
+- 前端统一改走异步：api.cwVideoGenerateAsync 内部完成「提交 → 轮询 → 归一化结果」，连续 3 次轮询失败才放弃，避免网关抖动误判失败
+- 进度可见：生成区显示「已等待 N 秒 · 阶段」，不再是一句静态「生成中」，用户能判断任务确实在跑
+- 超时兜底：12 分钟未完成会返回任务号并提示到厂商控制台取片，不再笼统报「生成失败」
+- 同步接口 /api/cw-video/generate 保留兼容（脚本/调试用），文档明确其需要反代 ≥660s
+- 部署文档补充「长任务与反代超时」对照表：宿主 nginx 60s、Cloudflare 100s、容器内 nginx 660s 的边界与处理方式
+
+**本次优化与更改的功能 / 模块**
+- 【新增】视频生成链路 / 异步任务：/cw-video/generate-jobs 与 /cw-video/generate-jobs/{job_id}
+- 【修复】视频生成链路 / 504 超时：出片不再占用长连接，任意代理超时下均可完成
+- 【优化】视频生成链路 / 结构：同步与异步共用同一实现，结果字段一致
+- 【优化】视频生成链路 / 进度：展示已等待秒数与阶段，失败回传真实原因
+- 【优化】前端 API 客户端：新增 cwVideoGenerateAsync / cwVideoGenerateJob / cwVideoJob
+- 【优化】创意工作台 / 视频区：生成与微调重生成均走异步轮询
+- 【优化】创意工作台 / 批量创作：视频节点进度文案显示已等待时长
+- 【优化】部署 / 反向代理：DEPLOY.md 增补长任务超时说明与宿主 nginx 配置示例
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.76
+
+**影响范围**
+- 后端：新增两个接口与内存任务表，原有同步接口签名与返回结构不变；出片请求契约、厂商参数（endpoint / body_shape / poll_path / async_header）完全不变，既有模型配置无需改动。
+- 前端：视频生成改用异步轮询，页面交互与结果展示不变；dist 需随宿主重建。
+- 部署：单进程 uvicorn 下任务表在内存中；若将来改为多 worker 或多副本，需将任务表迁移到数据库/Redis（当前部署形态不受影响）。
+
+**验证**
+- 端到端：以本地假服务复刻阿里云契约（X-DashScope-Async + {model,input,parameters} + /api/v1/tasks 轮询 + 预签名取片），提交耗时 0ms，9 秒后任务 done，provider=model、output_aspect=9:16、成片落盘非空。
+- 失败路径：注入 error 任务，轮询能取回原始失败原因（HTTP 403 原文），不再被吞。
+- 编译与类型：py_compile 通过；npx tsc --noEmit 0 错误；npm run build 通过。
+- 发版校验：prepare_release --sync 重建发布数据并补时分，--check 通过。

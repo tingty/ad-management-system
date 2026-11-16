@@ -3,9 +3,9 @@ from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import Optional
-import os, time, re, json
+import os, time, re, json, asyncio, uuid
 
-from database import get_db
+from database import get_db, SessionLocal
 from models import (ModelConfig, User, AuditLog, LoginLog, PromptConfig, SystemState,
                     CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, CreativePlan, CwLibrary, utcnow)
 from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
@@ -17,7 +17,7 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      CWAnalyzeRequest, CWAnalysisResult, CWRoutesRequest, CWRoute, CWRoutesResult,
                      ProductSnapshot, CwLibraryOut, CwLibraryCreate,
                      CWVideoPlanRequest, CWVideoPlanResult, CWVideoGenerateRequest, CWVideoGenerateResult,
-                     CWVideoAsset, ModelInfo)
+                     CWVideoAsset, CWVideoJobOut, ModelInfo)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import get_llm_with_info, finalize_invocation, parse_json, get_video, _active_config, StoryboardVideo
@@ -873,14 +873,92 @@ def api_cw_video_diagnose(db: Session = Depends(get_db),
     return out
 
 
+# ---------------------- V4.76 出片异步化：提交即返回 job_id + 前端轮询取结果 ----------------------
+_CW_VIDEO_JOBS: dict = {}
+_CW_VIDEO_JOB_TTL = 3 * 3600   # 任务与结果保留 3 小时：前端刷新/重进页面仍能取回
+_CW_VIDEO_JOB_MAX = 60         # 内存里最多保留 60 条，超出丢弃最旧的
+
+
+def _cw_video_job_sweep() -> None:
+    """清理过期任务，避免长时间运行后内存里堆积成片结果。"""
+    now = time.time()
+    for jid in [k for k, v in _CW_VIDEO_JOBS.items() if now - v["created_at"] > _CW_VIDEO_JOB_TTL]:
+        _CW_VIDEO_JOBS.pop(jid, None)
+    while len(_CW_VIDEO_JOBS) > _CW_VIDEO_JOB_MAX:
+        oldest = min(_CW_VIDEO_JOBS, key=lambda k: _CW_VIDEO_JOBS[k]["created_at"])
+        _CW_VIDEO_JOBS.pop(oldest, None)
+
+
+def _cw_video_job_view(job_id: str) -> CWVideoJobOut:
+    job = _CW_VIDEO_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(404, "视频任务不存在或已过期，请重新生成")
+    end = job.get("finished_at") or time.time()
+    return CWVideoJobOut(
+        job_id=job_id, status=job["status"], stage=job.get("stage", ""),
+        elapsed_sec=int(max(0.0, end - job["started_at"])),
+        error=job.get("error", ""),
+        result=CWVideoGenerateResult(**job["result"]) if job.get("result") else None,
+    )
+
+
+async def _cw_video_job_runner(job_id: str, req: CWVideoGenerateRequest, user_id: Optional[int]) -> None:
+    """后台执行出片：自建 DB 会话（请求会话在接口返回时就已关闭）。"""
+    job = _CW_VIDEO_JOBS.get(job_id)
+    if not job:
+        return
+    job.update(status="running", stage="已提交，等待模型出片")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=user_id).first() if user_id else None
+        res = await _cw_video_generate_impl(req, db, user)
+        job.update(status="done", stage="完成", result=res.model_dump(), finished_at=time.time())
+    except Exception as e:
+        job.update(status="error", stage="失败",
+                   error=f"{type(e).__name__}: {str(e)[:400]}", finished_at=time.time())
+    finally:
+        db.close()
+
+
+@router.post("/cw-video/generate-jobs", response_model=CWVideoJobOut)
+async def api_cw_video_create_job(req: CWVideoGenerateRequest,
+                                  user: User = Depends(require_roles(*CAN_EDIT))):
+    """提交视频出片任务并立即返回 job_id（V4.76，前端默认走这里）。
+
+    出片要等模型 1–6 分钟。若让 HTTP 请求一直挂着，反向代理会先超时——
+    宿主 nginx 默认 proxy_read_timeout 60s、Cloudflare 100s——前端只会看到
+    「504 Gateway Time-out」，而任务其实还在厂商侧跑。改为后台任务后，
+    代理超时与出片时长彻底解耦，前端每 2s 轮询一次状态即可。
+    """
+    _cw_video_job_sweep()
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    _CW_VIDEO_JOBS[job_id] = {"status": "queued", "stage": "排队中", "created_at": now,
+                              "started_at": now, "result": None, "error": ""}
+    asyncio.create_task(_cw_video_job_runner(job_id, req, getattr(user, "id", None)))
+    return _cw_video_job_view(job_id)
+
+
+@router.get("/cw-video/generate-jobs/{job_id}", response_model=CWVideoJobOut)
+def api_cw_video_get_job(job_id: str, user: User = Depends(require_roles(*CAN_EDIT))):
+    """轮询出片任务：done 时 result 与同步接口结构完全一致。"""
+    return _cw_video_job_view(job_id)
+
+
 @router.post("/cw-video/generate", response_model=CWVideoGenerateResult)
 async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depends(get_db),
                                 user: User = Depends(require_roles(*CAN_EDIT))):
-    """创意工作台·视频素材创作区：按分镜方案调用真实视频模型（可灵 / 通用 /video/generations）生成视频。
+    """同步出片（保留兼容，直连脚本/调试用）。
 
-    - 配置了 video 用途模型 → 直连生成（可灵走原生异步 API，其余走通用 /video/generations）；
-    - 未配置 → 安全回退「可执行分镜脚本」，绝不阻断主流程。
-    返回的 storyboard 始终包含分镜 JSON（展示 + 可下载），videos 为实际成片（如有）。
+    ⚠️ 该接口自身耗时 1–6 分钟，调用方必须保证反向代理读超时足够（nginx ≥ 660s），
+    否则会被拦成 504。页面已统一改用 /cw-video/generate-jobs 异步模式。
+    """
+    return await _cw_video_generate_impl(req, db, user)
+
+
+async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user) -> CWVideoGenerateResult:
+    """出片主流程（同步接口与后台任务共用）：
+    解析视频配置 → 组装可消费提示词 → 调模型（含厂商侧异步轮询取片）→ 归一化产物与比例标注。
     """
     plan = req.plan or {}
     analysis = req.analysis or {}
@@ -945,7 +1023,7 @@ async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depen
         provider = StoryboardVideo()
         m_info = ModelInfo(provider="storyboard", model="", role="video", fallback=True, source="local")
 
-    filename = f"cw_video_{user.id}_{int(time.time())}.mp4"
+    filename = f"cw_video_{getattr(user, 'id', 0) or 0}_{int(time.time())}.mp4"
     try:
         res = await provider.generate(prompt, platform, filename, meta)
     except Exception as e:

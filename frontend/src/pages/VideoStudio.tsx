@@ -89,6 +89,9 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
   // V4.75：视频链路自检结果（只读配置，不触发出片）
   const [diag, setDiag] = useState<any>(null)
   const [diagBusy, setDiagBusy] = useState(false)
+  // V4.76：出片为后台任务，这里只展示已等待时长与阶段（避免用户以为卡死）
+  const [genSec, setGenSec] = useState(0)
+  const [genStage, setGenStage] = useState('')
 
   async function runDiagnose() {
     setDiagBusy(true)
@@ -143,15 +146,17 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
       return
     }
     setState(s => ({ ...s, error: '', generating: true, videos: [], note: '' }))
+    setGenSec(0); setGenStage('提交中')
     try {
-      const r: any = await api.cwVideoGenerate({
+      // V4.76：改为「提交任务 + 轮询」，不让 HTTP 请求长时间挂着（否则宿主 nginx 60s 就 504）
+      const r: any = await api.cwVideoGenerateAsync({
         analysis: analysis || {},
         platform: platform || '',
         reference_image: referenceImage || '',
         brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
         plan,
         options: { ...options, prompt_hint: options.prompt_hint },
-      })
+      }, info => { setGenSec(info.elapsed); setGenStage(info.stage || '') })
       setState(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', modelInfo: r?.model_info || s.modelInfo, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '' }))
     } catch (e: any) {
       setState(s => ({ ...s, error: '视频生成失败：' + (e?.message || ''), generating: false }))
@@ -181,14 +186,15 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
       setState(s => ({ ...s, messages: next, plan: newPlan, modelInfo: r?.model_info || s.modelInfo, outputAspect: r?.output_aspect || s.outputAspect, planning: false, error: '' }))
       if (newPlan && newPlan.shots?.length) {
         setState(s => ({ ...s, generating: true, videos: [], note: '' }))
-        const g: any = await api.cwVideoGenerate({
+        setGenSec(0); setGenStage('提交中')
+        const g: any = await api.cwVideoGenerateAsync({
           analysis: analysis || {},
           platform: platform || '',
           reference_image: referenceImage || '',
           brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
           plan: newPlan,
           options: { ...options, prompt_hint: options.prompt_hint },
-        })
+        }, info => { setGenSec(info.elapsed); setGenStage(info.stage || '') })
         setState(s => ({ ...s, videos: g?.videos || [], note: g?.note || '', modelInfo: g?.model_info || s.modelInfo, outputAspect: g?.output_aspect || s.outputAspect, generating: false, plan: g?.storyboard || s.plan, error: '' }))
       }
     } catch (e: any) {
@@ -376,7 +382,11 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
       )}
 
       {(generating || state.generating) && (
-        <div className="vs-gen-status">视频生成中（直连已配置的视频模型，通常需要 1–3 分钟，仅展示进度）…</div>
+        <div className="vs-gen-status">
+          视频生成中{genSec > 0 ? `（已等待 ${genSec} 秒` : '（'}…
+          {genStage ? ` · ${genStage}` : ''}）
+          <span className="vs-gen-tip">任务已在服务端后台运行，等待期间请保持本页打开（最长约 12 分钟）；出片后会自动展示并可下载。</span>
+        </div>
       )}
       {note && <div className="vs-note">{note}</div>}
 

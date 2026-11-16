@@ -423,12 +423,13 @@ export default function CreativeWorkbench() {
     if (selectedBrand && selectedBrand.trim()) analysis.brand = selectedBrand.trim()
     setVs(s => ({ ...s, generating: true, error: '', videos: [], note: '' }))
     try {
-      const r: any = await api.cwVideoGenerate({
+      // V4.76：出片走「提交任务 + 轮询」，避免同步长请求被反向代理拦成 504
+      const r: any = await api.cwVideoGenerateAsync({
         analysis, platform: selectedPlatform,
         reference_image: referenceImage || '',
         brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
         plan: vs.plan, options: { ...vs.options, prompt_hint: vs.options.prompt_hint },
-      })
+      }, info => setProgressText(`视频出片中（已等待 ${info.elapsed} 秒${info.stage ? ' · ' + info.stage : ''}）…`))
       setVs(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', modelInfo: r?.model_info || s.modelInfo, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '' }))
       return (r?.videos || []).length > 0
     } catch (e: any) {

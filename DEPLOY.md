@@ -101,6 +101,34 @@ docker compose up -d --build      # 代码更新后重新构建启动
   ```
 - 通过 Cloudflare Tunnel 将域名安全地暴露到公网，无需开放服务器入站端口。
 
+### 6.1 长任务（视频出片）与反代超时
+
+视频出片要等厂商模型 1–6 分钟，属于长任务。两层机制必须区分清楚：
+
+| 层 | 超时 | 说明 |
+|----|------|------|
+| 宿主反代（nginx / Caddy） | 默认 **60s**（nginx `proxy_read_timeout`）/ 无限制（Caddy） | 最常见的 504 来源，报错页会带 `nginx/x.y.z (Ubuntu)` |
+| Cloudflare（走隧道/代理时） | **100s** 硬上限（免费/Pro），Enterprise 可放宽 | 报错页带 `cloudflare` 字样 |
+| `web` 容器内 nginx | 已设 `proxy_read_timeout 660s` | 覆盖后端最长 6 分钟取片窗口 |
+
+**V4.76 起页面已改为异步模式**：`POST /api/cw-video/generate-jobs` 立即返回 `job_id`，
+前端每 2.5s 轮询 `GET /api/cw-video/generate-jobs/{id}` 取结果。因此**出片时长不再受
+任何代理超时影响**，即使宿主 nginx 只有 60s 也能正常出片。
+
+若你仍在使用同步接口 `/api/cw-video/generate`（脚本/调试），必须放宽宿主反代：
+
+```nginx
+# /etc/nginx/sites-enabled/<your-site>
+location /api/ {
+    proxy_pass http://127.0.0.1:80;
+    proxy_read_timeout 660s;   # 默认 60s 会在出片期间返回 504
+    proxy_send_timeout 660s;
+}
+```
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
 ---
 
 ## 7. 配置说明（技术向）
@@ -121,6 +149,7 @@ docker compose up -d --build      # 代码更新后重新构建启动
 - **上传/下载文件 404**：确认 `admb_uploads` 卷已挂载且后端已 `mkdir /app/uploads`。
 - **数据库 locked**：SQLite 已开启 WAL + busy_timeout；高并发写入建议后续迁移到 PostgreSQL（改 `DATABASE_URL` 即可，代码无需改动）。
 - **修改前端 API 地址后未生效**：`VITE_API_BASE` 是**构建期**变量，需重新 `docker compose up -d --build`。
+- **生成视频报 504 Gateway Time-out**：V4.76 已改为异步任务（提交即返回 + 轮询），重建后不应再出现；若仍出现，说明前端 dist 是旧版本（`docker compose up -d --build` 强制重建），或调用了同步接口 `/api/cw-video/generate` 而宿主反代超时仍是 60s（见 6.1）。
 
 ---
 
