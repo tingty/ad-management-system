@@ -109,7 +109,8 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
   useEffect(() => {
     api.cwVideoDiagnose()
       .then((r: any) => setRoute({ checked: true, ready: !!r?.configured, model: r?.model || '', provider: r?.provider || '', id: r?.config_id ?? null }))
-      .catch(() => setRoute(s => ({ ...s, checked: true })))
+      // 请求失败（未授权 / 网络）时不置 checked：宁可不显示徽标，也不要误报「未配置」误导用户
+      .catch(() => { /* 保持未检测状态 */ })
   }, [])
   // V4.76：出片为后台任务，这里只展示已等待时长与阶段（避免用户以为卡死）
   const [genSec, setGenSec] = useState(0)
