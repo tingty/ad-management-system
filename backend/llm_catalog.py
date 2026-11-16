@@ -1143,18 +1143,35 @@ async def _test_generic_video(req: dict, preset: Optional[dict]) -> dict:
             r = await c.post(url, headers=headers, json=body)
             if r.status_code >= 400:
                 return _classify_error(None, r.status_code, _safe_body(r), preset)
-            data = {}
+            raw = _safe_body(r)
             try:
                 data = r.json()
             except Exception:
-                pass
+                # V4.79 / F01：端点可达但返回 HTML / 空体（网关错误页、路由错）不能算通过。
+                # 旧实现 `data={}` 后照样 ok=True，用户以为配置好了，实际根本出不了片。
+                return {"ok": False, "error_type": "non_json_response", "http_status": r.status_code,
+                        "message": "端点可达，但返回的不是 JSON（很可能被网关替换成 HTML 错误页，或该路径不是视频接口）。"
+                                   f"响应开头：{(raw or '')[:200]}",
+                        "hint_url": "", "hint_url_label": ""}
+            # 按协议族白名单解析：既没有任务号也没有成片，就是契约不匹配，不能算通过
+            from providers import video_media_of
+            family = "dashscope_maas" if body_shape == "dashscope_maas" else "generic"
             out = data.get("output") if isinstance(data.get("output"), dict) else {}
-            task_id = out.get("task_id") or data.get("task_id") or data.get("id")
+            task_id = out.get("task_id") or data.get("task_id") or out.get("id") or data.get("id")
+            media_url, media_b64 = video_media_of(data, family)
+            if not task_id and not (media_url or media_b64):
+                return {"ok": False, "error_type": "contract_mismatch", "http_status": r.status_code,
+                        "message": "端点连通且返回 200，但响应里既没有任务号也没有成片地址 —— 说明协议契约不匹配"
+                                   "（多半是端点或模型版本不是视频模型）。响应摘要：" + (raw or "")[:260],
+                        "hint_url": "", "hint_url_label": ""}
             reply = "reachable (async video API, verify output structure)"
             note = "视频端点已连通；视频多为异步任务，实际成片需轮询，请按厂商文档核对返回结构。"
             if task_id:
                 reply = f"提交成功，异步任务已受理（task_id={task_id}）"
                 note = "已提交视频生成任务并获得任务 ID；实际出片为异步，需在生成流程中轮询取片。"
+            elif media_url:
+                reply = "同步直出成片地址已返回"
+                note = "该端点同步返回了成片地址，生成流程会直接下载并校验。"
         return {"ok": True, "latency_ms": int((time.time() - t0) * 1000),
                 "reply": reply, "protocol": "generic-video", "provider": req.get("provider"),
                 "note": note}

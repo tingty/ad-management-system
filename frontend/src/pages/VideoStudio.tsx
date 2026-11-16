@@ -22,6 +22,8 @@ export interface VideoState {
   generating: boolean
   error: string
   refineInput: string
+  // V4.79：出片失败的结构化信息（error_code / 唯一动作 / 脱敏证据）；为空表示没失败
+  videoFail?: { code: string; message: string; action: string; stage?: string; taskId?: string; evidence?: any } | null
 }
 
 interface VideoStudioProps {
@@ -77,6 +79,25 @@ function videoModelLabel(mi: any) {
   if (mi.provider === 'kling') return `出片模型 · 可灵 ${mi.model || ''}`.trim()
   if (mi.provider === 'model') return `出片模型 · ${mi.model || '视频模型'}`
   return `出片模型 · ${mi.model || mi.provider}`
+}
+
+// V4.79：出片失败结构化信息。error_code 为空即成功；非空时界面只展示「一个动作」，
+// 而不是让用户自己猜该重试、该改配置还是该重新下载。
+function failOf(r: any) {
+  if (!r?.error_code) return null
+  return {
+    code: String(r.error_code),
+    message: r.error_message || r.note || '',
+    action: r.error_action || '',
+    stage: r.stage || '',
+    taskId: r.error_task_id || '',
+    evidence: r.evidence || null,
+  }
+}
+
+const STAGE_LABEL: Record<string, string> = {
+  config: '配置', submit: '提交任务', poll: '查询任务', download: '下载成片',
+  storage: '写入文件', generate: '生成',
 }
 
 // 输出比例标签：显式标注实际出片比例（如 9:16 竖屏）
@@ -180,7 +201,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
         plan,
         options: { ...options, prompt_hint: options.prompt_hint },
       }, info => { setGenSec(info.elapsed); setGenStage(info.stage || '') })
-      setState(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', modelInfo: r?.model_info || s.modelInfo, videoModel: r?.model_info || s.videoModel, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '' }))
+      setState(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', modelInfo: r?.model_info || s.modelInfo, videoModel: r?.model_info || s.videoModel, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '', videoFail: failOf(r) }))
     } catch (e: any) {
       setState(s => ({ ...s, error: '视频生成失败：' + (e?.message || ''), generating: false }))
     }
@@ -218,7 +239,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
           plan: newPlan,
           options: { ...options, prompt_hint: options.prompt_hint },
         }, info => { setGenSec(info.elapsed); setGenStage(info.stage || '') })
-        setState(s => ({ ...s, videos: g?.videos || [], note: g?.note || '', modelInfo: g?.model_info || s.modelInfo, videoModel: g?.model_info || s.videoModel, outputAspect: g?.output_aspect || s.outputAspect, generating: false, plan: g?.storyboard || s.plan, error: '' }))
+        setState(s => ({ ...s, videos: g?.videos || [], note: g?.note || '', modelInfo: g?.model_info || s.modelInfo, videoModel: g?.model_info || s.videoModel, outputAspect: g?.output_aspect || s.outputAspect, generating: false, plan: g?.storyboard || s.plan, error: '', videoFail: failOf(g) }))
       }
     } catch (e: any) {
       setState(s => ({ ...s, error: '视频微调失败：' + (e?.message || ''), planning: false, generating: false }))
@@ -237,7 +258,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
   }
 
   function reset() {
-    setState(s => ({ ...s, messages: [], plan: null, videos: [], note: '', error: '', modelInfo: null, videoModel: null, refineInput: '' }))
+    setState(s => ({ ...s, messages: [], plan: null, videos: [], note: '', error: '', modelInfo: null, videoModel: null, refineInput: '', videoFail: null }))
   }
 
   const showRef = options.mode === 'image_to_video' && referenceImage
@@ -396,9 +417,13 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
       {diag && (
         <div className={`vs-diag ${diag.configured ? 'ok' : 'warn'}`}>
           <div className="vs-diag-head">
-            <b>{diag.configured ? '✅ 视频模型已就绪，可直接出片' : '⚠️ 视频模型未就绪，当前会回退分镜脚本'}</b>
+            <b>{diag.state === 'ready'
+              ? `✅ ${diag.state_label || '视频模型已就绪，可直接出片'}`
+              : `⚠️ ${diag.state_label || '视频模型未就绪'}（当前会回退分镜脚本）`}</b>
             <button className="vs-ghost" onClick={() => setDiag(null)}>关闭</button>
           </div>
+          {/* V4.79：四态收敛成一个动作，不用在一堆提示里自己找结论 */}
+          {diag.action && <div className="vs-diag-act">👉 {diag.action}</div>}
           {diag.configured && (
             <div className="vs-diag-meta">
               <span>配置 #{diag.config_id}</span>
@@ -449,6 +474,27 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
         </div>
       )}
       {note && <div className="vs-note">{note}</div>}
+
+      {/* V4.79：失败要说清楚「卡在哪一步、下一步做什么」，并保留脱敏证据供核对 */}
+      {state.videoFail && (
+        <div className="vs-fail">
+          <div className="vs-fail-head">
+            <b>❌ 出片失败（{state.videoFail.code}）</b>
+            {state.videoFail.stage && <span>阶段：{STAGE_LABEL[state.videoFail.stage] || state.videoFail.stage}</span>}
+          </div>
+          {state.videoFail.message && <div className="vs-fail-msg">{state.videoFail.message}</div>}
+          {state.videoFail.action && <div className="vs-fail-act">👉 {state.videoFail.action}</div>}
+          {state.videoFail.taskId && (
+            <div className="vs-fail-task">厂商任务号：<code>{state.videoFail.taskId}</code>（可到厂商控制台按此号取片）</div>
+          )}
+          {state.videoFail.evidence && (
+            <details className="vs-fail-ev">
+              <summary>查看证据（提交 / 轮询 / 下载原文，已脱敏）</summary>
+              <pre>{JSON.stringify(state.videoFail.evidence, null, 2)}</pre>
+            </details>
+          )}
+        </div>
+      )}
 
       {videos.length > 0 && (
         <div className="vs-videos">

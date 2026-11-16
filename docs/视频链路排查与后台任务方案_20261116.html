@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>创意工作台视频链路排查结论与修复方案（V4.78 基线）</title>
+<style>
+  :root{
+    --ink:#12181f; --ink-2:#3c4757; --muted:#6b7787; --line:#dde3ea;
+    --bg:#f6f8fa; --card:#ffffff; --brand:#1f5fa8; --brand-soft:#eaf2fb;
+    --ok:#1a7f4b; --ok-soft:#eafaf0; --warn:#b45309; --warn-soft:#fff7ed;
+    --bad:#b42318; --bad-soft:#fef3f2; --mid:#7a4fb5; --mid-soft:#f5f0fd;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 80px}
+  header.hero{
+    background:linear-gradient(135deg,#123a63,#1f5fa8 55%,#2d7fc4);
+    color:#fff;border-radius:16px;padding:30px 32px;box-shadow:0 10px 28px rgba(18,58,99,.18);
+  }
+  header.hero h1{margin:0 0 8px;font-size:26px;line-height:1.35;letter-spacing:.2px}
+  header.hero .sub{color:#d7e6f6;font-size:13.5px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .meta span{
+    background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);
+    padding:4px 10px;border-radius:999px;font-size:12px;color:#eaf3ff;
+  }
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px;margin-top:20px}
+  h2{font-size:19px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line);color:#123a63}
+  h3{font-size:15.5px;margin:22px 0 8px;color:var(--ink)}
+  h4{font-size:14px;margin:16px 0 6px;color:var(--brand)}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0 8px 20px;padding:0}
+  li{margin:4px 0}
+  code{background:#f1f4f8;border:1px solid #e3e9f0;border-radius:5px;padding:1px 5px;font-size:12.5px;overflow-wrap:anywhere;
+       font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#1d4ed8}
+  .kbd{font-size:12px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px;background:#fff;table-layout:fixed}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top;text-align:left;word-break:break-word;overflow-wrap:anywhere}
+  td code{font-size:12px}
+  /* 各表列宽（固定布局，避免长 code 把中文列挤成一字一行） */
+  .t-f th:nth-child(1){width:6%}   .t-f th:nth-child(2){width:19%}
+  .t-f th:nth-child(3){width:17%}  .t-f th:nth-child(4){width:9%}
+  .t-f th:nth-child(6){width:7%}
+  .t-5a th:nth-child(1){width:15%} .t-5a th:nth-child(2){width:21%}
+  .t-5a th:nth-child(3){width:16%} .t-5a th:nth-child(4){width:28%}
+  .t-4a th:nth-child(1){width:18%} .t-4a th:nth-child(2){width:28%}
+  .t-4a th:nth-child(3){width:28%}
+  .t-3a th:nth-child(1){width:30%} .t-3a th:nth-child(2){width:46%}
+  .t-2a th:nth-child(1){width:30%} .t-2b th:nth-child(1){width:40%}
+  .t-3b th:nth-child(1){width:26%} .t-3b th:nth-child(2){width:34%}
+  .t-3c th:nth-child(1){width:16%} .t-3c th:nth-child(2){width:54%}
+  .t-3d th:nth-child(1){width:14%} .t-3d th:nth-child(2){width:40%}
+  .t-5b th:nth-child(1){width:8%}  .t-5b th:nth-child(2){width:22%}
+  .t-5b th:nth-child(3){width:32%}
+  .t-7  th:nth-child(1){width:8%}  .t-7  th:nth-child(2){width:18%}
+  .t-7  th:nth-child(3){width:40%}
+  th{background:#f2f6fa;color:#123a63;font-weight:600;white-space:nowrap}
+  td.nw{white-space:nowrap}
+  tr:nth-child(even) td{background:#fbfcfe}
+  .chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap}
+  .c-ok{background:var(--ok-soft);color:var(--ok);border:1px solid #bfe9cf}
+  .c-warn{background:var(--warn-soft);color:var(--warn);border:1px solid #fde2cf}
+  .c-bad{background:var(--bad-soft);color:var(--bad);border:1px solid #fecdca}
+  .c-mid{background:var(--mid-soft);color:var(--mid);border:1px solid #e4dcff}
+  .c-info{background:var(--brand-soft);color:var(--brand);border:1px solid #cfe0f7}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:14px 0}
+  .card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fbfdff}
+  .card b{display:block;font-size:13px;color:#123a63;margin-bottom:4px}
+  .card span{font-size:12.5px;color:var(--ink-2)}
+  .callout{border-left:4px solid var(--brand);background:var(--brand-soft);padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0;font-size:13.5px}
+  .callout.warn{border-left-color:#e0883a;background:var(--warn-soft)}
+  .callout.bad{border-left-color:#d92d20;background:var(--bad-soft)}
+  .callout.ok{border-left-color:#25a35a;background:var(--ok-soft)}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:12px 0;font-size:12.5px}
+  .flow .st{background:#fff;border:1px solid var(--line);border-radius:8px;padding:5px 10px;white-space:nowrap}
+  .flow .arr{color:var(--muted)}
+  .flow .st.ok{border-color:#bfe9cf;background:var(--ok-soft);color:var(--ok)}
+  .flow .st.warn{border-color:#fde2cf;background:var(--warn-soft);color:var(--warn)}
+  .flow .st.bad{border-color:#fecdca;background:var(--bad-soft);color:var(--bad)}
+  .toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .toc a{font-size:12.5px;text-decoration:none;color:var(--brand);border:1px solid #cfe0f7;
+         background:#fff;border-radius:999px;padding:4px 11px}
+  .toc a:hover{background:var(--brand-soft)}
+  .num{font-variant-numeric:tabular-nums}
+  footer{margin-top:26px;color:var(--muted);font-size:12px;text-align:center}
+  @media (max-width:720px){
+    .wrap{padding:18px 12px 60px}
+    header.hero{padding:22px 18px} header.hero h1{font-size:21px}
+    section{padding:18px 16px} th,td{padding:7px}
+    table{font-size:12px}
+  }
+  @media print{
+    body{background:#fff}
+    .wrap{max-width:none;padding:0}
+    header.hero{box-shadow:none;border-radius:0}
+    section{border:0;border-top:1px solid #ccc;border-radius:0;padding:14px 0;break-inside:auto}
+    h2{break-after:avoid} table{break-inside:auto} tr{break-inside:avoid}
+    .toc{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>创意工作台 · 视频链路排查结论与修复方案</h1>
+  <div class="sub">对《创意工作台视频故障修复与后台任务列表实施方案》F01–F08 与 A01–A14 的逐条代码核实、修复设计，以及后台任务功能的可用性评估</div>
+  <div class="meta">
+    <span>代码基线 <b>46b2a4d</b> / 系统版本 V4.78</span>
+    <span>核实日期 2026-11-16</span>
+    <span>核实方式：读码 + 本地最小复现（未提交付费生成）</span>
+    <span>结论：F01–F08 全部成立，其中 3 项为本次失败的直接嫌疑</span>
+  </div>
+  <div class="toc">
+    <a href="#s1">一、结论先说</a>
+    <a href="#s2">二、排查矩阵</a>
+    <a href="#s3">三、修复方案</a>
+    <a href="#s4">四、后台任务可用性评估</a>
+    <a href="#s5">五、验收矩阵落地</a>
+    <a href="#s6">六、不做清单与风险</a>
+    <a href="#s7">七、实施顺序</a>
+  </div>
+</header>
+
+<section id="s1">
+  <h2>一、结论先说</h2>
+  <p>文档的核心判断是对的：<b>线上显示「连通测试成功」与「出不了片」可以同时成立</b>，因为当前测试只证明端点回了一个 2xx，并不证明拿到了任务号、更不证明成片可下载可播放。我在代码里逐条核实了 F01–F08，<b>八项全部成立</b>，其中三项构成这次失败的直接嫌疑，另有两项是"看起来成功、其实是假象"的元凶。</p>
+
+  <div class="grid">
+    <div class="card"><b>① 不是"没配视频模型"</b><span>V4.78 已修复选型（#16 / wan3.0-video 确实被选中）。问题发生在"提交之后的取片与判定"。</span></div>
+    <div class="card"><b>② 失败被折叠成"成功"</b><span>轮询异常、查询 4xx、无成片字段，全部静默吞掉 → 回退分镜 → 后台任务仍写 <code>done</code>。用户只看到"完成但没有视频"。</span></div>
+    <div class="card"><b>③ 成片可能根本不是视频</b><span>媒体解析会递归接受任意 <code>http</code> 字符串；已复现：PENDING 响应里的输入图片 URL 被当成成片，直接存成 .mp4。</span></div>
+    <div class="card"><b>④ 后台任务名不副实</b><span>任务只在单进程内存里、无归属校验、刷新即中断、不能并行。要做成"能离开页面"，必须持久化。</span></div>
+  </div>
+
+  <div class="callout bad">
+    <b>必须先纠正的表述口径：</b>"连通测试成功 / 配置齐全"只能推出「提交被受理」，不能推出「可出片」。诊断与设置页现有文案（含我在 V4.78 写的"可直接生成"）都要降级为四态：<b>配置完整 → 提交受理 → 查询可用 → 出片验证</b>，只有最后一态才允许说"能出片"。
+  </div>
+
+  <div class="callout">
+    <b>对后台任务的态度（提前说）：</b>需求成立，但文档给的界面复杂度偏高（筛选 + 搜索 + 三种重试 + 子任务 + 预览下载堆在一个抽屉里）。我的建议是<b>后端做重（持久化、状态机、恢复），前端做轻（两个入口 + 一行一状态 + 一个可执行按钮）</b>。详见第四节。
+  </div>
+</section>
+
+<section id="s2">
+  <h2>二、排查矩阵（逐条代码核实）</h2>
+  <p>下表左列沿用文档编号，右列是我在基线上的核实结果。<span class="kbd">行号为当前 HEAD（46b2a4d）实际位置，与文档所引行号略有偏移。</span></p>
+
+  <table class="t-f">
+    <thead>
+      <tr><th>编号</th><th>问题</th><th>代码位置</th><th>核实结果</th><th>证据 / 复现</th><th>严重度</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="nw">F01</td>
+        <td>连通测试与诊断把"有响应"当成"能出片"</td>
+        <td><code>llm_catalog.py:1138-1160</code><br><code>routers.py:806-909</code></td>
+        <td><span class="chip c-bad">确认</span></td>
+        <td><code>_test_generic_video</code> 只要 <code>status_code &lt; 400</code> 就 <code>ok=True</code>；JSON 解析失败时 <code>data={}</code>，<code>task_id=None</code>，仍返回 ok 与"reachable"。空 JSON / HTML 错误页 / 未知结构都算通过。</td>
+        <td>高</td>
+      </tr>
+      <tr>
+        <td class="nw">F02</td>
+        <td>轮询错误被吞、超时后放弃原任务</td>
+        <td><code>providers.py:592-617</code></td>
+        <td><span class="chip c-bad">确认</span></td>
+        <td>循环 120 轮 × <code>sleep(3)</code> + 每轮请求耗时；<code>except: continue</code>、<code>status_code&gt;=400: continue</code>、非 JSON <code>continue</code>，全部无日志无出口。耗尽后回退分镜，不再持有 <code>task_id</code>。</td>
+        <td>高</td>
+      </tr>
+      <tr>
+        <td class="nw">F03</td>
+        <td>没有成片却被标记任务完成</td>
+        <td><code>providers.py:628-632</code><br><code>routers.py:941-956</code></td>
+        <td><span class="chip c-bad">确认</span></td>
+        <td><code>generate()</code> 用 <code>except</code> 兜底成分镜（<code>provider=storyboard</code>）；<code>_cw_video_job_runner</code> 拿到返回值后<b>无条件</b>写 <code>status=done</code>，只有抛异常才写 error——而实现层从不抛异常。结果：<code>done</code> + <code>videos=[]</code>。</td>
+        <td>高</td>
+      </tr>
+      <tr>
+        <td class="nw">F04</td>
+        <td>任意链接都可能被识别成成片</td>
+        <td><code>providers.py:346-370</code><br><code>providers.py:585</code></td>
+        <td><span class="chip c-bad">确认（已复现）</span></td>
+        <td>本地复现：<code>{"output":{"task_status":"PENDING","task_id":"tk_123","input":{"image":"https://…/product.png"}}}</code> → <code>_video_find_media</code> 返回商品图 URL，且 <code>generate</code> 在取 <code>task_id</code> <b>之前</b>先解析媒体 → 图生视频场景会把 PNG 存成 .mp4。</td>
+        <td>高（条件触发）</td>
+      </tr>
+      <tr>
+        <td class="nw">F05</td>
+        <td>下载失败仍当成功；下载内容不校验</td>
+        <td><code>providers.py:499-519</code></td>
+        <td><span class="chip c-bad">确认</span></td>
+        <td>下载异常 → <code>return {"provider":"model","url":url}</code>，调用方照旧放进 <code>videos</code>；成功下载也<b>不校验</b> content-type / magic bytes / 是否可解析，HTML 错误页、图片、截断文件都能落成 .mp4。</td>
+        <td>高</td>
+      </tr>
+      <tr>
+        <td class="nw">F06</td>
+        <td>任务只在内存、无归属、可被误清</td>
+        <td><code>routers.py:913-925</code><br><code>routers.py:978-981</code></td>
+        <td><span class="chip c-bad">确认</span></td>
+        <td><code>_CW_VIDEO_JOBS</code> 为进程内 dict：重启即失；多 worker 查不到（404）。<code>sweep</code> 按 TTL 3h 与上限 60 <b>不看状态</b>地删最旧，运行中任务也会被删。GET 只校验角色，<b>不校验 owner</b>——任意 editor 可读他人任务结果。</td>
+        <td>高（安全 + 可靠性）</td>
+      </tr>
+      <tr>
+        <td class="nw">F07</td>
+        <td>时长/尺寸造假、文件名可撞</td>
+        <td><code>providers.py:546-553</code><br><code>routers.py:1062,1041</code></td>
+        <td><span class="chip c-bad">确认</span></td>
+        <td>dashscope 分支请求体只有 <code>{model,input,parameters:{size,count}}</code>，<b>没有 duration</b>；结果里 <code>duration_sec</code> 却直接取计划值（提示词里的"15 秒"不算模型参数）。文件名 <code>cw_video_{uid}_{int(time.time())}.mp4</code>，同用户同秒并发即覆盖。</td>
+        <td>中</td>
+      </tr>
+      <tr>
+        <td class="nw">F08</td>
+        <td>前台仍只有单任务、不能开新创作</td>
+        <td><code>cwTask.ts</code>（单 snap）<br><code>CreativeWorkbench.tsx:499-525,943</code></td>
+        <td><span class="chip c-bad">确认</span></td>
+        <td><code>cwTask</code> 只有一个模块级快照，<code>batchGenerate</code> 串行「等图片→等视频」，全部 await 在前端。<code>新的创作</code>按钮只在 <code>view==='result' &amp;&amp; (有图片或视频)</code> 时出现；生成中无法开始下一份，全部失败无产物时同样没有入口。</td>
+        <td>高（体验）</td>
+      </tr>
+      <tr>
+        <td class="nw">G01</td>
+        <td>（文档一并提到）生成统计把图片失败判成成功</td>
+        <td><code>CreativeWorkbench.tsx:512-524</code></td>
+        <td><span class="chip c-bad">确认</span></td>
+        <td><code>const vidOk = doVid ? … : true</code>；<code>totalOk = okImages&gt;0 || vidOk</code>。纯图片模式下 <code>vidOk</code> 恒为 true → 图片全失败也走"创作完成"，toast 还会拼上"视频已生成"。</td>
+        <td>中（误导）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>这三条最像本次线上失败的原因</h3>
+  <ol>
+    <li><b>F02 + F03</b>：厂商任务其实在跑，但轮询某几轮拿到 4xx/网络抖动被 <code>continue</code> 掉；120 轮耗尽或提前退出后回退分镜，<b>后台任务照样标 done</b> → 用户看到"完成 + 空视频"。</li>
+    <li><b>F04</b>：图生视频时提交响应里带 <code>input.image</code>，被当成同步成片下载 → 得到一个 PNG 改名的 .mp4，前端 <code>&lt;video&gt;</code> 黑屏。与"有产物但播不了"的现象高度吻合。</li>
+    <li><b>F05</b>：即使下载到了真正的成片 URL，签名 URL 过期 / 302 / HTML 错误页都会落成坏文件，且没有任何校验拦截。</li>
+  </ol>
+
+  <div class="callout warn">
+    <b>仍缺的关键证据（文档也说对了）：</b>本次失败请求的 <code>provider request_id / task_id</code>、每次查询原文、下载响应头。补齐这些之前不宣称"唯一根因"。修复顺序应当是<b>先把这些证据记录下来</b>，而不是先改逻辑——否则改完仍无法证明修好了。
+  </div>
+</section>
+
+<section id="s3">
+  <h2>三、修复方案</h2>
+  <p>原则：<b>分镜永远不等于视频</b>；<b>未证实的结果不写成功</b>；<b>不重复提交收费任务</b>；<b>每一步都留可脱敏取证的痕</b>。</p>
+
+  <h3>3.1 状态机（唯一事实）</h3>
+  <div class="flow">
+    <span class="st">queued 排队</span><span class="arr">→</span>
+    <span class="st">submitting 提交中</span><span class="arr">→</span>
+    <span class="st">provider_pending 模型生成中</span><span class="arr">→</span>
+    <span class="st">downloading 下载中</span><span class="arr">→</span>
+    <span class="st">validating 校验中</span><span class="arr">→</span>
+    <span class="st ok">succeeded 成功</span>
+  </div>
+  <div class="flow">
+    <span class="st bad">failed（终态，可重试）</span>
+    <span class="st warn">needs_attention 待核实（非终态，可继续查询）</span>
+    <span class="st">canceled / stopped（用户主动）</span>
+  </div>
+  <p><b>succeeded 的四个必要条件</b>（缺一不可）：① 供应商返回成功态；② 媒体下载 200 且落到临时文件；③ 媒体探测通过（存在视频流 / 可解析 / 时长与宽高非零）；④ 资产已入库且与任务关联。<code>分镜脚本</code>、<code>外部临时链接</code>、<code>videos=[]</code> 都不满足。</p>
+
+  <h3>3.2 错误码与处置（决定前端只显示"一个可执行按钮"）</h3>
+  <table class="t-5a">
+    <thead><tr><th>error_code</th><th>触发场景</th><th>子任务状态</th><th>用户看到的一句话</th><th>唯一可执行动作</th></tr></thead>
+    <tbody>
+      <tr><td class="nw"><code>config_missing</code></td><td>没有可出片的视频配置</td><td>failed</td><td>还没配置可用的视频模型</td><td>去配置</td></tr>
+      <tr><td class="nw"><code>submit_rejected</code></td><td>提交 4xx（401/403/400）</td><td>failed</td><td>提交被拒绝：Key / 白名单 / 参数</td><td>看原文 → 修复后重试</td></tr>
+      <tr><td class="nw"><code>submit_unknown</code></td><td>提交超时或回包无任务号</td><td>needs_attention</td><td>提交结果待确认，正在核实</td><td>继续核实（禁止自动重提）</td></tr>
+      <tr><td class="nw"><code>poll_auth</code></td><td>查询 401/403</td><td>needs_attention</td><td>任务已提交，但查询鉴权失败</td><td>修复 Key 后继续查询</td></tr>
+      <tr><td class="nw"><code>poll_rate_limited</code></td><td>429</td><td>running（退避）</td><td>厂商限流，已自动退避</td><td>无需操作</td></tr>
+      <tr><td class="nw"><code>poll_timeout</code></td><td>超过业务期限仍在生成</td><td>needs_attention</td><td>生成时间偏长，仍可继续取回</td><td>继续查询</td></tr>
+      <tr><td class="nw"><code>provider_failed</code></td><td>厂商返回 failed / 内容审核</td><td>failed</td><td>模型生成失败：{厂商原因}</td><td>重新生成</td></tr>
+      <tr><td class="nw"><code>no_media_field</code></td><td>成功态但无约定媒体字段</td><td>needs_attention</td><td>厂商已成功但未取到成片地址</td><td>继续查询 / 联系支持</td></tr>
+      <tr><td class="nw"><code>download_failed</code></td><td>下载 4xx/5xx/超时/超大</td><td>failed</td><td>成片下载失败（链接可能已过期）</td><td>重新下载</td></tr>
+      <tr><td class="nw"><code>invalid_media</code></td><td>下载内容非视频 / 损坏 / 无视频流</td><td>failed</td><td>取回的文件不是可播放视频</td><td>重新下载 → 仍失败则重新生成</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.3 解析：按协议族显式映射，禁止递归兜底</h3>
+  <p>把 <code>_video_find_media</code> 从"主路径"降级为"仅同步直出协议的最后手段"，并引入两个显式解析器：</p>
+  <table class="t-4a">
+    <thead><tr><th>协议族</th><th>提交响应取</th><th>查询响应取</th><th>媒体字段（白名单）</th></tr></thead>
+    <tbody>
+      <tr><td class="nw">dashscope_maas</td><td><code>output.task_id</code> / <code>output.task_status</code></td><td>同上 + <code>output.code/message</code></td><td><code>output.video_url</code> → <code>output.results[].url</code></td></tr>
+      <tr><td class="nw">generic-video 网关</td><td><code>id</code> / <code>task_id</code> / <code>job_id</code></td><td><code>status</code> / <code>state</code></td><td><code>output.url</code> / <code>result.url</code> / <code>results[].url</code> / <code>data[].url</code></td></tr>
+      <tr><td class="nw">keling</td><td><code>data.task_id</code></td><td><code>data.task_status</code></td><td><code>data.task_result.videos[].url</code></td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li>提交阶段<b>先取任务号</b>；只有显式声明 <code>body_shape=sync</code> 的配置才允许在提交响应里取媒体。</li>
+    <li>规则：<b>有 task_id 且状态非终态 → 绝不解析媒体</b>；无 task_id 且无白名单媒体 → <code>no_media_field</code> + 保留脱敏响应摘要（≤500 字）。</li>
+    <li>未知结构一律判"不通过"，不再"尽力而为地猜"。</li>
+  </ul>
+
+  <h3>3.4 轮询：可配置退避 + 业务期限 + 保留任务号</h3>
+  <table class="t-3a">
+    <thead><tr><th>响应</th><th>处置</th><th>是否继续持有任务</th></tr></thead>
+    <tbody>
+      <tr><td>2xx + pending</td><td>按退避继续（3s→6s→10s→20s，上限 30s）</td><td>是</td></tr>
+      <tr><td>429 / 5xx / 网络异常</td><td>指数退避，累计失败次数记入 <code>attempts</code>，连续 5 次才升 <code>poll_network</code></td><td>是</td></tr>
+      <tr><td>401 / 403</td><td>立即 <code>poll_auth</code>，停止轮询但<b>保留 task_id</b></td><td>是（可恢复）</td></tr>
+      <tr><td>超过业务期限（默认 20 分钟，可配）</td><td>转 <code>needs_attention / poll_timeout</code>，<b>不判失败、不重提</b></td><td>是（后台继续低频查询）</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <b>"6 分钟"这个数必须从代码里消失。</b>它既不是模型的真实上限，也不是用户能理解的承诺。改为：页面上只显示"已等待 N 分 M 秒 · 模型生成中"，后台按业务期限自动续查，用户随时可以离开。
+  </div>
+
+  <h3>3.5 下载与校验（把"有链接"变成"能播"）</h3>
+  <ol>
+    <li><b>流式下载</b>到 <code>uploads/tmp/{asset_uuid}.part</code>：超时 300s、上限 200MB、跟随最多 3 次跳转、记录最终 URL 与 content-type。</li>
+    <li><b>三层校验</b>：
+      <ul>
+        <li>响应层：<code>2xx</code> + content-type 不是 <code>text/*</code> + 长度 &gt; 20KB；</li>
+        <li>容器层（纯 Python，零依赖）：MP4 必须有 <code>ftyp</code>（偏移 4）与 <code>moov</code>；解析 <code>mvhd</code> 得 duration、<code>tkhd</code> 得宽高；WebM 检查 <code>EBML</code> 头；</li>
+        <li>探测层（可选装 ffprobe）：拿到 codec / duration / width / height，作为<b>实际值</b>写库。</li>
+      </ul>
+    </li>
+    <li><b>失败不乱丢</b>：删临时文件、保留 <code>provider_url</code> 与响应头摘要，状态 <code>failed/download_failed</code>，操作只给"重新下载"（<b>不重新生成</b>）。</li>
+    <li><b>通过后原子落盘</b>：<code>os.replace()</code> 重命名为 <code>video_{batch8}_{asset_uuid}.mp4</code>，入库 <code>CreativeAsset</code>（<code>kind=video</code>）。</li>
+  </ol>
+  <div class="callout ok">
+    <b>不装 ffmpeg 也能先跑：</b>容器层校验已经能拦住 PNG 改名、HTML 错误页、空文件、截断文件这四类最常见的假成片；ffprobe 只是把"时长/宽高"从"计划值"升级为"实测值"（A12 需要）。建议在 Dockerfile 里加 <code>apt-get install -y --no-install-recommends ffmpeg</code>，并以"有则用、无则降级"的方式接入。
+  </div>
+
+  <h3>3.6 时长与命名（F07）</h3>
+  <ul>
+    <li>dashscope 分支按契约补 <code>parameters.duration</code>；<b>先做一次受控实测</b>确认 wan3.0-video 接受的取值集合，不支持时不要硬塞，改为在结果里标注"模型固定时长"，并把 <code>requested_duration</code> 与 <code>actual_duration</code> 同时存下。</li>
+    <li><code>duration_sec</code> / <code>width</code> / <code>height</code> 一律来自探测值；页面显示实测值，与所选不符时显式标注（沿用 V4.75 的"输出比例如实标注"思路）。</li>
+    <li>文件名带批次与资产 UUID，彻底消除同秒覆盖。</li>
+  </ul>
+
+  <h3>3.7 证据留存（改逻辑之前先做）</h3>
+  <p>新增一张<b>脱敏</b>的阶段流水（可以是 JSON 列，也可以复用 <code>attempts</code> + <code>subtasks_json</code>）：</p>
+  <table class="t-2a">
+    <thead><tr><th>字段</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>provider_config_id</code> / <code>provider_model</code></td><td>本次用的是哪条配置、哪个模型（排除选型问题）</td></tr>
+      <tr><td><code>submit_http</code> / <code>provider_request_id</code> / <code>provider_task_id</code></td><td>提交状态、请求追踪号、任务号</td></tr>
+      <tr><td><code>poll_n</code> / <code>last_status</code> / <code>last_http</code> / <code>last_body_digest</code></td><td>第几轮、最后状态、HTTP、响应摘要（脱敏、去 token）</td></tr>
+      <tr><td><code>download_http</code> / <code>content_type</code> / <code>bytes</code> / <code>probe</code></td><td>下载结果与探测结果</td></tr>
+    </tbody>
+  </table>
+  <p>禁止落库：<code>api_key</code>、<code>Authorization</code> 头、带签名的完整 URL（只留 host + path 前缀）。</p>
+</section>
+
+<section id="s4">
+  <h2>四、后台任务功能评估（重点：可用性易用性，而不是界面复杂度）</h2>
+
+  <h3>4.1 先定义"这个功能成功的样子"</h3>
+  <div class="grid">
+    <div class="card"><b>可用性（不做到就等于没做）</b><span>关页面 / 刷新 / 换菜单 / 服务重启后，任务仍在、状态真实、成片能取回；不会因为等待而阻塞下一份创作。</span></div>
+    <div class="card"><b>易用性（判断标准）</b><span>用户不需要学习新概念：不新增一级导航、不新增二级页面、不需要理解"批次/子任务/租约"这些词。</span></div>
+    <div class="card"><b>复杂度上限</b><span>界面上新增元素 ≤ 2 个（一个按钮 + 一个入口）；抽屉里默认可见的交互 ≤ 3 类（看状态、看结果、点一个按钮）。</span></div>
+  </div>
+
+  <h3>4.2 我的界面方案：两个入口 + 一个抽屉，不加导航</h3>
+  <ul>
+    <li><b>顶部固定条</b>：左侧 <code>＋ 新建创作</code>（任何阶段都可点，只清空草稿、不动历史）；右侧 <code>任务 3</code>（数字 = 本人排队 + 进行中的批次数，为 0 时显示"任务"且弱化）。</li>
+    <li><b>右侧抽屉（约 400px）</b>：标题「创作任务」；默认两个分组：<code>进行中</code> / <code>需处理</code>；<code>已完成</code>默认折叠并按 7 天保留。不阻塞底层工作台，不跳页。</li>
+    <li><b>一行 = 一个批次</b>：产品名 · <span class="chip c-info">图片</span>/<span class="chip c-mid">视频</span> · 阶段文案 · 已等待 · <code>2/3</code> 成功数。点行展开子任务，不进入新页面。</li>
+    <li><b>提交后的反馈</b>：toast「已加入后台任务，可继续创作」+ 两个动作（查看任务 / 开始新创作）。抽屉关掉、切模块、刷新都不影响任务。</li>
+    <li><b>完成提醒</b>：非当前批次完成时，用现有右下角浮窗提示一次（复用 V4.77 的 CwTaskDock 位置），不再叠加新的红点体系。</li>
+  </ul>
+
+  <h3>4.3 我建议砍掉的复杂度（并说明理由）</h3>
+  <table class="t-3b">
+    <thead><tr><th>文档提议</th><th>建议</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>筛选（进行中/已完成/需处理）+ 按产品名或任务号搜索</td><td><span class="chip c-warn">首版砍掉搜索</span>只留两个分组 + 已完成折叠</td><td>本人任务通常是个位数、按时间倒序即可；搜索框是"我做了很多任务"才需要的功能，先做会让人以为要管理一堆任务。</td></tr>
+      <tr><td>三种重试动作（重新下载 / 继续查询 / 重新生成）全列出来</td><td><span class="chip c-warn">按 error_code 只显示一个</span></td><td>三个按钮并排会让用户猜"我该点哪个"。错误码已经决定了唯一正确动作，界面直接给那一个。</td></tr>
+      <tr><td>供应商取消（若厂商支持）</td><td><span class="chip c-bad">不做</span>只做"停止后续步骤"并说明在途任务可能仍会完成</td><td>阿里云百炼当前没有取消契约。做一个点不动的取消按钮，比没有更伤信任。</td></tr>
+      <tr><td>生成百分比</td><td><span class="chip c-bad">不做</span>四态阶段文案 + 已等待时长</td><td>厂商不返回进度，百分比只能编。V4.76/V4.77 已确立"不把等待时间换算成百分比"的做法。</td></tr>
+      <tr><td>任务列表做成独立页面 / 一级菜单</td><td><span class="chip c-bad">不做</span>只在创意工作台内以抽屉承载</td><td>任务与创作强耦合，独立页面会让用户来回跳；抽屉关掉就是原来的工作台。</td></tr>
+      <tr><td>一次性展示批次 + 子任务 + 阶段 + 错误码 + 资产 + 操作</td><td><span class="chip c-warn">两层折叠</span>默认只到子任务层，错误码收进"技术详情"</td><td>移动端 400px 抽屉塞不下；默认给人话，排障时再展开。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.4 后端：够用就好，不上新基础设施</h3>
+  <table class="t-3c">
+    <thead><tr><th>能力</th><th>做法</th><th>不做什么</th></tr></thead>
+    <tbody>
+      <tr><td>持久化</td><td>复用 <code>GenerationJob</code>（<code>kind='video'</code>）+ 新增轻量 <code>creative_batches</code> 表；<code>migrations.py</code> 自愈补列</td><td>不新建独立任务微服务、不换数据库</td></tr>
+      <tr><td>执行</td><td>应用内 asyncio 后台循环，<code>next_poll_at</code> 驱动；视频并发默认 2，超出排队</td><td>不引入 Celery / Redis / 多进程</td></tr>
+      <tr><td>恢复</td><td>启动时把"非终态 + 租约过期"的任务重新入队：有 <code>provider_task_id</code> 继续查，没有则 <code>submit_unknown</code></td><td>不迁移旧内存任务，也不假装能恢复</td></tr>
+      <tr><td>幂等 / 归属</td><td><code>idempotency_key = hash(owner+batch+draft+参数)</code>；同键异参 409；所有读接口按 <code>owner_id</code> 过滤</td><td>不允许跨用户读取；不做共享/转交</td></tr>
+      <tr><td>清理</td><td>只清"终态 + 资产已归档"的记录；运行中永不按容量删</td><td>不再用"60 条上限丢最旧"</td></tr>
+      <tr><td>图片任务</td><td>沿用现有 <code>kind='images'</code> 与 <code>/api/generation-jobs</code>，仅在批次视图里聚合展示</td><td>不重写图片生成引擎</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.5 接口（保持兼容，只加不改）</h3>
+  <table class="t-2b">
+    <thead><tr><th>接口</th><th>行为</th></tr></thead>
+    <tbody>
+      <tr><td><code>POST /api/cw-video/generate-jobs</code>（保留）</td><td>内部转发到持久化任务服务，返回 <code>job_id / batch_id / status / stage</code>，<b>仍不等待出片</b>，旧前端不改也能用</td></tr>
+      <tr><td><code>GET /api/cw-video/generate-jobs/{id}</code>（保留）</td><td>从库里读；补齐 <code>owner</code> 校验</td></tr>
+      <tr><td><code>GET /api/creative-tasks?status=&amp;cursor=&amp;limit=</code></td><td>本人批次列表（默认只回进行中 + 需处理，已完成需显式请求）</td></tr>
+      <tr><td><code>GET /api/creative-tasks/{batch_id}</code></td><td>批次 + 子任务 + 阶段 + 资产 + 人话错误</td></tr>
+      <tr><td><code>POST /api/creative-tasks/{batch_id}/retry</code></td><td><code>action=download|poll|regenerate</code>，由后端按 error_code 校验是否允许，避免前端乱点</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.6 前端状态管理的关键改动（避免旧任务污染新草稿）</h3>
+  <ul>
+    <li><code>cwTask.ts</code> 降级为「抽屉开关 + 当前选中批次」，<b>不再持有任务事实</b>；事实来自服务端列表。</li>
+    <li>所有异步回写必须带 <code>batch_id</code> 比对：<code>if (resp.batch_id !== currentDraft.batchId) return</code>。</li>
+    <li>刷新后不再把状态改成 <code>interrupted</code>，而是直接拉服务端列表；只有"本地提交但没拿到 ID"的极短窗口才显示"提交待确认"。</li>
+    <li>轮询节奏：进行中 5s；页面隐藏 15s；抽屉关闭且无进行中任务时停止。</li>
+  </ul>
+</section>
+
+<section id="s5">
+  <h2>五、验收矩阵落地（A01–A14 → 实现点与测法）</h2>
+  <p>全部可用<b>本地模拟供应商</b>确定性覆盖，不需要花真钱；只有"A15 真实出片"需要一次受控真实任务。</p>
+  <table class="t-5b">
+    <thead><tr><th>编号</th><th>场景</th><th>实现点</th><th>测法</th></tr></thead>
+    <tbody>
+      <tr><td class="nw">A01</td><td>HTTP 200 + 空 JSON / HTML</td><td>3.3 显式解析 + F01 测试改造</td><td>stub 返回 <code>200 &lt;html&gt;</code> / <code>{}</code> → 测试 fail，文案"响应契约异常"</td></tr>
+      <tr><td class="nw">A02</td><td>PENDING 响应含输入图 URL</td><td>3.3 先取任务号、白名单媒体字段</td><td>stub 回 PENDING + input.image → 断言继续轮询、未产生资产</td></tr>
+      <tr><td class="nw">A03</td><td>查询 401/403</td><td>3.2 <code>poll_auth</code></td><td>stub 第 2 轮返 403 → 立即 needs_attention，保留 task_id</td></tr>
+      <tr><td class="nw">A04</td><td>429 / 网络抖动</td><td>3.4 退避</td><td>stub 连返 2 次 429 后成功 → 最终 succeeded，且提交次数 == 1</td></tr>
+      <tr><td class="nw">A05</td><td>超过 6 分钟仍在生成</td><td>3.4 业务期限 + 续查</td><td>stub 持续 pending → poll_timeout(needs_attention)；再次查询返回成功 → succeeded</td></tr>
+      <tr><td class="nw">A06</td><td>厂商失败 / 只回分镜</td><td>F03 成功条件</td><td>断言 <code>status=failed</code>、<code>videos=[]</code>、<code>error_stage=provider</code></td></tr>
+      <tr><td class="nw">A07</td><td>下载 HTML / 图片 / 损坏文件</td><td>3.5 三层校验</td><td>stub 下载返回 html / png / 截断 mp4 → <code>invalid_media</code>，不入资产库，可单独重试下载</td></tr>
+      <tr><td class="nw">A08</td><td>刷新 / 关页 / 服务重启</td><td>F06 持久化 + 启动恢复</td><td>提交后 kill 进程重启 → 列表仍能查到并按 task_id 续查</td></tr>
+      <tr><td class="nw">A09</td><td>同账号并发两份创作</td><td>4.6 批次隔离</td><td>并发提交 → 两条 batch 互不覆盖，产物归属各自 batch</td></tr>
+      <tr><td class="nw">A10</td><td>混合任务图片先完成</td><td>图片/视频独立调度</td><td>图片批次先 succeeded 可预览，视频仍 running</td></tr>
+      <tr><td class="nw">A11</td><td>重复点击 / 跨账号读取</td><td>幂等键 + owner 过滤</td><td>同键重复 → 同一 job；异参 → 409；他人 batch → 404</td></tr>
+      <tr><td class="nw">A12</td><td>模型忽略时长或比例</td><td>3.6 实测值</td><td>stub 返回与请求不同的时长 → 结果展示实测值并标"与所选不符"</td></tr>
+      <tr><td class="nw">A13</td><td>同用户同秒 + 容量清理</td><td>UUID 命名 + 清理规则</td><td>并发两任务文件名不同；运行中任务不被 TTL/容量清理</td></tr>
+      <tr><td class="nw">A14</td><td>仅图片且全失败</td><td>G01 统计修复</td><td>断言 UI 显示失败，绝不出现"视频已生成"</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <b>真实出片验收</b>需要留一条完整证据链：内部 batch/job → 供应商 task_id → 成功状态 → 本地资产文件 → 探测结果（时长/宽高/codec）→ 浏览器播放与下载；再补一次"刷新 + 恢复"。这条<b>不能靠模拟通过</b>，必须真实跑一次并记录时间与配置版本。
+  </div>
+</section>
+
+<section id="s6">
+  <h2>六、不做清单与风险</h2>
+  <table class="t-3d">
+    <thead><tr><th>类别</th><th>内容</th><th>理由 / 处置</th></tr></thead>
+    <tbody>
+      <tr><td class="nw">明确不做</td><td>扩大超时、隐藏异常、加提示词、继续用分镜兜底冒充成功</td><td>这四种"修复"会让问题更难被发现，文档也明确禁止</td></tr>
+      <tr><td class="nw">明确不做</td><td>任务搜索、独立任务页、供应商取消、假进度百分比</td><td>见 4.3，增加操作面但不增加可用性</td></tr>
+      <tr><td class="nw">明确不做</td><td>重写图片生成引擎</td><td>图片链路已稳定，只需在批次视图里聚合</td></tr>
+      <tr><td class="nw">风险</td><td>SQLite 并发写（worker + 请求）</td><td>已有 WAL + busy_timeout 30s；worker 单实例串行领取，写事务短小</td></tr>
+      <tr><td class="nw">风险</td><td>ffmpeg 增加镜像体积</td><td>可选安装 + 纯 Python 容器校验降级；不装也能拦住四类假成片</td></tr>
+      <tr><td class="nw">风险</td><td>wan3.0-video 是否接受 duration 未知</td><td>先受控实测；不支持则标注"固定时长"，不硬塞参数</td></tr>
+      <tr><td class="nw">风险</td><td>旧内存任务无法恢复</td><td>上线时若有运行中任务，明确告知需重新提交；不宣称"全部可恢复"</td></tr>
+      <tr><td class="nw">风险</td><td>计费</td><td>模拟 stub 覆盖全部故障路径；真实调用设定次数与费用上限</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="s7">
+  <h2>七、实施顺序（按"先能证明，再能恢复，最后才好用"）</h2>
+  <table class="t-7">
+    <thead><tr><th>阶段</th><th>目标</th><th>主要改动</th><th>完成标志</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="nw"><b>P0</b></td>
+        <td>让"成片"是真的</td>
+        <td>3.3 解析、3.4 轮询、3.5 校验、F03 成功条件、F01 测试与诊断文案、3.7 证据留存</td>
+        <td>A01–A07 通过；日志能定位"失败发生在哪一阶段"</td>
+      </tr>
+      <tr>
+        <td class="nw"><b>P1</b></td>
+        <td>让"时长/命名"可信</td>
+        <td>3.6 参数与实测值、UUID 命名、<code>requested vs actual</code> 标注</td>
+        <td>A12、A13 通过</td>
+      </tr>
+      <tr>
+        <td class="nw"><b>P2</b></td>
+        <td>让"任务"活下来</td>
+        <td>F06 持久化 + 批次表 + worker + 恢复 + 幂等 + 归属；旧接口转发</td>
+        <td>A08、A09、A11 通过；重启后任务可续查</td>
+      </tr>
+      <tr>
+        <td class="nw"><b>P3</b></td>
+        <td>让"能一边等一边干"</td>
+        <td>顶部两入口 + 抽屉（4.2）、<code>cwTask</code> 降级、批次隔离、完成提醒、G01 统计修复</td>
+        <td>A10、A14 通过；生成中可开新创作并互不干扰</td>
+      </tr>
+      <tr>
+        <td class="nw"><b>P4</b></td>
+        <td>上线</td>
+        <td>模拟 stub 全量回归 + 一次受控真实出片 + 迁移/回滚说明 + 版本通知</td>
+        <td>证据链齐全，A01–A14 全绿（真实项单独记录）</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <b>建议的落地节奏：</b>P0 单独发一个小版本（V4.79），先把"能不能出片、为什么失败"说清楚；P2/P3 合并为 V4.80（持久化 + 抽屉）。这样用户能最快拿到可用性提升，而不是等一个大版本。
+  </div>
+</section>
+
+<footer>
+  本文为排查结论与实施方案，不代表代码已修复或生产已验收。<br>
+  基线 46b2a4d · 生成于 2026-11-16 · 核实方式：静态读码 + 本地最小复现（未发起付费生成）
+</footer>
+
+</div>
+</body>
+</html>

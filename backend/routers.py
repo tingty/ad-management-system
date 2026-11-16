@@ -21,7 +21,8 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import (get_llm_with_info, finalize_invocation, parse_json, get_video,
-                       _active_config, StoryboardVideo, video_route_report)
+                       _active_config, StoryboardVideo, video_route_report,
+                       VideoPipelineError, is_video_capable)
 from presets import creative_presets_payload
 from prompt_catalog import (library_dimensions, library_entries,
                             get_practice, target_key_for_kind, KINDS, FUNC_TYPES,
@@ -832,6 +833,10 @@ def api_cw_video_diagnose(db: Session = Depends(get_db),
 
     out: dict = {
         "configured": False,
+        # V4.79：四态 + 唯一动作。界面不再让用户在一堆提示里自己找结论。
+        "state": "no_config",
+        "state_label": "未配置视频模型",
+        "action": "",
         "has_video_config": bool(tagged),
         "video_config_count": len(tagged),
         "config_id": None,
@@ -851,10 +856,21 @@ def api_cw_video_diagnose(db: Session = Depends(get_db),
     }
 
     if not tagged:
+        out.update(state="no_config", state_label="未配置视频模型",
+                   action="到「系统设置 → 大模型配置」新增一条文生视频模型（如「文生视频 · 阿里云百炼 MaaS」），用途勾「视频」。")
         hints.append("还没有任何「用途包含视频」的模型配置：到「系统设置 → 大模型配置」新增，"
                      "选「文生视频」类协议（如文生视频 · 阿里云百炼 MaaS），用途勾选「视频」。")
         return out
     if cfg is None:
+        text_like = [s for s in skipped if not is_video_capable(s["cfg"])]
+        if text_like and len(text_like) == len(skipped):
+            out.update(state="text_model", state_label="配的其实是文本模型",
+                       action="到「大模型配置」新增一条文生视频模型（用途选「视频」）；那条文本模型的「视频」用途可以取消。")
+            hints.append("标了「视频」用途的配置全是文本模型（不能出片）：")
+        else:
+            out.update(state="disabled", state_label="视频配置未启用或缺要素",
+                       action="到「大模型配置」确认该视频配置已启用，且 API Key / 请求链接 / 模型版本三项齐全。")
+            hints.append("有视频配置，但没有一条同时满足「已启用 + Key/链接/模型齐全 + 用途含 video」：")
         hints.append("有配置标了「视频」用途，但没有一条是可出片的视频模型，因此生成时会回退分镜脚本。"
                      "常见原因：该配置其实是文本模型（见下方「已跳过」），或未启用、缺 API Key / 请求链接 / 模型版本。")
         return out
@@ -888,6 +904,16 @@ def api_cw_video_diagnose(db: Session = Depends(get_db),
         "params": {k: str(v) for k, v in params.items()},
         "missing": missing,
     })
+    # V4.79 四态收敛：契约缺参 / 连通失败 / 就绪——每种只给一个动作
+    if missing:
+        out.update(state="contract_missing", state_label="协议参数不齐（会把请求打到错误端点）",
+                   action="到「大模型配置」删除该条后重新选择同一协议（自动装配默认参数），或按下方缺失项补齐高级参数。")
+    elif cfg.last_test_ok is False:
+        out.update(state="connect_failed", state_label="最近一次连通测试失败",
+                   action="到「大模型配置」更新 API Key，并确认部署机公网 IP 已加入厂商白名单后重新测试。")
+    else:
+        out.update(state="ready", state_label="视频模型已就绪",
+                   action="可直接生成；若仍无成片，展开生成结果里的「证据」看厂商原文。")
     # V4.78：把「被跳过的文本配置」显式讲出来，避免用户误以为系统在用 deepseek 出片
     if skipped:
         names = "、".join(f"「{s['cfg'].name or s['cfg'].model or ('#' + str(s['cfg'].id))}」" for s in skipped[:4])
@@ -913,27 +939,55 @@ def api_cw_video_diagnose(db: Session = Depends(get_db),
 _CW_VIDEO_JOBS: dict = {}
 _CW_VIDEO_JOB_TTL = 3 * 3600   # 任务与结果保留 3 小时：前端刷新/重进页面仍能取回
 _CW_VIDEO_JOB_MAX = 60         # 内存里最多保留 60 条，超出丢弃最旧的
+CW_VIDEO_EVIDENCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", "video_evidence")
+
+
+def _persist_video_evidence(user_id: int, payload: dict) -> str:
+    """把脱敏证据落盘（V4.79 / P0）：用户报障时可据此核对「到底返回了什么」，不必重现。
+
+    只写已脱敏的摘要（providers._video_evidence_snippet 已抹掉 Key / Token），
+    不写完整响应体，避免把厂商返回里的敏感字段留在磁盘上。
+    """
+    os.makedirs(CW_VIDEO_EVIDENCE_DIR, exist_ok=True)
+    name = f"{time.strftime('%Y%m%d_%H%M%S')}_u{int(user_id or 0)}_{uuid.uuid4().hex[:6]}.json"
+    path = os.path.join(CW_VIDEO_EVIDENCE_DIR, name)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S"), **payload}, f, ensure_ascii=False, indent=2)
+    return name
 
 
 def _cw_video_job_sweep() -> None:
-    """清理过期任务，避免长时间运行后内存里堆积成片结果。"""
+    """清理过期任务（V4.79 / F06）：只清「已完成且过了 TTL」的，运行中的任务绝不清理。"""
     now = time.time()
-    for jid in [k for k, v in _CW_VIDEO_JOBS.items() if now - v["created_at"] > _CW_VIDEO_JOB_TTL]:
+    for jid in [k for k, v in _CW_VIDEO_JOBS.items()
+                if now - v["created_at"] > _CW_VIDEO_JOB_TTL
+                and v.get("status") not in ("queued", "running")]:
         _CW_VIDEO_JOBS.pop(jid, None)
     while len(_CW_VIDEO_JOBS) > _CW_VIDEO_JOB_MAX:
-        oldest = min(_CW_VIDEO_JOBS, key=lambda k: _CW_VIDEO_JOBS[k]["created_at"])
+        finished = [(k, v["created_at"]) for k, v in _CW_VIDEO_JOBS.items()
+                    if v.get("status") not in ("queued", "running")]
+        if not finished:
+            break
+        oldest = min(finished, key=lambda kv: kv[1])[0]
         _CW_VIDEO_JOBS.pop(oldest, None)
 
 
-def _cw_video_job_view(job_id: str) -> CWVideoJobOut:
+def _cw_video_job_view(job_id: str, user=None) -> CWVideoJobOut:
     job = _CW_VIDEO_JOBS.get(job_id)
     if not job:
+        raise HTTPException(404, "视频任务不存在或已过期，请重新生成")
+    # V4.79：任务归属校验。此前只校验角色，任何有编辑权的人拿到 job_id 就能读到他人任务
+    # 与成片。这里按 owner 比对，且用 404 而不是 403，避免泄露「该任务存在」。
+    owner = job.get("user_id")
+    if user is not None and owner and getattr(user, "id", None) != owner:
         raise HTTPException(404, "视频任务不存在或已过期，请重新生成")
     end = job.get("finished_at") or time.time()
     return CWVideoJobOut(
         job_id=job_id, status=job["status"], stage=job.get("stage", ""),
         elapsed_sec=int(max(0.0, end - job["started_at"])),
         error=job.get("error", ""),
+        error_code=job.get("error_code", ""),
+        error_action=job.get("error_action", ""),
         result=CWVideoGenerateResult(**job["result"]) if job.get("result") else None,
     )
 
@@ -948,7 +1002,15 @@ async def _cw_video_job_runner(job_id: str, req: CWVideoGenerateRequest, user_id
     try:
         user = db.query(User).filter_by(id=user_id).first() if user_id else None
         res = await _cw_video_generate_impl(req, db, user)
-        job.update(status="done", stage="完成", result=res.model_dump(), finished_at=time.time())
+        dump = res.model_dump()
+        if res.error_code:
+            # V4.79 / F03：链路跑完但没出片 → needs_attention，绝不写 done。
+            # 此前实现层永远不抛异常，runner 无条件写 done + videos=[]，界面显示「完成」却没有成片。
+            job.update(status="needs_attention", stage="未出片（需处理）", result=dump,
+                       error_code=res.error_code, error_action=res.error_action,
+                       error=res.error_message[:400], finished_at=time.time())
+        else:
+            job.update(status="done", stage="完成", result=dump, finished_at=time.time())
     except Exception as e:
         job.update(status="error", stage="失败",
                    error=f"{type(e).__name__}: {str(e)[:400]}", finished_at=time.time())
@@ -970,15 +1032,17 @@ async def api_cw_video_create_job(req: CWVideoGenerateRequest,
     job_id = uuid.uuid4().hex
     now = time.time()
     _CW_VIDEO_JOBS[job_id] = {"status": "queued", "stage": "排队中", "created_at": now,
-                              "started_at": now, "result": None, "error": ""}
+                              "started_at": now, "result": None, "error": "",
+                              "error_code": "", "error_action": "",
+                              "user_id": getattr(user, "id", None)}
     asyncio.create_task(_cw_video_job_runner(job_id, req, getattr(user, "id", None)))
-    return _cw_video_job_view(job_id)
+    return _cw_video_job_view(job_id, user)
 
 
 @router.get("/cw-video/generate-jobs/{job_id}", response_model=CWVideoJobOut)
 def api_cw_video_get_job(job_id: str, user: User = Depends(require_roles(*CAN_EDIT))):
-    """轮询出片任务：done 时 result 与同步接口结构完全一致。"""
-    return _cw_video_job_view(job_id)
+    """轮询出片任务：done 时 result 与同步接口结构完全一致；needs_attention 时带失败分类。"""
+    return _cw_video_job_view(job_id, user)
 
 
 @router.post("/cw-video/generate", response_model=CWVideoGenerateResult)
@@ -1069,32 +1133,55 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
         except Exception:
             pass
 
-    if cfg and cfg.api_key and cfg.base_url and cfg.model:
-        provider = get_video(db)
+    has_video_cfg = bool(cfg and cfg.api_key and cfg.base_url and cfg.model)
+    provider = get_video(db) if has_video_cfg else StoryboardVideo()
+    if has_video_cfg:
         m_info = ModelInfo(provider=("kling" if (cfg.provider or "") == "keling" else "model"),
                            model=cfg.model, role="video", fallback=False, config_id=cfg.id, source="llm")
     else:
-        provider = StoryboardVideo()
         m_info = ModelInfo(provider="storyboard", model="", role="video", fallback=True, source="local")
     filename = f"cw_video_{getattr(user, 'id', 0) or 0}_{int(time.time())}.mp4"
-    try:
-        res = await provider.generate(prompt, platform, filename, meta)
-    except Exception as e:
-        res = await StoryboardVideo().generate(prompt, platform, filename, meta)
-        res["note"] = f"视频生成异常（{str(e)[:80]}），已回退分镜脚本。"
 
-    # 若 provider 内部回退到分镜，则同步修正 model_info 标注
-    if res.get("provider") == "storyboard":
+    # V4.79 / P0：失败不再装成「完成」。provider 抛 VideoPipelineError 时保留可执行分镜作为兜底
+    # 交付物，但同时把 error_code / 动作 / 脱敏证据一并回传，界面据此显示「卡在哪一步、该做什么」。
+    err: Optional[VideoPipelineError] = None
+    evidence: dict = {}
+    if has_video_cfg:
+        try:
+            res = await provider.generate(prompt, platform, filename, meta)
+        except VideoPipelineError as e:
+            err, evidence = e, e.evidence
+            res = await StoryboardVideo().generate(prompt, platform, filename, meta)
+            res["note"] = ""
+            # 徽标仍显示「本次尝试出片的模型」，只是标注 fallback，避免误以为没配置
+            m_info = ModelInfo(provider=m_info.provider, model=cfg.model, role="video",
+                               fallback=True, config_id=cfg.id, source="llm")
+        except Exception as e:  # 兜底：未分类异常也不能静默
+            err = VideoPipelineError("PROVIDER_ERROR", f"{type(e).__name__}: {e}", stage="generate")
+            res = await StoryboardVideo().generate(prompt, platform, filename, meta)
+            res["note"] = ""
+            m_info = ModelInfo(provider=m_info.provider, model=cfg.model, role="video",
+                               fallback=True, config_id=cfg.id, source="llm")
+    else:
+        res = await StoryboardVideo().generate(prompt, platform, filename, meta)
+
+    # 无视频配置时的分镜标注（这不是失败，是能力未配置）
+    if res.get("provider") == "storyboard" and err is None:
         m_info = ModelInfo(provider="storyboard", model="", role="video", fallback=True, source="local")
 
     videos: list = []
     note = res.get("note") or ""
+    if err is not None:
+        note = (f"出片失败（{err.error_code}）：{err.message}"
+                + (f" 建议：{err.action}" if err.action else "")
+                + " 已保留可执行分镜脚本，可照单制作或按建议修正后重试。")
     if res.get("file_path"):
         rel = os.path.basename(res["file_path"])
         videos.append(CWVideoAsset(type="video", url=f"/files/{rel}", caption=product, duration_sec=duration))
-    elif res.get("url"):
+    elif res.get("url") and err is None:
+        # V4.79：err 不为空时绝不回传外链（外链可能是过期签名，落不了盘就是没出片）
         videos.append(CWVideoAsset(type="video", url=res["url"], caption=product, duration_sec=duration))
-    else:
+    elif err is None:
         note = note or (skip_note or "未配置视频模型，已输出可执行分镜脚本（在设置页配置 video 用途的模型后可直连生成）。")
 
     # 实际输出比例：优先取 provider 回传，其次用本次推导的 output_aspect
@@ -1114,11 +1201,23 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
     storyboard["aspect"] = actual_aspect
     storyboard["output_aspect"] = actual_aspect
     storyboard.setdefault("shots", [])
+    # V4.79：证据落盘（best-effort，绝不因写日志失败影响出片结果）
+    if evidence:
+        try:
+            evidence["log_file"] = _persist_video_evidence(getattr(user, "id", 0), evidence)
+        except Exception:
+            pass
     return CWVideoGenerateResult(
         provider=res.get("provider", "storyboard"),
         model=(cfg.model if (cfg and cfg.model) else ""),
         videos=videos, storyboard=storyboard,
         model_info=m_info, note=note, output_aspect=actual_aspect, source=m_info.source,
+        stage=(err.stage if err else ""),
+        error_code=(err.error_code if err else ""),
+        error_message=(err.message if err else ""),
+        error_action=(err.action if err else ""),
+        error_task_id=(err.task_id if err else ""),
+        evidence=evidence,
     )
 
 

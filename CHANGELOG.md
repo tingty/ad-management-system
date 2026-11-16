@@ -2794,3 +2794,47 @@
 - 诊断链路：预置无效 Key 的视频配置时，诊断如实回传 401 `InvalidApiKey` 原文并给出白名单/Key 提示。
 - 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
 - 补充：出片模型徽标只在「诊断成功」或「接口已回传视频模型」时展示；诊断请求失败（未授权 / 网络异常）不再显示「未配置（回退分镜）」，避免误报。
+
+## V4.79 P0：视频出片链路「不再假成功」——白名单解析、失败可分类、成片必校验
+
+**发布日期**：2026-11-16 14:29
+**变更类型**：修复 / 优化 / 新增
+**涉及模块**：创意工作台（视频出片）、视频链路诊断、大模型配置（视频连通测试）、后台任务状态、数据模型（视频结果与任务字段）、发版流程、系统版本
+**变更摘要**：此前出片链路的失败会被逐层吞掉——响应解析用「递归找第一个 http 字符串」，把 PENDING 里的输入图当成片；轮询的 `except: continue` 让 401/5xx/非 JSON 静默空转 6 分钟；下载失败直接把外链当结果；实现层永不抛异常，于是后台任务无条件写 `done`，界面显示「完成」却没有视频。本次把这条链路改成「成功必须有可播放的本地产物，失败必须带错误码和唯一动作」：解析按协议族白名单取值，轮询按 HTTP 语义分类退避，下载做三层校验（content-type / 容器 magic bytes + MP4 moov 索引 / ffprobe 可选），任务状态新增 `needs_attention`，并保留脱敏证据链。
+
+**更新要点**
+- 解析白名单化：新增 `video_media_of()`，只认厂商文档里出现过的容器与字段（`output.video_url` / `output.video_urls[]` / `output.results[].url` / `data[].url` 等），**不再从 `input` / `parameters` / `request` 回显区取媒体**——修掉「图生视频把上传的商品图落盘成 .mp4」的假成功
+- 任务号提取纠偏：`_video_find_task_id()` 对 dashscope 系禁用 `request_id` 兜底（它是请求追踪号，不是任务号）；只有「仅 request_id 无 task_id」时按契约不匹配报错，而不是拿追踪号空轮询 6 分钟
+- 轮询分类退避：401/403 → `AUTH_FAILED` 立即停；429/5xx → 记原因并退避；404 → 记录 poll_path 不匹配；非 JSON → 记「网关换成 HTML」；连续失败达上限（默认 6 次）→ `POLL_UNREACHABLE`；超时 → `POLL_TIMEOUT` 并**保留厂商 task_id**（可凭号到控制台取片，不需重复付费）
+- 下载三层校验：`download_video()` 先看 HTTP 状态与 content-type（HTML/JSON 直接判失败），再按文件头识别容器（`ftyp` / webm / FLV / ID3），MP4 必须有 `moov` 索引，镜像内有 `ffprobe` 时再核视频轨道与时长；**下载失败绝不回传外链**
+- 成功条件收紧：`videos` 非空当且仅当本地文件通过校验；后台任务成功 = `done`，未出片 = 新增的 `needs_attention`（带 error_code），服务端 bug 才是 `error`——不再用 `done + videos=[]` 掩盖失败
+- 错误码与唯一动作：10 个 `error_code`（AUTH_FAILED / BAD_REQUEST / RATE_LIMITED / PROVIDER_ERROR / CONTRACT_MISMATCH / PROVIDER_REJECTED / POLL_UNREACHABLE / POLL_TIMEOUT / EMPTY_OUTPUT / DOWNLOAD_FAILED）各自只对应一个可执行动作，页面只展示那一条，不让用户在三四个按钮里猜
+- 诊断四态收敛：`/cw-video/diagnose` 新增 `state` / `state_label` / `action`，把「未配置 / 配成文本模型 / 未启用或缺要素 / 协议缺参 / 连通失败 / 就绪」直接结论化，页面顶部只给一句结论 + 一个动作
+- 证据链留痕：结果新增 `evidence`（提交状态与脱敏响应摘要、每次轮询的状态与摘要前 3+后 5 条、下载的 content-type/字节/容器/校验结论），并落盘到 `backend/uploads/video_evidence/`，用户报障时可直接核对，不必重现
+- 连通测试严格化：`_test_generic_video` 不再「status<400 就算通过」；200 + HTML 判 `non_json_response`，200 但既无任务号也无成片判 `contract_mismatch`——避免「配置显示已连通，实际出不了片」
+- 任务归属校验：`GET /cw-video/generate-jobs/{id}` 增加 owner 比对（用 404 而非 403，避免泄露任务存在性）；`sweep` 不再清理运行中的任务，只清已完成且过期者
+- 统计修正：工作台批量生成的成功判定改为「真出片才算」（纯图片模式下 `vidOk` 曾恒为 true，图片全失败也会提示「创作完成，视频已生成」）
+
+**本次优化与更改的功能 / 模块**
+- 【修复】创意工作台 / 视频出片：解析白名单、下载三层校验、严格成功条件
+- 【修复】视频轮询：HTTP 语义分类 + 退避 + 超时保留任务号
+- 【修复】后台任务：新增 `needs_attention`，不再用 done 掩盖失败
+- 【修复】大模型配置 / 视频连通测试：200 + 非 JSON / 无任务号不再判通过
+- 【修复】批量生成：成功判定与提示文案按真实产出计算
+- 【新增】证据链：结果回传 + 落盘 `uploads/video_evidence/`
+- 【优化】诊断：四态结论 + 唯一动作
+- 【优化】任务归属：按 owner 校验读取权限
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.79
+
+**影响范围**
+- 后端：`providers.py`（新增 `VideoPipelineError` / `video_media_of` / `_video_task_status` / `verify_video_file` / `download_video`，重写 `ModelVideo.generate`）、`routers.py`（失败结果映射、`needs_attention`、诊断四态、证据落盘、owner 校验）、`schemas.py`（结果与任务新增字段）、`llm_catalog.py`（视频连通测试严格化）。
+- 前端：`api.ts`（识别 `needs_attention`）、`VideoStudio.tsx`（失败面板：错误码 / 阶段 / 唯一动作 / 任务号 / 可展开证据；诊断四态标题与动作）、`CreativeWorkbench.tsx`（失败信息透传、成功判定修正）、`styles.css`（`.vs-fail*` / `.vs-diag-act`）。
+- 行为变化（重要）：**以前显示「完成」但实际回退分镜的出片，升级后会明确显示为「出片失败 + 错误码」**，且分镜仍作为兜底交付物保留。这是有意的——失败要说清楚，才能修得动。
+- 兼容性：新增字段均可选，旧调用方不受影响；同步接口 `/cw-video/generate` 保留，失败时也返回 `error_code` 而非抛 500。
+- 部署：需 `docker compose up -d --build` 重建前后端。证据目录随 `uploads` 卷持久化（已在 `.gitignore`）。
+
+**验证**
+- 确定性验收（本地假供应商，零费用）：`scripts/check_video_pipeline_p0.py` **19/19 通过** —— 含 PENDING 输入图不被当成片、401/500/200+HTML/只有 request_id 的分类、完成无地址、厂商 FAILED、轮询持续 5xx、下载到 HTML、MP4 缺 moov、同步直出、异步成功、连通测试三项严格化。
+- 接口层验收（临时库 + 假供应商）：`scripts/check_video_p0_api.py` **8/8 通过** —— 诊断 no_config / text_model / ready 三态、失败结果字段完整且分镜仍在、任务状态为 `needs_attention`、证据落盘含 submit/polls、成功任务 `done` 且产物通过容器校验、他人任务不可读（404）。
+- 真实出片：`scripts/verify_real_video_once.py --yes` 在部署机发起 **1 次**付费调用，结果与证据写入 `docs/evidence/v479_real_*.json`（需在 Key 白名单所在主机执行）。
+- 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。

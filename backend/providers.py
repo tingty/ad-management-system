@@ -4,7 +4,7 @@ AI 模型接入层（可配置多模型）。
 - 在「设置页」配置 OpenAI 兼容协议的 api_key / base_url / model 后，自动切换为真实调用。
 - 图像 provider 接入真实 DALL·E 风格接口失败时自动回退到占位图，避免阻断主流程。
 """
-import os, json, re, httpx, base64, asyncio, itertools, uuid
+import os, json, re, httpx, base64, asyncio, itertools, uuid, time, shutil, subprocess
 from typing import Optional
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -338,52 +338,159 @@ class StoryboardVideo(VideoProvider):
             "note": "未配置视频模型，输出可执行分镜；在设置页配置 video 用途的模型后会自动调用真实生成。",
         }
 
-# ------------------------- 通用视频响应解析辅助（适配多厂商异步/同步形态） -------------------------
-_VIDEO_URL_KEYS = ("url", "video_url", "resource_url", "videoUrl", "video")
-_VIDEO_B64_KEYS = ("b64_json", "base64")
+# ------------------------- 视频响应解析：协议族白名单（V4.79 / F04） -------------------------
+# 旧实现（≤V4.78）用 `_video_find_media` 递归找「第一个 http 字符串」，看似万能，实际会把
+# 输入回显当成成片：阿里云百炼提交/查询响应形如
+#   {"output": {"task_status": "PENDING", "task_id": "tk_x", "input": {"image": "https://…/p.jpg"}}}
+# 递归会命中 input.image ——于是「图生视频」把用户上传的商品图落盘成 .mp4，界面显示成功却播不了。
+# 现在改为「协议族 + 键名白名单」：只认厂商文档里出现的容器与字段，绝不从 input / parameters /
+# request 等回显区取媒体，也绝不接受任意字符串。
+_VIDEO_OK_STATES = {"succeeded", "success", "complete", "completed", "ready", "finished", "done"}
+_VIDEO_FAIL_STATES = {"failed", "failure", "error", "cancelled", "canceled", "expired", "timeout"}
+_VIDEO_MEDIA_URL_KEYS = ("video_url", "videoUrl", "url", "video_uri", "resource_url",
+                         "download_url", "file_url", "play_url", "mp4_url")
+_VIDEO_MEDIA_B64_KEYS = ("b64_json", "base64", "video_base64")
 
 
-def _video_find_media(obj, _u=None, _b=None):
-    """递归在响应 JSON 中找首个视频 URL 与首个 b64_json（通用体，适配 OpenAI / Runway / Pika / Luma 等）。"""
-    if _u and _b:
-        return _u, _b
-    if isinstance(obj, str):
-        if _u is None and obj.startswith("http"):
-            return obj, _b
-        if _b is None and obj.startswith("data:"):
-            return _u, obj
-        return _u, _b
-    if isinstance(obj, dict):
-        for k in _VIDEO_URL_KEYS:
-            if _u is None and k in obj and isinstance(obj[k], str) and obj[k].startswith("http"):
-                _u = obj[k]
-        for k in _VIDEO_B64_KEYS:
-            if _b is None and k in obj and isinstance(obj[k], str) and obj[k]:
-                _b = obj[k]
-        if _u is None or _b is None:
-            for v in obj.values():
-                _u, _b = _video_find_media(v, _u, _b)
-    elif isinstance(obj, list):
-        for it in obj:
-            if _u is None or _b is None:
-                _u, _b = _video_find_media(it, _u, _b)
-    return _u, _b
+class VideoPipelineError(RuntimeError):
+    """出片链路的**可分类**失败（V4.79 / F02–F05）。
+
+    以前任何失败都被 `except` 吞掉并返回分镜脚本，界面于是显示「完成」——用户既不知道
+    失败在哪一步，也不知道该做什么。现在失败带上 `error_code`，一个错误码只对应一个
+    唯一正确的处置动作（见 `_VIDEO_ERROR_ACTIONS`），界面照此展示即可，不让用户猜。
+    """
+
+    def __init__(self, error_code: str, message: str, *, stage: str = "",
+                 action: str = "", http_status: int = 0, task_id: str = "",
+                 evidence: Optional[dict] = None):
+        super().__init__(message)
+        self.error_code = error_code
+        self.message = message
+        self.stage = stage
+        self.action = action or _VIDEO_ERROR_ACTIONS.get(error_code, "")
+        self.http_status = http_status
+        self.task_id = task_id
+        self.evidence = dict(evidence or {})
 
 
-def _video_find_status(obj):
-    if isinstance(obj, dict):
-        for k in ("status", "task_status", "state"):
-            if k in obj and isinstance(obj[k], str):
-                return obj[k].lower()
-        for v in obj.values():
-            s = _video_find_status(v)
-            if s:
-                return s
-    elif isinstance(obj, list):
-        for it in obj:
-            s = _video_find_status(it)
-            if s:
-                return s
+#: 错误码 → 唯一可执行动作。界面只展示这一条，避免「重试 / 重新下载 / 去设置」三选一乱猜。
+_VIDEO_ERROR_ACTIONS = {
+    "CONFIG_MISSING": "到「系统设置 → 大模型配置」补齐这条视频配置的请求地址与模型版本。",
+    "AUTH_FAILED": "到「大模型配置」更新该配置的 API Key，并确认部署机公网 IP 已加入厂商白名单。",
+    "BAD_REQUEST": "到「大模型配置」核对模型版本与高级参数（协议契约），按服务端原文修正后重试。",
+    "RATE_LIMITED": "厂商限流：等 1–2 分钟后重试（本次未出片，通常也未扣费）。",
+    "PROVIDER_ERROR": "厂商侧 5xx，稍后重试；连续失败请核对厂商服务状态与部署机网络出口。",
+    "CONTRACT_MISMATCH": "到「大模型配置」删除该配置后重选同一协议（会自动装配 endpoint / async_header / poll_path）。",
+    "PROVIDER_REJECTED": "按失败原文调整提示词或参数后重试（涉及违规内容需改写描述）。",
+    "POLL_UNREACHABLE": "检查部署机到厂商域名的网络连通性；任务可能已受理，可稍后按任务号继续查询。",
+    "POLL_TIMEOUT": "任务仍在厂商侧渲染：稍后点「继续查询」按任务号回查，不要重新生成以免重复扣费。",
+    "EMPTY_OUTPUT": "任务已完成但响应里没有成片地址：核对厂商返回结构后重新生成。",
+    "DOWNLOAD_FAILED": "成片已生成但下载或校验失败：点「重新下载」即可，不要重新生成（避免重复扣费）。",
+    "STORAGE_FAILED": "服务端写入失败：检查 uploads 目录磁盘空间与权限。",
+}
+
+
+def _video_evidence_snippet(obj, limit: int = 400) -> str:
+    """证据摘要：把厂商原文留在证据链里，同时抹掉 Key / Token。"""
+    try:
+        s = json.dumps(obj, ensure_ascii=False) if isinstance(obj, (dict, list)) else str(obj)
+    except Exception:
+        s = repr(obj)
+    s = re.sub(r"(?i)(api[-_]?key|authorization|access[-_]?token|secret)\"?\s*[:=]\s*\"?[^\",}\s]+",
+               r"\1=***", s)
+    s = re.sub(r"(sk-[A-Za-z0-9]{4})[A-Za-z0-9_-]+", r"\1***", s)
+    return s[:limit]
+
+
+def _video_pick_media_in(d) -> tuple:
+    """从**一个**对象里按白名单键取媒体地址 / base64（不递归、不猜）。"""
+    if not isinstance(d, dict):
+        return "", ""
+    url = b64 = ""
+    for k in _VIDEO_MEDIA_URL_KEYS:
+        v = d.get(k)
+        if isinstance(v, str) and v.startswith(("http://", "https://")):
+            url = v
+            break
+    for k in _VIDEO_MEDIA_B64_KEYS:
+        v = d.get(k)
+        if isinstance(v, str) and len(v) > 64:
+            b64 = v
+            break
+    return url, b64
+
+
+def video_media_of(data, family: str = "") -> tuple:
+    """按协议族白名单解析成片（V4.79 / F04）。
+
+    - dashscope_maas：`output.video_url` / `output.video_urls[]` / `output.results[].url`
+    - 通用网关 / OpenAI 风格：`data[].url`、`output|result|video` 容器、顶层媒体键
+    只在这些位置找，**绝不下探 input / parameters / request 回显**。
+    """
+    if not isinstance(data, dict):
+        return "", ""
+    if family == "dashscope_maas":
+        out = data.get("output") if isinstance(data.get("output"), dict) else {}
+        u, b = _video_pick_media_in(out)
+        if u or b:
+            return u, b
+        for k in ("video_urls", "urls"):
+            v = out.get(k)
+            if isinstance(v, list):
+                for it in v:
+                    if isinstance(it, str) and it.startswith(("http://", "https://")):
+                        return it, ""
+        for k in ("results", "videos", "result"):
+            v = out.get(k)
+            for it in (v if isinstance(v, list) else [v]):
+                u, b = _video_pick_media_in(it)
+                if u or b:
+                    return u, b
+        return "", ""
+    arr = data.get("data")
+    if isinstance(arr, list):
+        for it in arr:
+            u, b = _video_pick_media_in(it)
+            if u or b:
+                return u, b
+    for holder in ("output", "result", "video", "videos", "generation"):
+        h = data.get(holder)
+        if isinstance(h, dict):
+            u, b = _video_pick_media_in(h)
+            if u or b:
+                return u, b
+            for k in ("results", "videos", "data"):
+                v = h.get(k)
+                for it in (v if isinstance(v, list) else []):
+                    u, b = _video_pick_media_in(it)
+                    if u or b:
+                        return u, b
+        elif isinstance(h, list):
+            for it in h:
+                u, b = _video_pick_media_in(it)
+                if u or b:
+                    return u, b
+    return _video_pick_media_in(data)
+
+
+def _video_task_status(obj, family: str = "") -> str:
+    """任务状态（V4.79）：只认标准键，不把任意字符串当状态。"""
+    if not isinstance(obj, dict):
+        return ""
+    if family == "dashscope_maas":
+        out = obj.get("output")
+        if isinstance(out, dict) and isinstance(out.get("task_status"), str) and out["task_status"].strip():
+            return out["task_status"].strip().lower()
+    for k in ("task_status", "status", "state"):
+        v = obj.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip().lower()
+    for holder in ("output", "data", "result"):
+        h = obj.get(holder)
+        if isinstance(h, dict):
+            st = _video_task_status(h, family)
+            if st:
+                return st
     return ""
 
 
@@ -407,7 +514,7 @@ def _video_find_msg(obj):
 _TASK_ID_KEYS = ("task_id", "taskId", "job_id", "generation_id", "id", "uuid")
 
 
-def _video_find_task_id(obj):
+def _video_find_task_id(obj, allow_request_id: bool = True):
     """从提交响应里找「可轮询」的任务标识（各厂商键名不一）。
 
     V4.75 修复（关键）：阿里云百炼 / DashScope 的提交响应形如
@@ -451,10 +558,215 @@ def _video_find_task_id(obj):
     found = _scan(obj)
     if found:
         return found
-    # 3) 兜底：少量网关确实用 request_id 作为轮询键
-    if obj.get("request_id"):
+    # 3) 兜底：少量网关确实用 request_id 作为轮询键。
+    #    但 dashscope 系（阿里云百炼）的 request_id 是请求追踪号，**不是**任务号——
+    #    拿它去轮询必然查不到，旧版就是这么静默耗掉 6 分钟的。这类协议下不允许兜底。
+    if allow_request_id and obj.get("request_id"):
         return str(obj["request_id"])
     return None
+
+
+# ------------------------- 成片落盘校验（V4.79 / F05：三层校验） -------------------------
+# 第一层 content-type / HTTP 状态；第二层容器 magic bytes + MP4 索引；第三层 ffprobe（若镜像内有）。
+# 只要任一层不过就判失败 —— 以前下载异常直接 `return {"url": url}` 把外链当结果，
+# 签名过期 / HTML 错误页都会落成「看起来成功但播不了」的坏文件。
+_VIDEO_MIN_BYTES = 4096
+_VIDEO_MAX_BYTES = 500 * 1024 * 1024
+
+
+def _video_container(path: str) -> str:
+    """按文件头识别视频容器（不依赖扩展名，也不轻信厂商 content-type）。"""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(16)
+    except Exception:
+        return ""
+    if len(head) >= 8 and head[4:8] == b"ftyp":
+        return "mp4"
+    if head[:4] == b"\x1aE\xdf\xa3":
+        return "webm"
+    if head[:3] == b"FLV":
+        return "flv"
+    if head[:3] == b"ID3":
+        return "audio"
+    if len(head) > 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0:
+        return "ts"
+    return ""
+
+
+def _mp4_has_moov(path: str) -> bool:
+    """MP4 必须有 moov 索引才算完整（断点截断的 MP4 只有 ftyp + mdat，播放器打不开）。"""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if b"moov" in f.read(min(size, 4 * 1024 * 1024)):
+                return True
+            if size > 4 * 1024 * 1024:
+                f.seek(max(0, size - 4 * 1024 * 1024))
+                return b"moov" in f.read()
+    except Exception:
+        return False
+    return False
+
+
+def _ffprobe_video(path: str) -> dict:
+    """可选第三层：镜像里有 ffprobe 就用它核轨道与时长；没有则跳过（不因缺工具判失败）。"""
+    exe = shutil.which("ffprobe")
+    if not exe:
+        return {"available": False}
+    try:
+        p = subprocess.run(
+            [exe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path],
+            capture_output=True, timeout=20,
+        )
+        if p.returncode != 0:
+            return {"available": True, "ok": False,
+                    "reason": (p.stderr or b"").decode("utf-8", "ignore")[:200]}
+        d = json.loads((p.stdout or b"{}").decode("utf-8", "ignore") or "{}")
+        streams = [s for s in (d.get("streams") or []) if s.get("codec_type") == "video"]
+        dur = float((d.get("format") or {}).get("duration") or 0)
+        if not streams:
+            return {"available": True, "ok": False, "reason": "没有视频轨道"}
+        if dur <= 0:
+            return {"available": True, "ok": False, "reason": "时长解析为 0"}
+        return {"available": True, "ok": True, "duration": round(dur, 2),
+                "width": streams[0].get("width"), "height": streams[0].get("height")}
+    except Exception as e:
+        return {"available": True, "ok": False, "reason": f"{type(e).__name__}: {e}"[:200]}
+
+
+def verify_video_file(path: str) -> dict:
+    """校验落盘文件是不是真能播的视频，返回结构化结论（不抛异常，便于把原因写进证据）。"""
+    info: dict = {"ok": False, "path": path, "bytes": 0, "container": "", "reason": "", "ffprobe": {}}
+    try:
+        info["bytes"] = os.path.getsize(path)
+    except Exception:
+        info["reason"] = "文件不存在"
+        return info
+    if info["bytes"] < _VIDEO_MIN_BYTES:
+        info["reason"] = f"文件仅 {info['bytes']} 字节，明显不是成片（可能下载到了错误页）"
+        return info
+    info["container"] = _video_container(path)
+    if not info["container"]:
+        try:
+            with open(path, "rb") as f:
+                sample = f.read(160).decode("utf-8", "ignore").strip()
+        except Exception:
+            sample = ""
+        info["reason"] = f"不是可识别的视频容器（开头内容：{sample[:100]!r}）"
+        return info
+    if info["container"] == "audio":
+        info["reason"] = "下载到的是音频（ID3），不是视频"
+        return info
+    if info["container"] == "mp4" and not _mp4_has_moov(path):
+        info["reason"] = "MP4 缺少 moov 索引，文件不完整（常见于下载被中断）"
+        return info
+    probe = _ffprobe_video(path)
+    info["ffprobe"] = probe
+    if probe.get("available") and not probe.get("ok"):
+        info["reason"] = "ffprobe 校验失败：" + str(probe.get("reason") or "")
+        return info
+    if probe.get("ok"):
+        info["duration"] = probe.get("duration")
+        info["width"] = probe.get("width")
+        info["height"] = probe.get("height")
+    info["ok"] = True
+    return info
+
+
+async def download_video(url: str, out_path: str, evidence: Optional[dict] = None) -> dict:
+    """下载成片并三层校验；失败抛 DOWNLOAD_FAILED（绝不把外链当结果返回）。"""
+    ev = evidence if evidence is not None else {}
+    tmp = out_path + ".part"
+    status, ctype = 0, ""
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, read=600.0),
+                                     follow_redirects=True) as c:
+            async with c.stream("GET", url) as r:
+                status = r.status_code
+                ctype = (r.headers.get("content-type") or "").lower()
+                if status >= 400:
+                    body = (await r.aread())[:200]
+                    raise VideoPipelineError(
+                        "DOWNLOAD_FAILED", f"下载成片失败：HTTP {status}",
+                        stage="download", http_status=status,
+                        action="成片已在厂商侧生成但下载被拒（多为签名过期）：点「重新下载」重新获取地址。",
+                        evidence={**ev, "download": {"http_status": status, "content_type": ctype,
+                                                     "body": _video_evidence_snippet(body, 160)}},
+                    )
+                if "text/html" in ctype or "application/json" in ctype:
+                    body = (await r.aread())[:300]
+                    raise VideoPipelineError(
+                        "DOWNLOAD_FAILED",
+                        f"下载到的不是视频（content-type={ctype or '未知'}）：{_video_evidence_snippet(body, 160)}",
+                        stage="download", http_status=status,
+                        action="下载地址返回的是网页/JSON 而不是文件（多为签名过期或权限不足）：点「重新下载」。",
+                        evidence={**ev, "download": {"http_status": status, "content_type": ctype,
+                                                     "body": _video_evidence_snippet(body, 160)}},
+                    )
+                total = 0
+                with open(tmp, "wb") as f:
+                    async for chunk in r.aiter_bytes(1 << 20):
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > _VIDEO_MAX_BYTES:
+                            raise VideoPipelineError(
+                                "DOWNLOAD_FAILED", "成片超过 500MB，已中止下载（避免占满磁盘）",
+                                stage="download",
+                                evidence={**ev, "download": {"http_status": status, "content_type": ctype,
+                                                             "bytes": total}},
+                            )
+                        f.write(chunk)
+        info = verify_video_file(tmp)
+        if not info["ok"]:
+            raise VideoPipelineError(
+                "DOWNLOAD_FAILED", f"成片校验未通过：{info['reason']}",
+                stage="download", http_status=status,
+                evidence={**ev, "download": {"http_status": status, "content_type": ctype,
+                                             "bytes": info.get("bytes"), "container": info.get("container"),
+                                             "verify": info.get("reason")}},
+            )
+        os.replace(tmp, out_path)
+        return {"http_status": status, "content_type": ctype, **{k: info.get(k) for k in
+                ("bytes", "container", "duration", "width", "height")}}
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+
+def _raise_http_error(code: int, raw: str, *, stage: str, evidence: dict, task_id: str = "") -> None:
+    """把厂商 HTTP 状态翻译成可分类错误码（V4.79 / F02）。"""
+    snippet = _video_evidence_snippet(raw, 300)
+    if code in (401, 403):
+        raise VideoPipelineError("AUTH_FAILED", f"鉴权失败（HTTP {code}）：{snippet}",
+                                 stage=stage, http_status=code, task_id=task_id, evidence=evidence)
+    if code == 429:
+        raise VideoPipelineError("RATE_LIMITED", f"厂商限流（HTTP 429）：{snippet}",
+                                 stage=stage, http_status=code, task_id=task_id, evidence=evidence)
+    if code >= 500:
+        raise VideoPipelineError("PROVIDER_ERROR", f"厂商侧错误（HTTP {code}）：{snippet}",
+                                 stage=stage, http_status=code, task_id=task_id, evidence=evidence)
+    raise VideoPipelineError("BAD_REQUEST", f"请求被拒（HTTP {code}）：{snippet}",
+                             stage=stage, http_status=code, task_id=task_id, evidence=evidence)
+
+
+def _evidence_poll(evidence: dict, n: int, http_status: int, obj, reason: str) -> None:
+    """记录一次轮询（前 3 条 + 最近 5 条，避免证据无限增长）。"""
+    rec: dict = {"n": n, "http_status": http_status}
+    if obj is not None:
+        rec["status"] = _video_task_status(obj, evidence.get("family", ""))
+        rec["digest"] = _video_evidence_snippet(obj, 240)
+    else:
+        rec["error"] = (reason or "")[:200]
+    polls = evidence.setdefault("polls", [])
+    polls.append(rec)
+    evidence["polls_total"] = len(polls)
+    while len(polls) > 8:
+        del polls[3]
 
 
 class ModelVideo(VideoProvider):
@@ -464,22 +776,30 @@ class ModelVideo(VideoProvider):
     - 同步网关（OpenAI / Sora 风格）直接返回视频 url / b64_json；
     - 异步厂商（主流）提交后返回 task_id，本类自动轮询任务状态并取片，
       轮询地址依次尝试 {base_url}/v1/video/generations/tasks/{id}、/{video/generations}/{id}、
-      /tasks/{id}、{endpoint}/{id} 等常见形态，状态/URL 字段做通用递归匹配。
+      /tasks/{id}、{endpoint}/{id} 等常见形态。
     图生视频：body 带 image + mode=image_to_video。
-    任何环节失败或无视频产出 → 回退分镜脚本，绝不阻断主流程。
+
+    V4.79 行为变更（P0）：失败不再「吞掉并回退分镜」，而是抛 `VideoPipelineError`，
+    带 error_code / 唯一处置动作 / 脱敏证据；成功必须落盘一个通过容器与轨道校验的本地文件。
+    唯一保留的「非错误回退」是没有视频配置（由 routers 层决定走分镜）。
 
     扩展开关（写在模型配置的「参数(JSON)」里，均为字符串）：
     - endpoint：提交路径，默认 /video/generations；
     - body_shape="dashscope_maas"：改用阿里云百炼 MaaS 契约
       {model, input:{prompt}, parameters:{size,count}}（图生视频再补 input.image / parameters.mode）；
     - async_header="true"：提交时附加 X-DashScope-Async: enable 头（阿里云 MaaS 异步必需）；
-    - poll_path：自定义轮询路径（如 /api/v1/tasks），优先于内置候选地址尝试。
+    - poll_path：自定义轮询路径（如 /api/v1/tasks），优先于内置候选地址尝试；
+    - poll_timeout_sec / poll_interval_sec：轮询总时长与间隔（默认 360s / 3s）。
     """
     def __init__(self, api_key, base_url, model, params=None):
         self.api_key = api_key
         self.base_url = (base_url or "").rstrip("/")
         self.model = model
         self.params = params or {}
+
+    @property
+    def family(self) -> str:
+        return "dashscope_maas" if (self.params.get("body_shape") or "").strip() == "dashscope_maas" else "generic"
 
     def _poll_urls(self, task_id, endpoint):
         ep = endpoint or "/video/generations"
@@ -496,48 +816,14 @@ class ModelVideo(VideoProvider):
             f"{self.base_url}/tasks/{task_id}",
         ]
 
-    async def _finalize(self, url, b64, filename, output_aspect="9:16"):
-        if b64:
-            out = os.path.join(UPLOAD_DIR, filename.rsplit(".", 1)[0] + ".mp4")
-            with open(out, "wb") as f:
-                f.write(base64.b64decode(b64))
-            return {"provider": "model", "file_path": out, "model": self.model, "output_aspect": output_aspect}
-        if url:
-            try:
-                async with httpx.AsyncClient(timeout=600) as cc:
-                    d = await cc.get(url)
-                    d.raise_for_status()
-                    out = os.path.join(UPLOAD_DIR, filename)
-                    with open(out, "wb") as f:
-                        f.write(d.content)
-                return {"provider": "model", "file_path": out, "model": self.model, "output_aspect": output_aspect}
-            except Exception:
-                return {"provider": "model", "url": url, "model": self.model, "output_aspect": output_aspect}
-        sb = await StoryboardVideo().generate("", "", filename, {})
-        sb["note"] = "视频任务已完成但未解析到成片地址，已回退分镜脚本。"
-        sb["output_aspect"] = output_aspect
-        return sb
+    def _headers(self) -> dict:
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        if str(self.params.get("async_header") or "").strip().lower() in ("true", "1", "yes"):
+            headers["X-DashScope-Async"] = "enable"
+        return headers
 
-    async def generate(self, prompt, platform, filename, meta=None):
-        meta = meta or {}
-        if not self.base_url:
-            sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
-            sb["note"] = "视频模型未配置 base_url，已回退分镜脚本。"
-            sb["output_aspect"] = meta.get("aspect", "9:16")
-            return sb
-        endpoint = (self.params.get("endpoint") or "/video/generations").strip()
-        body_shape = (self.params.get("body_shape") or "").strip()
-        # 实际输出比例：部分厂商（如阿里云百炼 MaaS / wan3.0-video）忽略 size、固定输出
-        # 9:16 竖屏。通过参数 output_aspect 显式声明固定比例（dashscope_maas 默认 9:16），
-        # 生成链路据此把比例标注为 9:16，而非用户所选比例。
-        forced = (self.params.get("output_aspect") or "").strip()
-        if not forced and body_shape == "dashscope_maas":
-            forced = "9:16"
-        out_aspect = forced or meta.get("aspect", "9:16")
-        if forced:
-            meta = dict(meta)
-            meta["aspect"] = forced
-        if body_shape == "dashscope_maas":
+    def _body(self, prompt: str, meta: dict) -> dict:
+        if self.family == "dashscope_maas":
             # 阿里云百炼 MaaS（wan3.0-video 等）契约：提交体为
             # {model, input:{prompt}, parameters:{size,count}}，且需 X-DashScope-Async 头。
             # 实测该端点忽略 size、固定输出 9:16 竖屏，这里仍按宽高比推导一个合理 size。
@@ -551,85 +837,197 @@ class ModelVideo(VideoProvider):
             if meta.get("image"):
                 body["input"]["image"] = meta["image"]
                 body["parameters"]["mode"] = "image_to_video"
-        else:
-            body = {
-                "model": self.model,
-                "prompt": prompt,
-                "duration": meta.get("duration", 15),
-                "aspect_ratio": meta.get("aspect", "9:16"),
-            }
-            # 图生视频支持——把参考图作为 image 字段带入（厂商忽略即视为文生视频）
-            if meta.get("image"):
-                body["image"] = meta["image"]
-                body["mode"] = meta.get("mode") or "image_to_video"
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        if str(self.params.get("async_header") or "").strip().lower() in ("true", "1", "yes"):
-            headers["X-DashScope-Async"] = "enable"
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=600.0)) as c:
-                r = await c.post(self.base_url + endpoint, headers=headers, json=body)
-                if r.status_code >= 400:
-                    # 不吞掉服务端原文：403（IP 白名单）/ 400（参数或模型名）/ 401（Key）
-                    # 的真实原因必须能回传到界面，否则用户只看到「生成不出视频」。
-                    snippet = ""
+            return body
+        body = {
+            "model": self.model,
+            "prompt": prompt,
+            "duration": meta.get("duration", 15),
+            "aspect_ratio": meta.get("aspect", "9:16"),
+        }
+        # 图生视频支持——把参考图作为 image 字段带入（厂商忽略即视为文生视频）
+        if meta.get("image"):
+            body["image"] = meta["image"]
+            body["mode"] = meta.get("mode") or "image_to_video"
+        return body
+
+    async def _save_media(self, url, b64, filename, output_aspect, evidence):
+        """落盘成片：b64 与 URL 两条路径都必须通过 `verify_video_file` 才算成功。"""
+        out = os.path.join(UPLOAD_DIR, filename)
+        if b64:
+            payload = b64.split(",", 1)[1] if b64.startswith("data:") else b64
+            try:
+                raw = base64.b64decode(payload)
+            except Exception as e:
+                raise VideoPipelineError("DOWNLOAD_FAILED", f"成片 base64 解码失败：{e}",
+                                         stage="download", evidence=evidence)
+            tmp = out + ".part"
+            try:
+                with open(tmp, "wb") as f:
+                    f.write(raw)
+                info = verify_video_file(tmp)
+                if not info["ok"]:
+                    raise VideoPipelineError("DOWNLOAD_FAILED", f"成片校验未通过：{info['reason']}",
+                                             stage="download", evidence=evidence)
+                os.replace(tmp, out)
+            finally:
+                if os.path.exists(tmp):
                     try:
-                        snippet = (r.text or "").strip()[:280]
+                        os.remove(tmp)
                     except Exception:
-                        snippet = ""
-                    raise RuntimeError(f"HTTP {r.status_code} {snippet}".strip())
-                try:
-                    data = r.json()
-                except Exception:
-                    raise RuntimeError(f"响应不是合法 JSON：{(r.text or '')[:200]}")
-                # 1) 同步直出
-                url, b64 = _video_find_media(data)
-                if url or b64:
-                    return await self._finalize(url, b64, filename, out_aspect)
-                # 2) 异步任务：轮询取片
-                task_id = _video_find_task_id(data)
-                if task_id:
-                    submitted = task_id
-                    for _ in range(120):  # 最多 ~6 分钟
-                        await asyncio.sleep(3)
-                        for u in self._poll_urls(task_id, endpoint):
-                            try:
-                                q = await c.get(u, headers=headers)
-                            except Exception:
-                                continue
-                            if q.status_code >= 400:
-                                continue
-                            try:
-                                obj = q.json()
-                            except Exception:
-                                continue
-                            st = _video_find_status(obj)
-                            if st in ("succeeded", "success", "complete", "completed", "ready", "finished"):
-                                fu, fb = _video_find_media(obj)
-                                if fu or fb:
-                                    return await self._finalize(fu, fb, filename, out_aspect)
-                                raise RuntimeError("视频任务完成但未找到成片地址")
-                            if st in ("failed", "error", "cancelled", "canceled"):
-                                raise RuntimeError("视频任务失败：" + str(_video_find_msg(obj))[:160])
-                    sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
-                    sb["note"] = (f"视频任务已提交并受理（task_id={submitted}），但 6 分钟内未完成轮询，"
-                                  f"已回退分镜脚本；可稍后到厂商控制台按该任务号取片。")
-                    sb["output_aspect"] = out_aspect
-                    return sb
-                # 既没有成片也没有任务号：把响应摘要带出来便于核对契约
-                brief = ""
-                try:
-                    brief = json.dumps(data, ensure_ascii=False)[:220]
-                except Exception:
-                    brief = str(data)[:220]
-                sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
-                sb["note"] = f"视频接口已响应但未返回成片或任务号，已回退分镜脚本。响应摘要：{brief}"
-                sb["output_aspect"] = out_aspect
-                return sb
-        except Exception as e:
-            sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
-            sb["note"] = f"视频模型调用失败（{str(e)[:200]}），已回退分镜脚本。"
-            sb["output_aspect"] = out_aspect
-            return sb
+                        pass
+            evidence["download"] = {"source": "base64", "bytes": info.get("bytes"),
+                                    "container": info.get("container")}
+            return {"provider": "model", "file_path": out, "model": self.model,
+                    "output_aspect": output_aspect, "file_bytes": info.get("bytes"),
+                    "duration_sec": info.get("duration"), "evidence": evidence}
+        if not url:
+            raise VideoPipelineError("EMPTY_OUTPUT", "既没有成片地址也没有 base64 内容",
+                                     stage="download", evidence=evidence)
+        dl = await download_video(url, out, evidence)
+        evidence["download"] = {"source": "url", **dl}
+        return {"provider": "model", "file_path": out, "model": self.model,
+                "output_aspect": output_aspect, "file_bytes": dl.get("bytes"),
+                "duration_sec": dl.get("duration"), "evidence": evidence}
+
+    async def generate(self, prompt, platform, filename, meta=None):
+        meta = meta or {}
+        family = self.family
+        evidence: dict = {"family": family, "model": self.model, "endpoint": "",
+                          "submit": {}, "polls": [], "download": {}}
+        if not self.base_url:
+            raise VideoPipelineError("CONFIG_MISSING", "视频模型未配置请求地址（base_url）",
+                                     stage="config", evidence=evidence)
+        endpoint = (self.params.get("endpoint") or "/video/generations").strip()
+        # 实际输出比例：部分厂商（如阿里云百炼 MaaS / wan3.0-video）忽略 size、固定输出
+        # 9:16 竖屏。通过参数 output_aspect 显式声明固定比例（dashscope_maas 默认 9:16），
+        # 生成链路据此把比例标注为 9:16，而非用户所选比例。
+        forced = (self.params.get("output_aspect") or "").strip()
+        if not forced and family == "dashscope_maas":
+            forced = "9:16"
+        out_aspect = forced or meta.get("aspect", "9:16")
+        if forced:
+            meta = dict(meta)
+            meta["aspect"] = forced
+        body = self._body(prompt, meta)
+        headers = self._headers()
+        evidence["endpoint"] = endpoint
+        poll_timeout = float(self.params.get("poll_timeout_sec") or 360)
+        poll_interval = max(0.2, float(self.params.get("poll_interval_sec") or 3))
+        max_failures = max(1, int(self.params.get("poll_max_failures") or 6))
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=15.0, read=120.0)) as c:
+            # ---------- 1) 提交 ----------
+            try:
+                r = await c.post(self.base_url + endpoint, headers=headers, json=body)
+            except Exception as e:
+                raise VideoPipelineError(
+                    "PROVIDER_ERROR", f"提交请求失败：{type(e).__name__}: {e}", stage="submit",
+                    evidence={**evidence, "submit": {"error": f"{type(e).__name__}: {e}"[:200]}},
+                )
+            raw_text = ""
+            try:
+                raw_text = r.text or ""
+            except Exception:
+                pass
+            evidence["submit"] = {"endpoint": endpoint, "http_status": r.status_code,
+                                  "snippet": _video_evidence_snippet(raw_text, 300)}
+            if r.status_code >= 400:
+                _raise_http_error(r.status_code, raw_text, stage="submit", evidence=evidence)
+            try:
+                data = r.json()
+            except Exception:
+                raise VideoPipelineError(
+                    "CONTRACT_MISMATCH",
+                    f"提交响应不是合法 JSON（可能被网关替换成 HTML 错误页）：{_video_evidence_snippet(raw_text, 200)}",
+                    stage="submit", http_status=r.status_code, evidence=evidence,
+                )
+
+            # ---------- 2) 同步直出 ----------
+            url, b64 = video_media_of(data, family)
+            if url or b64:
+                evidence["mode"] = "sync"
+                return await self._save_media(url, b64, filename, out_aspect, evidence)
+
+            # ---------- 3) 异步任务 ----------
+            task_id = _video_find_task_id(data, allow_request_id=(family != "dashscope_maas"))
+            if not task_id:
+                raise VideoPipelineError(
+                    "CONTRACT_MISMATCH",
+                    "提交响应里既没有成片地址也没有任务号："
+                    f"{_video_evidence_snippet(data, 240)}",
+                    stage="submit", http_status=r.status_code, evidence=evidence,
+                )
+            evidence["mode"] = "async"
+            evidence["submit"]["task_id"] = task_id
+            deadline = time.time() + poll_timeout
+            base_interval = poll_interval
+            consecutive_fail = 0
+            last_reason = ""
+            round_no = 0
+            while time.time() < deadline:
+                await asyncio.sleep(poll_interval)
+                round_no += 1
+                obj, poll_http, poll_url = None, 0, ""
+                for u in self._poll_urls(task_id, endpoint):
+                    try:
+                        q = await c.get(u, headers=headers)
+                    except Exception as e:
+                        last_reason = f"查询请求异常：{type(e).__name__}"
+                        continue
+                    poll_http, poll_url = q.status_code, u
+                    if q.status_code in (401, 403):
+                        _raise_http_error(q.status_code, (q.text or "")[:300], stage="poll",
+                                          evidence=evidence, task_id=task_id)
+                    if q.status_code == 404:
+                        last_reason = "轮询地址返回 404（多为 poll_path 与厂商契约不一致）"
+                        continue
+                    if q.status_code == 429 or q.status_code >= 500:
+                        last_reason = (f"厂商侧 {q.status_code}："
+                                       f"{_video_evidence_snippet((q.text or '')[:200], 120)}")
+                        break  # 限流 / 5xx：退避，不换地址重试
+                    if q.status_code >= 400:
+                        last_reason = f"查询被拒 HTTP {q.status_code}"
+                        continue
+                    try:
+                        obj = q.json()
+                    except Exception:
+                        last_reason = "查询响应不是 JSON（可能被网关替换成 HTML）"
+                        continue
+                    break
+                evidence["poll_url"] = poll_url
+                _evidence_poll(evidence, round_no, poll_http, obj, last_reason)
+                if obj is None:
+                    consecutive_fail += 1
+                    if consecutive_fail >= max_failures:
+                        raise VideoPipelineError(
+                            "POLL_UNREACHABLE",
+                            f"连续 {consecutive_fail} 次查询失败：{last_reason}",
+                            stage="poll", task_id=task_id, evidence=evidence,
+                        )
+                    poll_interval = min(poll_interval * 1.6, 15.0)
+                    continue
+                consecutive_fail = 0
+                poll_interval = base_interval
+                st = _video_task_status(obj, family)
+                if st in _VIDEO_OK_STATES:
+                    fu, fb = video_media_of(obj, family)
+                    if not (fu or fb):
+                        raise VideoPipelineError(
+                            "EMPTY_OUTPUT", f"任务已完成（{st}）但响应里没有成片地址",
+                            stage="poll", task_id=task_id, evidence=evidence,
+                        )
+                    return await self._save_media(fu, fb, filename, out_aspect, evidence)
+                if st in _VIDEO_FAIL_STATES:
+                    msg = (_video_find_msg(obj) or "")[:200] or f"任务状态 {st}"
+                    raise VideoPipelineError(
+                        "PROVIDER_REJECTED", f"厂商回报任务失败（{st}）：{msg}",
+                        stage="poll", task_id=task_id, evidence=evidence,
+                    )
+            raise VideoPipelineError(
+                "POLL_TIMEOUT",
+                f"{int(poll_timeout)} 秒内任务未完成（task_id={task_id}），厂商侧可能仍在渲染",
+                stage="poll", task_id=task_id, evidence=evidence,
+            )
 
 
 class KlingVideo(VideoProvider):

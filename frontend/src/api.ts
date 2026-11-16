@@ -904,6 +904,12 @@ export async function cwVideoGenerateAsync(
     }
     const elapsed = last?.elapsed_sec ?? Math.round((Date.now() - startedAt) / 1000)
     onTick?.({ elapsed, stage: last?.stage || '', status: last?.status || '' })
+    if (last?.status === 'needs_attention') {
+      // V4.79：链路跑完但没出片（不再是 done + 空 videos 的假成功）。
+      // 仍返回 result，让页面把 error_code / 唯一动作 / 证据链展示出来，同时保留分镜兜底。
+      if (!last.result) throw new Error(last.error || '视频生成失败')
+      return last.result
+    }
     if (last?.status === 'done') {
       if (!last.result) throw new Error('视频任务已完成但未返回结果')
       return last.result

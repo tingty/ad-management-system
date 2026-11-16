@@ -483,7 +483,12 @@ class CWVideoAsset(BaseModel):
 
 
 class CWVideoGenerateResult(BaseModel):
-    """视频生成结果：实际视频产物（若有）+ 分镜方案（始终返回）+ 模型快照。"""
+    """视频生成结果：实际视频产物（若有）+ 分镜方案（始终返回）+ 模型快照。
+
+    V4.79：失败不再伪装成成功。`error_code` 非空即表示本次出片失败，`videos` 必为空，
+    但仍回传 `storyboard`（可执行分镜）作为兜底交付物；`error_action` 是唯一建议动作，
+    `evidence` 是脱敏证据链（提交/轮询/下载各阶段原文），供用户与管理员定位。
+    """
     model_config = {"protected_namespaces": ()}
     provider: str = "storyboard"   # model / kling / storyboard
     model: str = ""
@@ -493,21 +498,32 @@ class CWVideoGenerateResult(BaseModel):
     note: str = ""                 # 人类可读说明（如「未配置视频模型，已回退分镜」）
     output_aspect: str = ""        # 实际输出比例（如 9:16）；视频模型固定比例时显式标注
     source: str = "local"
+    # ---- V4.79 失败可分类 ----
+    stage: str = ""                # 失败阶段：config / submit / poll / download / storage
+    error_code: str = ""           # 空 = 成功；非空见 providers._VIDEO_ERROR_ACTIONS
+    error_message: str = ""        # 厂商原文摘要（已脱敏）
+    error_action: str = ""         # 唯一可执行动作
+    error_task_id: str = ""        # 厂商任务号（POLL_TIMEOUT 时可凭它继续查询）
+    evidence: dict = {}            # 脱敏证据链
 
 
 class CWVideoJobOut(BaseModel):
-    """视频出片后台任务状态（V4.76）。
+    """视频出片后台任务状态（V4.76 / V4.79）。
 
     出片是分钟级长任务，直接放在 HTTP 请求里会被反向代理（nginx 默认 60s、
     Cloudflare 100s）掐断成 504。这里改为「提交即返回 + 前端轮询」：
     - queued / running：任务在后台跑，前端按 elapsed_sec 展示已等待时长；
-    - done：result 即原同步接口的完整结果；
-    - error：error 为失败原因（含 HTTP 状态与服务端原文）。
+    - done：真的出了成片（result.videos 非空）；
+    - needs_attention：链路跑完但没出片，result 里带 error_code / error_action / evidence，
+      分镜仍可用；**不再用 done 掩盖失败**；
+    - error：任务本身异常终止（服务端 bug / 进程被杀）。
     """
     model_config = {"protected_namespaces": ()}
     job_id: str = ""
-    status: str = "queued"         # queued / running / done / error
+    status: str = "queued"         # queued / running / done / needs_attention / error
     stage: str = ""                # 阶段描述（提交中 / 等待模型出片 / 取片写入 / 完成）
     elapsed_sec: int = 0
     error: str = ""
+    error_code: str = ""
+    error_action: str = ""
     result: Optional[CWVideoGenerateResult] = None

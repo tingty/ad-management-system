@@ -475,8 +475,8 @@ export default function CreativeWorkbench() {
     return { okImages, anyFailed, errs }
   }
 
-  async function generateVideo(hid: number | null): Promise<boolean> {
-    if (!vs.plan || !vs.plan.shots?.length) return false
+  async function generateVideo(hid: number | null): Promise<{ ok: boolean; fail: any }> {
+    if (!vs.plan || !vs.plan.shots?.length) return { ok: false, fail: null }
     const analysis = normalizeAnalysis(cw?.analysis)
     if (selectedBrand && selectedBrand.trim()) analysis.brand = selectedBrand.trim()
     setVs(s => ({ ...s, generating: true, error: '', videos: [], note: '' }))
@@ -488,11 +488,14 @@ export default function CreativeWorkbench() {
         brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
         plan: vs.plan, options: { ...vs.options, prompt_hint: vs.options.prompt_hint },
       }, info => setProgressText(`视频出片中（已等待 ${info.elapsed} 秒${info.stage ? ' · ' + info.stage : ''}）…`))
-      setVs(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', videoModel: r?.model_info || s.videoModel, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '' }))
-      return (r?.videos || []).length > 0
+      const fail = r?.error_code
+        ? { code: String(r.error_code), message: r.error_message || '', action: r.error_action || '', stage: r.stage || '', taskId: r.error_task_id || '', evidence: r.evidence || null }
+        : null
+      setVs(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', videoModel: r?.model_info || s.videoModel, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '', videoFail: fail }))
+      return { ok: (r?.videos || []).length > 0, fail }
     } catch (e: any) {
-      setVs(s => ({ ...s, generating: false, error: '视频生成失败：' + (e?.message || '') }))
-      return false
+      setVs(s => ({ ...s, generating: false, error: '视频生成失败：' + (e?.message || ''), videoFail: null }))
+      return { ok: false, fail: { code: 'CLIENT_ERROR', message: e?.message || '', action: '稍后重试；连续失败请展开「诊断视频配置」核对链路。' } }
     }
   }
 
@@ -509,16 +512,23 @@ export default function CreativeWorkbench() {
     setProgressPct(10)
     const imgRes = doImg ? await generateImages(hid) : { okImages: 0, anyFailed: false, errs: [] }
     setProgressPct(70)
-    const vidOk = doVid ? await generateVideo(hid) : true
-    setProgressPct(100); setProgressText('创作完成')
+    const vid = doVid ? await generateVideo(hid) : { ok: true, fail: null }
+    const vidOk = doVid && vid.ok
+    // V4.79 / G01：纯图片模式下 `vidOk` 曾恒为 true，图片全失败也会判定「创作完成，视频已生成」。
+    // 现在成功 = 真产出：要图片有图、要视频有成片。
     const totalOk = imgRes.okImages > 0 || vidOk
+    setProgressPct(100); setProgressText(totalOk ? '创作完成' : '未出片')
     if (totalOk) {
       showToast(`创作完成：图片 ${imgRes.okImages} 张${vidOk ? '，视频已生成' : ''}`)
       if (planId) await api.updateCreativePlan(planId, { status: 'done', asset_count: imgRes.okImages, history_id: hid ?? undefined }).catch(() => {})
       setView('result')
     } else {
       const msgs = [...imgRes.errs]
-      if (!vidOk && doVid) msgs.push('视频生成未返回成片（可能未配置视频模型，已回退分镜脚本）')
+      if (doVid && !vidOk) {
+        const f = vid.fail
+        msgs.push(f ? `出片失败（${f.code}）：${f.message}` : '视频生成未返回成片（未配置视频模型，已回退分镜脚本）')
+        if (f?.action) msgs.push('建议：' + f.action)
+      }
       setError(msgs.join('；') || '本次生成未返回素材，请调整媒体或重试')
       setView('result')
     }
