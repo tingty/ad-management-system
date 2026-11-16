@@ -2793,3 +2793,4 @@
 - 接口实测（登录态真实请求）：`GET /api/cw-video/diagnose` 返回 `config_id=2 / model=wan3.0-video`、`candidates` 标注「本次出片将使用」、`skipped` 为空；`POST /api/cw-video/plan` 返回 `model_info=deepseek/deepseek-chat(role=analysis)` 与 `video_model_info=model/wan3.0-video(role=video)`、`video_model_ready=true` —— 正是本次修复前被混为一个字段、显示成「视频模型是 deepseek」的场景。
 - 诊断链路：预置无效 Key 的视频配置时，诊断如实回传 401 `InvalidApiKey` 原文并给出白名单/Key 提示。
 - 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
+- 补充：出片模型徽标只在「诊断成功」或「接口已回传视频模型」时展示；诊断请求失败（未授权 / 网络异常）不再显示「未配置（回退分镜）」，避免误报。
