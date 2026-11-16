@@ -2094,3 +2094,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ctd-bid { margin-left: auto; color: var(--muted); font-size: 11px; }
 .ctd-foot { padding: 10px 16px; border-top: 1px solid var(--border); font-size: 11px;
   color: var(--muted); line-height: 1.6; }
+
+/* V4.82：视频分镜证据 / 素材缺口拦截提示 */
+.cwb-plan-warn { margin: 10px 0 2px; padding: 9px 12px; border-radius: 9px;
+  background: #fff4e6; border: 1px solid #f2d4a8; color: #8a4b08; font-size: 12px; line-height: 1.6; }

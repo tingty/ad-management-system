@@ -291,22 +291,22 @@ class TestPlanVersionAndDeliveryGate(unittest.TestCase):
             self.assertFalse(checks["official_spec"], "官方规格尚未核验")
 
     def test_22_frontend_grades_and_plan_are_archived(self):
-        studio = (FRONTEND / "pages" / "MediaAdStudio.tsx").read_text(encoding="utf-8")
-        # 草案等级始终随任务归档
-        self.assertIn("delivery_grade: s.recommendation.delivery_grade", studio)
-        # V4.46 回归修复：plan_id / plan_version 仅在计划已确认(planApproved)时附加，
-        # 避免未确认计划（D5 CreationPlan 未创建/未 confirm）触发后端 422 中断自动链路
-        self.assertIn("s.planApproved && s.planId", studio)
-        self.assertIn("plan_version: s.planVersion", studio)
-        panel = (FRONTEND / "pages" / "AutoCreationPanel.tsx").read_text(encoding="utf-8")
-        self.assertIn("不计可投放", panel)
-        self.assertIn("rec.structured_concepts", panel)
+        """V4.70 起旧素材创作页下线，改校验现行工作台仍保留 D4/D5 的契约类型与计划引用。"""
+        api = (FRONTEND / "api.ts").read_text(encoding="utf-8")
+        self.assertIn("delivery_grade: 'draft' | 'standard'", api)
+        self.assertIn("plan_version: string", api)
+        bench = (FRONTEND / "pages" / "CreativeWorkbench.tsx").read_text(encoding="utf-8")
+        self.assertIn("planId", bench)
+        self.assertIn("updateCreativePlan", bench)
 
 
 class TestFrontendSession(unittest.TestCase):
     """A01 / A02 / A13 / D3：真实执行打包后的前端会话中枢。"""
 
     def test_23_session_store(self):
+        session_ts = FRONTEND / "creationSession.ts"
+        if not session_ts.exists():
+            self.skipTest("creationSession.ts 于 V4.70 创意工作台重构时下线；该会话用例仅保留历史记录")
         esbuild = ROOT / "frontend" / "node_modules" / ".bin" / "esbuild"
         node = shutil.which("node")
         if not esbuild.exists() or not node:
@@ -315,7 +315,7 @@ class TestFrontendSession(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="admp_session_") as td:
             out = Path(td) / "creationSession.mjs"
             bundled = subprocess.run(
-                [str(esbuild), str(FRONTEND / "creationSession.ts"),
+                [str(esbuild), str(session_ts),
                  "--bundle", "--format=esm", "--platform=node",
                  '--define:process.env.NODE_ENV="production"',
                  f"--outfile={out}"],
@@ -329,7 +329,10 @@ class TestFrontendSession(unittest.TestCase):
             self.assertGreaterEqual(len(payload["checks"]), 6, payload)
 
     def test_24_frontend_defaults_and_migration_in_source(self):
-        session = (FRONTEND / "creationSession.ts").read_text(encoding="utf-8")
+        session_ts = FRONTEND / "creationSession.ts"
+        if not session_ts.exists():
+            self.skipTest("creationSession.ts 于 V4.70 创意工作台重构时下线；该会话用例仅保留历史记录")
+        session = session_ts.read_text(encoding="utf-8")
         self.assertIn("mode: 'auto'", session)
         self.assertIn("SESSION_VERSION = 3", session)
         self.assertIn("legacy ? {", session)

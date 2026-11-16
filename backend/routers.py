@@ -38,6 +38,9 @@ from creation_plan_service import (
     get_plan, plan_to_dict,
 )
 from version import ENABLE_AUTO_CREATION_PLAN
+# V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
+from video_claims import (video_evidence_context, audit_video_plan,
+                          repair_video_plan, video_asset_gate)
 
 # V4.81 / P2-P3：出片任务持久化（唯一任务事实在库，进程重启不丢）与创作批次列表
 import creative_tasks
@@ -446,7 +449,11 @@ _CW_VIDEO_PLAN_SYS = (
     " }}"
     "要求：shots 默认 4 镜覆盖 15 秒（0-3s 钩子 → 3-8s 真实功能 → 8-12s 可信支撑 → 12-15s 品牌收口）；"
     "每镜 visual 必须描述真实可生成的动态画面，不能只是静态图；可按对话微调节奏/卖点/时长；"
-    "不要编造产品未提及的事实；信息不足时给合理默认。"
+    "不要编造产品未提及的事实；信息不足时给合理默认。\n"
+    "V4.82 硬约束：必须严格遵守 payload.evidence_contract。字幕 / 旁白 / 钩子 / CTA 中"
+    "任何数字、评分、用户数、价格、效果、试用、订阅或兼容性表述，都必须能在本次页面原文"
+    "定位并保留原有「最多 / 测试条件 / 计费周期 / 适用范围」限定；原文没有就一个字都不要写，"
+    "不得用「信息不足时给合理默认」作为编造数值的借口。"
 )
 
 
@@ -750,6 +757,8 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
         "current_plan": req.current_plan or None,
         "conversation": convo,
         "language": lang,
+        # V4.82：证据契约与可用事实显式进 prompt；不再只靠「不要编造」这句口头约束
+        "evidence_contract": video_evidence_context(analysis),
     }
     llm, info = get_llm_with_info(db, "analysis")
     try:
@@ -765,21 +774,27 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
     if not plan.get("shots"):
         a = (analysis.get("analysis") if isinstance(analysis.get("analysis"), dict) else analysis) or {}
         product = a.get("product") or analysis.get("title") or "产品"
+        # V4.82 / N01 + A06 + A07：兜底模板不得自带评分、用户数与"三步完成"这类
+        # 页面未确认的数字承诺。旧模板里的虚构评分 / 用户数正是验收文档点名的样本。
+        facts = [str(x).strip()[:40] for x in (a.get("facts") or a.get("advantages")
+                                               or a.get("sellingPoints") or [])
+                 if str(x or "").strip()][:2]
+        support = facts[0] if facts else "页面已明示的核心价值"
         plan = {
             "mode": "text_to_video",
             "duration_sec": 15,
             "aspect": "9:16",
             "voiceover": (req.options or {}).get("voiceover", "none"),
-            "hook": f"{product}：真正解决你的痛点",
-            "cta": "立即下载 / 了解更多",
+            "hook": f"认识{product}",
+            "cta": "了解更多",
             "shots": [
-                {"idx": 1, "t": "0-3s", "shot": "text_to_video", "visual": f"{product} 使用场景中的人物特写，情绪从困惑转为惊喜", "text": "还在为这件事烦恼？", "vo": "还在为这件事烦恼？", "camera": "手持跟随推近", "motion": "主体入画"},
-                {"idx": 2, "t": "3-8s", "shot": "text_to_video", "visual": f"{product} 核心功能两步演示，屏幕录制＋手指引导", "text": "三步完成", "vo": "Three steps, done.", "camera": "俯拍＋特写", "motion": "功能演示循环"},
-                {"idx": 3, "t": "8-12s", "shot": "text_to_video", "visual": "评分 / 用户好评 / 数据角标弹出", "text": "★★★★★ 4.8 · 100K+ users", "vo": "Loved by millions.", "camera": "定格推近", "motion": "角标弹入"},
-                {"idx": 4, "t": "12-15s", "shot": "text_to_video", "visual": f"{product} Logo ＋ 下载按钮动画 ＋ 端卡", "text": "立即下载", "vo": "Get it now.", "camera": "拉远收尾", "motion": "Logo 定格"},
+                {"idx": 1, "t": "0-3s", "shot": "text_to_video", "visual": f"{product} 使用场景中的自然动作特写", "text": "真实使用场景", "vo": "看看实际效果", "camera": "手持跟随推近", "motion": "主体入画"},
+                {"idx": 2, "t": "3-8s", "shot": "text_to_video", "visual": f"{product} 核心功能连续演示，动作自然衔接", "text": support, "vo": "看看它如何完成这个任务", "camera": "俯拍＋特写", "motion": "功能演示循环"},
+                {"idx": 3, "t": "8-12s", "shot": "text_to_video", "visual": "页面已确认的价值点以简洁画面呈现，不出现评分或数量角标", "text": support, "vo": "信息来自产品页面", "camera": "定格推近", "motion": "信息画面淡入"},
+                {"idx": 4, "t": "12-15s", "shot": "text_to_video", "visual": f"{product} Logo ＋ 收口画面（仅使用已确认的品牌标识）", "text": "了解更多", "vo": "了解更多", "camera": "拉远收尾", "motion": "品牌定格"},
             ],
             "deliverables": ["15s 主片", "6s 剪辑版", "首帧封面图"],
-            "note": "未配置 / 未返回视频分镜，已生成通用模板；在对话框继续微调（更具体的卖点 / 节奏 / 平台打法）。",
+            "note": "通用模板（草案）：未配置 / 未返回视频分镜，已移除所有未经页面确认的数字承诺；在对话框继续微调。",
         }
         if not reply:
             reply = "已基于产品分析生成一份默认 15 秒四镜分镜；告诉我你想强调的卖点或平台打法，我帮你微调。"
@@ -788,6 +803,19 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
     plan["platform"] = platform
     plan["options"] = req.options or {}
     plan["reference_image"] = req.reference_image or ""
+    # V4.82：分镜必须过证据 / 限定审计。先做一次保守修复，修不掉的明确标 generation_blocked
+    a0 = (analysis.get("analysis") if isinstance(analysis.get("analysis"), dict) else analysis) or {}
+    plan, claim_audit, repaired = repair_video_plan(
+        plan, analysis, str(a0.get("product") or analysis.get("title") or ""))
+    gate = video_asset_gate(plan, req.reference_image)
+    plan["asset_gate"] = gate
+    plan["delivery_grade"] = gate["delivery_grade"]
+    if repaired:
+        extra = f"已移除 {repaired} 处页面原文不支持的数字 / 承诺。"
+        reply = (reply + extra if reply else extra)[:240]
+    if gate["status"] == "asset_missing":
+        reply = (reply + " 图生视频缺少参考图，请补充后出片。" if reply
+                 else "图生视频缺少参考图，请补充后出片。")[:240]
     # 实际输出比例：当前视频模型固定比例时显式标注（如阿里云百炼 MaaS → 9:16）
     vcfg = _active_config(db, "video")
     vparams = (vcfg.params if (vcfg and isinstance(getattr(vcfg, "params", None), dict)) else {}) or {}
@@ -805,9 +833,13 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
         config_id=vcfg.id, source="llm",
     ) if vcfg else ModelInfo(provider="storyboard", model="", role="video",
                              fallback=True, source="local")
-    return CWVideoPlanResult(reply=reply, plan=plan, output_aspect=plan_output_aspect,
-                             model_info=_mini_model_info(info), video_model_info=video_info,
-                             video_model_ready=bool(vcfg), source=info.get("source", "local"))
+    return CWVideoPlanResult(
+        reply=reply, plan=plan, output_aspect=plan_output_aspect,
+        model_info=_mini_model_info(info), video_model_info=video_info,
+        video_model_ready=bool(vcfg), source=info.get("source", "local"),
+        claim_status=claim_audit["status"],
+        generation_blocked=bool(plan.get("generation_blocked")),
+        delivery_grade=gate["delivery_grade"])
 
 
 @router.get("/cw-video/diagnose")
@@ -1060,6 +1092,13 @@ async def api_cw_video_create_job(req: CWVideoGenerateRequest, db: Session = Dep
     不会产生第二次收费任务。
     """
     built = _cw_video_request_build(req, db)
+    # V4.82：无证据 / 丢限定的承诺在入队前拦截。此时还没有供应商任务号，也没有费用。
+    if built["claim_audit"]["status"] == "needs_revision":
+        bad = "；".join(str(v.get("reason") or v.get("field") or "")[:80]
+                       for v in (built["claim_audit"].get("violations") or [])[:3])
+        raise HTTPException(422, "分镜文案未通过证据校验，未提交出片：" + bad)
+    if built["asset_gate"]["status"] == "asset_missing":
+        raise HTTPException(422, built["asset_gate"]["note"])
     payload = {
         "product": built["product"], "platform": built["platform"],
         "prompt": built["prompt"], "meta": built["meta"], "plan": built["plan"],
@@ -1190,6 +1229,10 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
     if brief.get("sellingPoints"): prompt_parts.append("核心卖点：" + "、".join(brief["sellingPoints"][:3]))
     prompt_parts.append(f"时长：{duration} 秒；比例：{output_aspect}")
     if seg_lines: prompt_parts.append("分镜：" + "；".join(seg_lines))
+    # V4.82：出片提示词带同一份证据契约 —— 分镜阶段被删掉的数字不会在生成阶段被"补充要求"找回来
+    prompt_parts.append(video_evidence_context(analysis))
+    claim_audit = audit_video_plan(plan, analysis)
+    asset_gate = video_asset_gate(plan, req.reference_image)
     if options.get("prompt_hint"): prompt_parts.append("补充要求：" + str(options["prompt_hint"]))
     if req.brand_logo:
         prompt_parts.append(f"品牌 Logo：{req.brand_logo}（如适用，将品牌标识有机融入画面与结尾定格，不得遮挡主体）")
@@ -1235,6 +1278,7 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         "product": product, "brief": brief, "cfg": cfg, "output_aspect": output_aspect,
         "requested_aspect": requested_aspect, "duration": duration, "prompt": prompt,
         "meta": meta, "skip_note": skip_note, "forced": forced, "cfg_params": cfg_params,
+        "claim_audit": claim_audit, "asset_gate": asset_gate,
         "has_video_cfg": bool(cfg and cfg.api_key and cfg.base_url and cfg.model),
     }
 
@@ -1251,6 +1295,8 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
     duration, prompt, meta = built["duration"], built["prompt"], built["meta"]
     skip_note, has_video_cfg = built["skip_note"], built["has_video_cfg"]
     forced, cfg_params = built["forced"], built["cfg_params"]
+    claim_audit = built["claim_audit"]
+    asset_gate = built["asset_gate"]
     provider = get_video(db) if has_video_cfg else StoryboardVideo()
     if has_video_cfg:
         m_info = ModelInfo(provider=("kling" if (cfg.provider or "") == "keling" else "model"),
@@ -1262,9 +1308,29 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
 
     # V4.79 / P0：失败不再装成「完成」。provider 抛 VideoPipelineError 时保留可执行分镜作为兜底
     # 交付物，但同时把 error_code / 动作 / 脱敏证据一并回传，界面据此显示「卡在哪一步、该做什么」。
+    # V4.82：分镜/补充要求里若仍有原文不支持的承诺，提交前就地拦截，绝不产生厂商费用
     err: Optional[VideoPipelineError] = None
     evidence: dict = {}
-    if has_video_cfg:
+    if claim_audit["status"] == "needs_revision":
+        ev = {"claim_audit": claim_audit}
+        err = VideoPipelineError(
+            "CLAIM_UNSUPPORTED",
+            "分镜文案含 " + str(len(claim_audit.get("violations") or []))
+            + " 处缺少原文证据或限定的表述：" + "；".join(
+                str(v.get("reason") or v.get("field") or "")[:80]
+                for v in (claim_audit.get("violations") or [])[:3]),
+            stage="config", evidence=ev)
+        evidence = ev
+        res = await StoryboardVideo().generate(prompt, platform, filename, meta)
+        res["note"] = ""
+    elif asset_gate["status"] == "asset_missing":
+        ev = {"asset_gate": asset_gate}
+        err = VideoPipelineError("ASSET_MISSING", asset_gate["note"],
+                                 stage="config", evidence=ev)
+        evidence = ev
+        res = await StoryboardVideo().generate(prompt, platform, filename, meta)
+        res["note"] = ""
+    elif has_video_cfg:
         try:
             res = await provider.generate(prompt, platform, filename, meta)
         except VideoPipelineError as e:
@@ -1338,6 +1404,8 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
     storyboard["aspect"] = actual_aspect
     storyboard["output_aspect"] = actual_aspect
     storyboard.setdefault("shots", [])
+    storyboard["claim_audit"] = claim_audit
+    storyboard["asset_gate"] = asset_gate
     # V4.79：证据落盘（best-effort，绝不因写日志失败影响出片结果）
     if evidence:
         try:

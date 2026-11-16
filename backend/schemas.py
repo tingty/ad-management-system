@@ -460,6 +460,10 @@ class CWVideoPlanResult(BaseModel):
     video_model_ready: bool = False             # 出片模型是否就绪（未就绪将回退分镜）
     output_aspect: str = ""        # 实际输出比例（如 9:16）；视频模型固定比例时显式标注
     source: str = "local"          # llm / mock / local
+    # V4.82：分镜已过证据 / 限定审计；generation_blocked 时提交端会拒绝入队
+    claim_status: str = "ok"
+    generation_blocked: bool = False
+    delivery_grade: str = "draft"
 
 
 class CWVideoGenerateRequest(BaseModel):

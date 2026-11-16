@@ -922,9 +922,16 @@ export default function CreativeWorkbench() {
                   </div>
                 )}
 
+                {materialType !== 'image' && (vs.plan?.generation_blocked || vs.plan?.asset_gate?.status === 'asset_missing') && (
+                  <div className="cwb-plan-warn">
+                    {vs.plan?.generation_blocked
+                      ? `分镜中有 ${vs.plan.claim_audit?.violations?.length || 0} 处文案未通过证据校验，请回到分镜规划修改后再生成（当前提交会被拦截，不产生费用）。`
+                      : vs.plan?.asset_gate?.note}
+                  </div>
+                )}
                 <div className="cwb-confirm">
                   <button className="cwb-gen-btn" onClick={batchGenerate}
-                    disabled={!((materialType !== 'image' || routes.some(r => r.selected)) && (materialType !== 'video' || (vs.plan && vs.plan.shots?.length)))}>
+                    disabled={!((materialType !== 'image' || routes.some(r => r.selected)) && (materialType !== 'video' || (vs.plan && vs.plan.shots?.length && !vs.plan.generation_blocked && vs.plan.asset_gate?.status !== 'asset_missing')))}>
                     确认并批量生成
                   </button>
                 </div>
