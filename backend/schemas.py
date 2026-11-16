@@ -479,7 +479,8 @@ class CWVideoAsset(BaseModel):
     url: str = ""
     caption: str = ""
     shot_index: Optional[int] = None
-    duration_sec: int = 0
+    duration_sec: float = 0            # 实测成片时长（读 mvhd / ffprobe），拿不到时退回计划时长
+    duration_source: str = ""          # measured（实测）/ planned（计划值兜底）
 
 
 class CWVideoGenerateResult(BaseModel):

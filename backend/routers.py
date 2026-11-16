@@ -942,6 +942,11 @@ _CW_VIDEO_JOB_MAX = 60         # 内存里最多保留 60 条，超出丢弃最�
 CW_VIDEO_EVIDENCE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", "video_evidence")
 
 
+def _cw_video_filename(user_id) -> str:
+    """出片落盘文件名：用户 + 秒级时间 + 随机短 UUID（同秒并发/重试不会互相覆盖）。"""
+    return f"cw_video_{int(user_id or 0)}_{int(time.time())}_{uuid.uuid4().hex[:8]}.mp4"
+
+
 def _persist_video_evidence(user_id: int, payload: dict) -> str:
     """把脱敏证据落盘（V4.79 / P0）：用户报障时可据此核对「到底返回了什么」，不必重现。
 
@@ -1140,7 +1145,8 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
                            model=cfg.model, role="video", fallback=False, config_id=cfg.id, source="llm")
     else:
         m_info = ModelInfo(provider="storyboard", model="", role="video", fallback=True, source="local")
-    filename = f"cw_video_{getattr(user, 'id', 0) or 0}_{int(time.time())}.mp4"
+    # V4.80 / P1：文件名加 UUID —— 同一秒内并发出片（批量生成、多次重试）不再互相覆盖。
+    filename = _cw_video_filename(getattr(user, "id", 0) or 0)
 
     # V4.79 / P0：失败不再装成「完成」。provider 抛 VideoPipelineError 时保留可执行分镜作为兜底
     # 交付物，但同时把 error_code / 动作 / 脱敏证据一并回传，界面据此显示「卡在哪一步、该做什么」。
@@ -1169,6 +1175,16 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
     if res.get("provider") == "storyboard" and err is None:
         m_info = ModelInfo(provider="storyboard", model="", role="video", fallback=True, source="local")
 
+    # V4.80 / P1：交付时长用实测值（读 moov/mvhd 或 ffprobe），只有拿不到元数据时才退回计划时长，
+    # 并如实标注来源，避免「计划 15s、实际 5s」被当成 15s 交付。
+    measured_sec = 0.0
+    try:
+        measured_sec = float(res.get("duration_sec") or 0) or 0.0
+    except (TypeError, ValueError):
+        measured_sec = 0.0
+    asset_sec = round(measured_sec, 2) if measured_sec > 0 else duration
+    dur_source = ("measured" if measured_sec > 0 else "planned") if res.get("file_path") else ""
+
     videos: list = []
     note = res.get("note") or ""
     if err is not None:
@@ -1177,10 +1193,12 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
                 + " 已保留可执行分镜脚本，可照单制作或按建议修正后重试。")
     if res.get("file_path"):
         rel = os.path.basename(res["file_path"])
-        videos.append(CWVideoAsset(type="video", url=f"/files/{rel}", caption=product, duration_sec=duration))
+        videos.append(CWVideoAsset(type="video", url=f"/files/{rel}", caption=product,
+                                   duration_sec=asset_sec, duration_source=dur_source))
     elif res.get("url") and err is None:
         # V4.79：err 不为空时绝不回传外链（外链可能是过期签名，落不了盘就是没出片）
-        videos.append(CWVideoAsset(type="video", url=res["url"], caption=product, duration_sec=duration))
+        videos.append(CWVideoAsset(type="video", url=res["url"], caption=product,
+                                   duration_sec=asset_sec, duration_source=dur_source))
     elif err is None:
         note = note or (skip_note or "未配置视频模型，已输出可执行分镜脚本（在设置页配置 video 用途的模型后可直连生成）。")
 
@@ -1192,12 +1210,19 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
         forced_note = f"⚠️ 当前视频模型固定输出 {actual_aspect}（{label}），已按实际比例 {actual_aspect} 标注（与所选「{requested_aspect}」不一致）。"
         note = (note + " " + forced_note).strip() if note else forced_note
 
+    # 实测时长与所选时长明显不符时必须明说（否则用户以为拿到了 15s，实际只有 5s）
+    if measured_sec > 0 and abs(measured_sec - duration) >= 1.0:
+        dur_note = (f"⚠️ 实测成片时长 {measured_sec:.1f}s，与所选 {duration}s 不一致（厂商按自身模板输出）。")
+        note = (note + " " + dur_note).strip() if note else dur_note
+
     # 始终回传分镜方案（展示 + 可下载 JSON），比例标注为实际输出比例
     storyboard = dict(plan)
     storyboard["platform"] = platform
     storyboard["options"] = options
     storyboard["reference_image"] = req.reference_image or ""
     storyboard.setdefault("duration_sec", duration)
+    # 计划时长与实测时长分开记：分镜是计划，duration_sec_actual 是真实交付
+    storyboard["duration_sec_actual"] = asset_sec if measured_sec > 0 else 0
     storyboard["aspect"] = actual_aspect
     storyboard["output_aspect"] = actual_aspect
     storyboard.setdefault("shots", [])

@@ -2795,6 +2795,41 @@
 - 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
 - 补充：出片模型徽标只在「诊断成功」或「接口已回传视频模型」时展示；诊断请求失败（未授权 / 网络异常）不再显示「未配置（回退分镜）」，避免误报。
 
+## V4.80 P1：交付时长按实测值、出片文件名唯一化——不再「计划 15s 当 15s 交付」
+
+**发布日期**：2026-11-16 14:33
+**变更类型**：修复 / 优化 / 新增
+**涉及模块**：创意工作台（视频出片）、视频交付物字段、视频校验、文件命名、大模型配置（视频结果回传字段）、后端接口（视频结果）、数据模型（视频结果时长字段）、前端与菜单（视频卡片时长徽标）、发版流程、系统版本
+**变更摘要**：P0 之后成片必须落盘通过校验，但交付物上的时长仍沿用「提示词里写的 15 秒」——厂商按自身模板出 5s/10s 时，界面与导出依然标 15s，用户以为拿到了长片。同时落盘文件名只有「用户 + 秒级时间戳」，同一秒内批量生成或连续重试会互相覆盖，先出的片子被后出的静默顶掉。本次让时长只来自真实文件（读 MP4 `moov/mvhd`，有 ffprobe 时优先 ffprobe），并在与所选时长不符时明确提示；文件名补随机 UUID，扩展名跟随真实容器。
+
+**更新要点**
+- 时长实测化：`verify_video_file()` 新增 `duration` / `duration_source`；镜像没装 ffprobe 时零依赖读 `moov/mvhd`（支持 version 0/1 两种头），拿不到就返回 0，**绝不用计划值冒充实测值**
+- 交付物字段：`CWVideoAsset` 新增 `duration_source`（`measured` / `planned`），`duration_sec` 改为浮点以保留真实秒数（如 15.04s）
+- 不符即提示：实测与所选时长相差 ≥1s 时，result.note 明确写出「实测成片时长 10.0s，与所选 15s 不一致（厂商按自身模板输出）」——不再让 5s 的片子顶着 15s 标签交付
+- 计划/实际分开记：分镜 `storyboard.duration_sec` 仍是计划值，新增 `duration_sec_actual` 记实测值，导出与后续核对不会被混用
+- 命名唯一化：`_cw_video_filename()` = `cw_video_{用户}_{秒级时间}_{随机8位}`，同秒批量出片/连续重试不再互相覆盖（20 次同秒命名 0 重复）
+- 扩展名对齐：新增 `align_video_ext()`，按真实容器（`ftyp` / webm / FLV / ts）修正扩展名，避免厂商回 webm 却存成 `.mp4` 被浏览器按 MIME 拒播
+- 界面标注：视频卡片在片段名后显示时长徽标，实测值标「· 实测」，兜底值只显示秒数（悬浮提示区分来源），不新增任何操作步骤
+
+**本次优化与更改的功能 / 模块**
+- 【修复】视频交付物：时长改取实测值，来源如实标注
+- 【修复】视频命名：同秒并发出片不再互相覆盖
+- 【修复】视频扩展名：跟随真实容器，避免浏览器拒播
+- 【优化】时长不符：结果文案明确提示差异
+- 【优化】数据模型：视频结果新增 `duration_source`、分镜新增 `duration_sec_actual`
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.80
+
+**影响范围**
+- 后端：`providers.py`（新增 `_mp4_boxes` / `_mp4_duration` / `align_video_ext`，`verify_video_file` 增补时长来源，`download_video` 与 `_save_media` 回传 `duration_source` 并对齐扩展名）、`routers.py`（新增 `_cw_video_filename`、实测时长与来源进入资产、不符提示、`duration_sec_actual`）、`schemas.py`（`CWVideoAsset` 字段）。
+- 前端：`VideoStudio.tsx`（视频卡片时长徽标）、`styles.css`（`.vs-video-dur`）。
+- 兼容性：`duration_sec` 由 int 变 float，JSON 结构与旧值兼容（15 → 15.0）；`duration_source` 为空表示未知来源，仅做展示用，不参与判定。
+- 部署：需 `docker compose up -d --build` 重建前后端。
+
+**验证**
+- P1 确定性验收（零费用）：`scripts/check_video_p1.py` **14/14 通过** —— mvhd v0/v1 解析（15.04s / 5.0s）、无 mvhd 不编造时长、无 ffprobe 仍得实测值且来源为 `mvhd`、webm 内容改名为 `.webm`、同秒 20 次命名无重复、实测 10s 不被写成 15s 且带不符提示、分镜计划值与实际值分列、同秒两次出片两个文件都在、无实测值时退回计划值并标 `planned`。
+- P0 回归未退化：`scripts/check_video_pipeline_p0.py` 19/19、`scripts/check_video_p0_api.py` 8/8。
+- 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
+
 ## V4.79 P0：视频出片链路「不再假成功」——白名单解析、失败可分类、成片必校验
 
 **发布日期**：2026-11-16 14:29

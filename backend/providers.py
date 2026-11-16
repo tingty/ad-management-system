@@ -4,7 +4,7 @@ AI 模型接入层（可配置多模型）。
 - 在「设置页」配置 OpenAI 兼容协议的 api_key / base_url / model 后，自动切换为真实调用。
 - 图像 provider 接入真实 DALL·E 风格接口失败时自动回退到占位图，避免阻断主流程。
 """
-import os, json, re, httpx, base64, asyncio, itertools, uuid, time, shutil, subprocess
+import os, json, re, httpx, base64, asyncio, itertools, uuid, time, shutil, subprocess, struct
 from typing import Optional
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -635,9 +635,89 @@ def _ffprobe_video(path: str) -> dict:
         return {"available": True, "ok": False, "reason": f"{type(e).__name__}: {e}"[:200]}
 
 
+def _mp4_boxes(f, start: int, end: int):
+    """遍历 [start, end) 区间内的 MP4 box，逐个 yield (type, payload_start, box_end)。不读 mdat 内容。"""
+    pos = start
+    while pos + 8 <= end:
+        f.seek(pos)
+        hdr = f.read(8)
+        if len(hdr) < 8:
+            return
+        size = struct.unpack(">I", hdr[:4])[0]
+        typ = hdr[4:8].decode("latin-1", "ignore")
+        head = 8
+        if size == 1:  # 64 位长度
+            ext = f.read(8)
+            if len(ext) < 8:
+                return
+            size = struct.unpack(">Q", ext)[0]
+            head = 16
+        elif size == 0:  # 直到文件尾
+            size = end - pos
+        if size < head:
+            return
+        yield typ, pos + head, pos + size
+        pos += size
+
+
+def _mp4_duration(path: str) -> float:
+    """从 moov/mvhd 读出真实时长（秒）。无 ffprobe 时也能拿到实测值，零依赖、只读元数据。"""
+    try:
+        total = os.path.getsize(path)
+        with open(path, "rb") as f:
+            for typ, p0, p1 in _mp4_boxes(f, 0, total):
+                if typ != "moov":
+                    continue
+                for t2, q0, q1 in _mp4_boxes(f, p0, p1):
+                    if t2 != "mvhd":
+                        continue
+                    f.seek(q0)
+                    head = f.read(32)
+                    if len(head) < 20:
+                        return 0.0
+                    ver = head[0]
+                    if ver == 1:
+                        if len(head) < 32:
+                            return 0.0
+                        scale = struct.unpack(">I", head[20:24])[0]
+                        dur = struct.unpack(">Q", head[24:32])[0]
+                    else:
+                        scale = struct.unpack(">I", head[12:16])[0]
+                        dur = struct.unpack(">I", head[16:20])[0]
+                    if not scale or dur in (0, 0xFFFFFFFF):
+                        return 0.0
+                    return round(dur / scale, 2)
+    except Exception:
+        return 0.0
+    return 0.0
+
+
+_VIDEO_EXT_BY_CONTAINER = {"mp4": ".mp4", "webm": ".webm", "flv": ".flv", "ts": ".ts"}
+
+
+def align_video_ext(path: str, container: str = "") -> str:
+    """让扩展名与真实容器一致（厂商回 webm 却存成 .mp4 会被浏览器按 MIME 拒播）。"""
+    cont = container or _video_container(path)
+    want = _VIDEO_EXT_BY_CONTAINER.get(cont)
+    if not want:
+        return path
+    root, cur = os.path.splitext(path)
+    if cur.lower() == want:
+        return path
+    try:
+        new = root + want
+        if os.path.exists(new):
+            return path
+        os.replace(path, new)
+        return new
+    except Exception:
+        return path
+
+
 def verify_video_file(path: str) -> dict:
     """校验落盘文件是不是真能播的视频，返回结构化结论（不抛异常，便于把原因写进证据）。"""
-    info: dict = {"ok": False, "path": path, "bytes": 0, "container": "", "reason": "", "ffprobe": {}}
+    info: dict = {"ok": False, "path": path, "bytes": 0, "container": "", "reason": "", "ffprobe": {},
+                  "duration": 0.0, "duration_source": ""}
     try:
         info["bytes"] = os.path.getsize(path)
     except Exception:
@@ -667,9 +747,18 @@ def verify_video_file(path: str) -> dict:
         info["reason"] = "ffprobe 校验失败：" + str(probe.get("reason") or "")
         return info
     if probe.get("ok"):
-        info["duration"] = probe.get("duration")
         info["width"] = probe.get("width")
         info["height"] = probe.get("height")
+        if probe.get("duration"):
+            info["duration"] = probe.get("duration")
+            info["duration_source"] = "ffprobe"
+    # V4.80 / P1：没有 ffprobe 时直接读 moov/mvhd —— 时长必须来自真实文件，
+    # 不能用「提示词里写的 15 秒」冒充交付时长（模型经常按要求只出 5s/10s 版本）。
+    if not info["duration"] and info["container"] == "mp4":
+        d = _mp4_duration(path)
+        if d:
+            info["duration"] = d
+            info["duration_source"] = "mvhd"
     info["ok"] = True
     return info
 
@@ -729,7 +818,7 @@ async def download_video(url: str, out_path: str, evidence: Optional[dict] = Non
             )
         os.replace(tmp, out_path)
         return {"http_status": status, "content_type": ctype, **{k: info.get(k) for k in
-                ("bytes", "container", "duration", "width", "height")}}
+                ("bytes", "container", "duration", "duration_source", "width", "height")}}
     finally:
         if os.path.exists(tmp):
             try:
@@ -875,19 +964,23 @@ class ModelVideo(VideoProvider):
                         os.remove(tmp)
                     except Exception:
                         pass
+            out = align_video_ext(out, info.get("container") or "")
             evidence["download"] = {"source": "base64", "bytes": info.get("bytes"),
                                     "container": info.get("container")}
             return {"provider": "model", "file_path": out, "model": self.model,
                     "output_aspect": output_aspect, "file_bytes": info.get("bytes"),
-                    "duration_sec": info.get("duration"), "evidence": evidence}
+                    "duration_sec": info.get("duration"),
+                    "duration_source": info.get("duration_source") or "", "evidence": evidence}
         if not url:
             raise VideoPipelineError("EMPTY_OUTPUT", "既没有成片地址也没有 base64 内容",
                                      stage="download", evidence=evidence)
         dl = await download_video(url, out, evidence)
+        out = align_video_ext(out, dl.get("container") or "")
         evidence["download"] = {"source": "url", **dl}
         return {"provider": "model", "file_path": out, "model": self.model,
                 "output_aspect": output_aspect, "file_bytes": dl.get("bytes"),
-                "duration_sec": dl.get("duration"), "evidence": evidence}
+                "duration_sec": dl.get("duration"),
+                "duration_source": dl.get("duration_source") or "", "evidence": evidence}
 
     async def generate(self, prompt, platform, filename, meta=None):
         meta = meta or {}

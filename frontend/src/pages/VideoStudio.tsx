@@ -506,7 +506,14 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
             {videos.map((v, i) => (
               <div className="vs-video" key={i}>
                 <video src={fileUrl(v.url)} controls preload="metadata" />
-                <div className="vs-video-cap">{v.caption || `片段 ${i + 1}`}</div>
+                <div className="vs-video-cap">
+                  {v.caption || `片段 ${i + 1}`}
+                  {v.duration_sec ? (
+                    <span className="vs-video-dur" title={v.duration_source === 'measured' ? '实测成片时长' : '计划时长'}>
+                      {v.duration_sec}{v.duration_source === 'measured' ? 's · 实测' : 's'}
+                    </span>
+                  ) : null}
+                </div>
                 <a className="vs-video-dl" href={fileUrl(v.url)} download target="_blank" rel="noreferrer">下载视频</a>
               </div>
             ))}

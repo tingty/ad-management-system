@@ -1904,6 +1904,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .vs-video { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
 .vs-video video { width: 100%; border-radius: 7px; background: #000; max-height: 320px; }
 .vs-video-cap { font-size: 12px; color: var(--text); margin: 6px 2px 2px; }
+.vs-video-dur { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: var(--primary); background: #eef2f7; }
 .vs-video-dl { display: inline-block; font-size: 12px; color: var(--primary2); text-decoration: none; margin: 0 2px 4px; }
 .vs-video-dl:hover { text-decoration: underline; }
 
