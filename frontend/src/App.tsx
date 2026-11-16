@@ -9,6 +9,7 @@ import Logs from './pages/Logs'
 import ReleaseNotes from './pages/ReleaseNotes'
 import CreativeWorkbench from './pages/CreativeWorkbench'
 import CreativeAnalysis from './pages/CreativeAnalysis'
+import CwTaskDock from './CwTaskDock'
 
 /* V4.75：移除「素材创作平台」（素材创作 / 素材提示词）两个子模块及其独占代码，
    「素材历史」迁移为「创意工作台」的最后一个二级菜单；系统设置保留。 */
@@ -275,7 +276,9 @@ export default function App() {
 
         <nav className="sb-nav">
           {visibleGroups.map((g, i) => {
-            const openKey = g === GROUP_WORKBENCH ? 'workbench' : 'system'
+            // 注意：visibleGroups 经过 map 生成新对象，不能用 g === GROUP_WORKBENCH 判断
+            // （那样两个分组都会落到 'system'，触发重复 key 且折叠状态互相串联）。
+            const openKey = g.name === GROUP_WORKBENCH.name ? 'workbench' : 'system'
             return (
               <Fragment key={openKey}>
                 {i > 0 && <div className="sb-sep" />}
@@ -332,7 +335,14 @@ export default function App() {
             </div>
           )}
 
-          {tab === 'workbench' && isEditor && <CreativeWorkbench />}
+          {/* V4.77：创意工作台常驻挂载——切到其他菜单只是隐藏、不卸载组件，
+              正在进行的素材生成任务（图片任务轮询 / 视频任务轮询）与已生成结果原样保留，
+              回到本页即可继续查看，不会因为切页面而中断或丢失。 */}
+          {isEditor && (
+            <div style={{ display: tab === 'workbench' ? undefined : 'none' }}>
+              <CreativeWorkbench />
+            </div>
+          )}
           {tab === 'creativeanalysis' && isEditor && <CreativeAnalysis />}
           {tab === 'history' && isEditor && <MaterialHistory />}
           {tab === 'llm' && isAdmin && <LLMSettings />}
@@ -341,6 +351,9 @@ export default function App() {
           {tab === 'releasenotes' && <ReleaseNotes />}
         </div>
       </main>
+
+      {/* V4.77：素材创作任务常驻浮窗——在当前页就能查阅任务进度，并可一键回到工作台 */}
+      {isEditor && <CwTaskDock hidden={tab === 'workbench'} onOpen={() => go('workbench')} />}
     </div>
   )
 }

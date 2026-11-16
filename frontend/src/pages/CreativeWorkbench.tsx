@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
 import VideoStudio, { VideoState } from './VideoStudio'
+import { cwTaskBegin, cwTaskDismiss, cwTaskEnd, cwTaskReset, getCwTask, type CwStageStatus, type CwTaskStage } from '../cwTask'
 
 type Route = {
   key: string
@@ -208,6 +209,63 @@ export default function CreativeWorkbench() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  /* V4.77 素材创作任务常驻：把「批量生成」的实时进度同步到全局任务栏。
+     切换菜单时工作台只是隐藏不卸载（见 App.tsx），请求与状态都在；
+     这里再把进度写进 cwTask 存储，用户在其他页面也能看到任务跑到哪一步。 */
+  useEffect(() => {
+    if (view !== 'generating' && view !== 'result') return
+    const imgTotal = jobs.length
+    const imgDone = jobs.filter(j => ['succeeded', 'partial_success', 'done'].includes(j.status)).length
+    const imgFailed = jobs.filter(j => ['failed', 'canceled'].includes(j.status)).length
+    const vidRunning = !!vs.generating
+    const vidCount = (vs.videos || []).length
+
+    const stages: CwTaskStage[] = []
+    if (materialType !== 'video') {
+      const st: CwStageStatus = imgTotal === 0
+        ? 'running'
+        : (imgDone + imgFailed >= imgTotal ? (imgDone > 0 ? 'done' : 'failed') : 'running')
+      stages.push({
+        key: 'image',
+        label: `推广图片（${imgDone}/${imgTotal || 0}）`,
+        status: st,
+        note: imgFailed ? `${imgFailed} 个任务失败` : '',
+      })
+    }
+    if (materialType !== 'image') {
+      stages.push({
+        key: 'video',
+        label: vidCount > 0 ? `视频成片（${vidCount} 个）` : '视频成片',
+        status: vidCount > 0 && !vidRunning ? 'done' : (vidRunning ? 'running' : 'pending'),
+      })
+    }
+
+    const payload = {
+      progress: progressPct,
+      statusText: progressText || '正在生成素材…',
+      product: String((cw as any)?.title || (cw as any)?.analysis?.product || '').slice(0, 48),
+      platforms: selected.slice(0, 3),
+      kind: materialType,
+      stages,
+      imageDone: imgDone,
+      imageTotal: imgTotal,
+      videoDone: vidCount,
+    }
+
+    if (view === 'generating') {
+      cwTaskBegin(payload)
+      return
+    }
+    // 结果页：只在任务确实处于运行中时收尾，避免用户后续操作用结果状态被反复重写
+    if (getCwTask().status !== 'running') return
+    const ok = imgDone > 0 || vidCount > 0
+    cwTaskEnd(ok ? 'done' : 'failed', {
+      ...payload,
+      statusText: ok ? '创作完成' : '本次未生成素材',
+      error: ok ? '' : (error || '本次生成未返回素材，请调整媒体或重试'),
+    })
+  }, [view, progressPct, progressText, jobs, materialType, vs.generating, vs.videos, assets.length, selected, cw, error])
 
   function showToast(m: string) {
     setToast(m); window.setTimeout(() => setToast(t => (t === m ? null : t)), 3500)
@@ -444,6 +502,7 @@ export default function CreativeWorkbench() {
     if (doImg && !routes.some(r => r.selected)) { setError('请至少选择一条图片创意路线'); return }
     if (doVid && (!vs.plan || !vs.plan.shots?.length)) { setError('请先在第二步完成视频分镜规划'); return }
     setError(''); setView('generating'); setAssets([]); setJobs([]); setChecked({}); setProgressPct(0); setProgressText('正在创建素材任务…')
+    cwTaskReset()   // V4.77：新一轮生成，任务常驻浮窗重新出现（此前手动关闭的抑制解除）
     let hid: number | null = null
     try { const h: any = await api.createCreationHistory({ analysis: cw?.analysis || {}, platform: selected[0] || '', lang: 'en' }).catch(() => null); hid = h?.id ?? null; setHistoryId(hid) } catch { /* 历史可选 */ }
     if (planId) await api.updateCreativePlan(planId, { status: 'generating', history_id: hid ?? undefined }).catch(() => {})
@@ -505,6 +564,7 @@ export default function CreativeWorkbench() {
     else setChecked(Object.fromEntries(assets.map(a => [a.file, true])))
   }
   function resetAll() {
+    cwTaskDismiss()   // V4.77：重置工作台同时收起常驻任务栏
     setView('input'); setCw(null); setLanding(null); setRoutes([]); setPlanId(null); setAssets([]); setJobs([])
     setHistoryId(null); setError(''); setProgressPct(0); setChecked({}); setDemoMode(false)
     // V4.60 / B3 + B4：清空文案缓存、参考图与品牌选择
