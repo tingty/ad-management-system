@@ -792,6 +792,87 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
                              model_info=_mini_model_info(info), source=info.get("source", "local"))
 
 
+@router.get("/cw-video/diagnose")
+def api_cw_video_diagnose(db: Session = Depends(get_db),
+                          user: User = Depends(require_roles(*CAN_EDIT))):
+    """视频生成链路自检（V4.75）：不发起真实出片，只报告「配置是否具备直连生成条件」。
+
+    用户常见困惑是「已经在设置里加过视频大模型，却生成不出视频」。多数情况并非模型
+    不可用，而是：没有 video 用途、配置被停用、同用途下选中了别的配置，或者缺少
+    厂商契约参数（endpoint / async_header / poll_path）导致请求打错端点。
+    本接口把这些一次性摊开，便于页面直接给出可行动的修复建议。
+    """
+    from urllib.parse import urlparse
+    from models import ModelConfig
+
+    cfg = _active_config(db, "video")
+    all_video = [c for c in db.query(ModelConfig).all() if "video" in ([str(x) for x in (c.usages or [])] or [c.usage or ""])]
+    hints: list[str] = []
+    out: dict = {
+        "configured": False,
+        "has_video_config": bool(all_video),
+        "video_config_count": len(all_video),
+        "config_id": None,
+        "provider": "",
+        "model": "",
+        "host": "",
+        "usages": [],
+        "is_active": None,
+        "last_test_ok": None,
+        "last_test_error": "",
+        "params": {},
+        "missing": [],
+        "hints": hints,
+    }
+
+    if not all_video:
+        hints.append("还没有任何「用途包含视频」的模型配置：到「系统设置 → 大模型配置」新增，用途勾选「视频」。")
+        return out
+    if cfg is None:
+        hints.append("存在视频配置，但没有一条同时满足「已启用 + Key/链接/模型齐全 + 用途含 video」，"
+                     "因此生成时会回退分镜脚本。请检查是否被停用或缺少 API Key / 请求链接 / 模型版本。")
+        return out
+
+    params = cfg.params if isinstance(cfg.params, dict) else {}
+    body_shape = str(params.get("body_shape") or "").strip()
+    endpoint = str(params.get("endpoint") or "").strip()
+    async_header = str(params.get("async_header") or "").strip().lower() in ("true", "1", "yes")
+    poll_path = str(params.get("poll_path") or "").strip()
+    missing: list[str] = []
+    if body_shape == "dashscope_maas":
+        if not endpoint:
+            missing.append("endpoint")
+        if not async_header:
+            missing.append("async_header=true")
+        if not poll_path:
+            missing.append("poll_path")
+    elif not endpoint:
+        # 通用视频网关默认 /video/generations，不算缺失
+        pass
+    out.update({
+        "configured": True,
+        "config_id": cfg.id,
+        "provider": cfg.provider or "",
+        "model": cfg.model or "",
+        "host": (urlparse(cfg.base_url or "").netloc or cfg.base_url or ""),
+        "usages": [str(x) for x in ((cfg.usages if isinstance(cfg.usages, list) else [cfg.usage]) or [])],
+        "is_active": bool(cfg.is_active),
+        "last_test_ok": cfg.last_test_ok,
+        "last_test_error": (cfg.last_test_error or "")[:400],
+        "params": {k: str(v) for k, v in params.items()},
+        "missing": missing,
+    })
+    if missing:
+        hints.append("该协议缺少契约参数：" + "、".join(missing) +
+                     "。请在配置编辑弹窗的「高级参数」中补齐，或删除后重新选择该协议（会自动装配默认参数）。")
+    if cfg.last_test_ok is False:
+        hints.append("最近一次连通测试未通过，通常是 Key 无效或部署机公网 IP 未加入厂商白名单；"
+                     "原文见下方 last_test_error。")
+    if not hints:
+        hints.append("配置齐全，可直接生成；若仍无成片，请查看生成结果里的失败原文（HTTP 状态 + 服务端返回）。")
+    return out
+
+
 @router.post("/cw-video/generate", response_model=CWVideoGenerateResult)
 async def api_cw_video_generate(req: CWVideoGenerateRequest, db: Session = Depends(get_db),
                                 user: User = Depends(require_roles(*CAN_EDIT))):

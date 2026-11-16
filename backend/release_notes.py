@@ -53,7 +53,10 @@ except Exception:  # pragma: no cover - 生成文件缺失时回退到 CHANGELOG
     _EMBEDDED_NOTES = []
 
 _VER_RE = re.compile(r"^##\s+(V\d+\.\d+(?:\.\d+)?)\s*(.*)$")
-_DATE_RE = re.compile(r"发布日期\D*?(\d{4}-\d{2}-\d{2})")
+# V4.75：发布日期允许并优先识别「YYYY-MM-DD HH:MM」，仅日期时也要能解析（老版本兼容）
+_DT_PATTERN = r"\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?"
+_DATE_RE = re.compile(r"发布日期\D*?(" + _DT_PATTERN + r")")
+_DATE_TIME_RE = re.compile(_DT_PATTERN)
 _FIELD_RE = re.compile(r"^\*\*(.+?)\*\*\s*[:：]\s*(.+?)\s*$")
 _SECTION_RE = re.compile(r"^\*\*(.+?)\*\*\s*$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.+?)\s*$")
@@ -67,6 +70,33 @@ TODO_MARKERS = ("TODO", "待补充", "待填写", "占位", "<请", "XXX")
 
 POINT_LIMIT = 6           # 每个版本最多展示的总结要点数
 POINT_CHARS = 120         # 单条要点最大字数
+
+
+def _norm_dt(raw) -> str | None:
+    """把「发布日期」归一化为 `YYYY-MM-DD HH:MM`（只给日期时补 00:00）。
+
+    V4.75：通知页的更新时间必须是完整到分钟的时间，历史条目（只有日期）也统一补齐，
+    避免同一列表里有的显示日期、有的显示日期+时间。
+    """
+    if not raw:
+        return None
+    m = re.search(_DT_PATTERN, str(raw))
+    if not m:
+        return None
+    txt = m.group(0).replace("T", " ")
+    if " " in txt:
+        d, t = txt.split(" ", 1)
+        parts = (t.split(":") + ["00", "00"])[:2]
+        try:
+            hh, mm = int(parts[0]), int(parts[1])
+        except Exception:
+            hh, mm = 0, 0
+        return f"{d} {hh:02d}:{mm:02d}"
+    return f"{txt} 00:00"
+
+
+def _has_time(raw) -> bool:
+    return bool(re.search(r"\d{1,2}:\d{2}", str(raw or "")))
 
 
 def _phase_of(fields: dict) -> dict:
@@ -150,9 +180,9 @@ def _parse_body(body: str) -> dict:
     key_points = [_short(x) for x in bullets_of("更新要点") if _clean_line(x)]
 
     date_value = None
-    dm = re.search(r"\d{4}-\d{2}-\d{2}", fields.get("发布日期", "")) or _DATE_RE.search(body)
+    dm = _DATE_TIME_RE.search(fields.get("发布日期", "")) or _DATE_TIME_RE.search(body)
     if dm:
-        date_value = dm.group(0)
+        date_value = _norm_dt(dm.group(0))
 
     modules = _split_list(fields.get("涉及模块", ""))
     change_types = [x for x in _split_list(fields.get("变更类型", "")) if x]
@@ -284,27 +314,36 @@ def _git_commit_time(version: str) -> str:
 
 
 def _note_datetime(n: dict) -> str | None:
-    """返回完整时间 `YYYY-MM-DD HH:MM`（含时分）；拿不到时退回纯日期。
+    """返回完整更新时间 `YYYY-MM-DD HH:MM`（V4.75 起为强制格式）。
 
-    - 自动同步通知：用当前时间（系统刚生成）。
-    - CHANGELOG 通知：官方「发布日期」为权威日期，叠加该版本发布提交的「时分」，
-      既与 CHANGELOG 的日期一致，又补齐用户要求的完整时间格式。
-    - 无 git / 找不到提交：仅保留 `YYYY-MM-DD`。
+    优先级：
+    1. 自动同步通知 → 当前时间；
+    2. CHANGELOG「发布日期」已带时分 → 直接归一化后使用（推荐写法，
+       发版脚本 `--sync` 会自动补齐时分）；
+    3. 只有日期 → 叠加该版本发布的 git 提交时分；
+    4. 部署环境无 git → 用随代码发布的 `release_notes_data.py` 里同一版本的时分；
+    5. 都没有 → 补 `00:00`，保证格式统一（绝不退回纯日期）。
     """
     version = n.get("version") or ""
     if n.get("auto_generated"):
         return datetime.now().strftime("%Y-%m-%d %H:%M")
-    date_value = n.get("date")
-    if not date_value:
+    raw = n.get("date")
+    if not raw:
         return None
+    if _has_time(raw):
+        return _norm_dt(raw)
+    date_part = _norm_dt(raw).split(" ")[0]  # type: ignore[union-attr]
     commit_time = _git_commit_time(version)
     if commit_time:
         try:
             dt = datetime.strptime(commit_time, "%Y-%m-%d %H:%M:%S %z")
-            return f"{date_value} {dt.strftime('%H:%M')}"
+            return f"{date_part} {dt.strftime('%H:%M')}"
         except Exception:
-            return date_value
-    return date_value
+            pass
+    for emb in _EMBEDDED_NOTES:
+        if emb.get("version") == version and _has_time(emb.get("date")):
+            return _norm_dt(emb.get("date"))
+    return f"{date_part} 00:00"
 
 
 def auto_note(tag: str | None = None) -> dict:

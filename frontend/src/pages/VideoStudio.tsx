@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react'
+import React, { useRef, useEffect, useState } from 'react'
 import { api } from '../api'
 
 /* V4.70 创意工作台 · 视频素材模块（受控组件，状态由父级 CreativeWorkbench 托管，便于 Step2 规划 → Step3 工作区共享分镜方案）
@@ -86,6 +86,21 @@ function AspectChip({ aspect }: { aspect?: string }) {
 export default function VideoStudio({ analysis, platform, referenceImage, brandLogo, injectLogo, mode, state, setState }: VideoStudioProps) {
   const { messages, plan, videos, options, note, modelInfo, planning, generating, error, refineInput } = state
   const chatRef = useRef<HTMLDivElement>(null)
+  // V4.75：视频链路自检结果（只读配置，不触发出片）
+  const [diag, setDiag] = useState<any>(null)
+  const [diagBusy, setDiagBusy] = useState(false)
+
+  async function runDiagnose() {
+    setDiagBusy(true)
+    try {
+      const r = await api.cwVideoDiagnose()
+      setDiag(r)
+    } catch (e: any) {
+      setDiag({ configured: false, hints: ['诊断请求失败：' + (e?.message || '未知错误')] })
+    } finally {
+      setDiagBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight
@@ -328,7 +343,37 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
           <span className={`vs-model-chip ${modelInfo.provider}`}>{providerLabel(modelInfo)}</span>
         )}
         <AspectChip aspect={state.outputAspect} />
+        <button className="vs-ghost vs-diag-btn" onClick={runDiagnose} disabled={diagBusy}>
+          {diagBusy ? '诊断中…' : '诊断视频配置'}
+        </button>
       </div>
+
+      {diag && (
+        <div className={`vs-diag ${diag.configured ? 'ok' : 'warn'}`}>
+          <div className="vs-diag-head">
+            <b>{diag.configured ? '✅ 视频模型已就绪，可直接出片' : '⚠️ 视频模型未就绪，当前会回退分镜脚本'}</b>
+            <button className="vs-ghost" onClick={() => setDiag(null)}>关闭</button>
+          </div>
+          {diag.configured && (
+            <div className="vs-diag-meta">
+              <span>配置 #{diag.config_id}</span>
+              <span>{diag.provider || '—'}</span>
+              <span>{diag.model || '—'}</span>
+              <span>{diag.host || '—'}</span>
+              <span>{diag.is_active ? '已启用' : '已停用'}</span>
+              <span>
+                连通测试：{diag.last_test_ok === true ? '通过' : diag.last_test_ok === false ? '失败' : '未测试'}
+              </span>
+            </div>
+          )}
+          {(diag.hints || []).length > 0 && (
+            <ul className="vs-diag-hints">
+              {(diag.hints as string[]).map((h, i) => <li key={i}>{h}</li>)}
+            </ul>
+          )}
+          {diag.last_test_error && <pre className="vs-diag-err">{diag.last_test_error}</pre>}
+        </div>
+      )}
 
       {(generating || state.generating) && (
         <div className="vs-gen-status">视频生成中（直连已配置的视频模型，通常需要 1–3 分钟，仅展示进度）…</div>

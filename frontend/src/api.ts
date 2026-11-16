@@ -1001,6 +1001,8 @@ export const api = {
     analysis: any; platform: string; reference_image?: string; brand_logo?: string; plan: any; options?: any;
   }) =>
     req<any>('/api/cw-video/generate', { method: 'POST', body: JSON.stringify(payload) }),
+  // V4.75 视频链路自检：报告当前生效的视频模型配置与契约参数是否齐备（不出片）
+  cwVideoDiagnose: () => req<any>('/api/cw-video/diagnose'),
   updateCreationHistory: (id: number, payload: {
     // V4.38：copy 允许附带 selected_copy / copy_variants，记录本次选用的创意文案
     platform?: string; lang?: string; copy?: any

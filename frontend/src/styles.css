@@ -1777,6 +1777,23 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .vs-aspect-chip.landscape { background: #fff7ed; color: var(--warn); border-color: #fde2cf; }
 .vs-aspect-chip.square { background: #f3eefc; color: #7a4fb5; border-color: #e3d4f5; }
 
+/* ===== V4.75 视频链路自检：把「配置是否就绪」摊开说清楚 ===== */
+.vs-diag-btn { margin-left: auto; }
+.vs-diag {
+  margin: 10px 0 4px; padding: 12px 14px; border-radius: 10px; font-size: 12.5px;
+  border: 1px solid var(--border); background: #fff;
+}
+.vs-diag.ok { border-color: #bfe9cf; background: #f6fdf9; }
+.vs-diag.warn { border-color: #fde2cf; background: #fffaf5; }
+.vs-diag-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.vs-diag-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 12px; }
+.vs-diag-hints { margin: 8px 0 0; padding-left: 18px; color: var(--text); line-height: 1.7; }
+.vs-diag-hints li { margin: 2px 0; }
+.vs-diag-err {
+  margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: #fdf2f2;
+  color: #a12622; font-size: 11.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+}
+
 /* ① 视频专属选项 */
 .vs-options { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; margin: 14px 0 4px; }
 .vs-opt { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 600; }

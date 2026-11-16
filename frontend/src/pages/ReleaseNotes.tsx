@@ -15,7 +15,7 @@ export function NoteCard({ note, isLatest }: { note: ReleaseNote; isLatest: bool
           {isLatest && <span className="rn-latest">当前版本</span>}
           {note.auto_generated && <span className="rn-auto">自动同步</span>}
         </div>
-        {note.date && <span className="rn-date">{note.date}</span>}
+        {note.date && <span className="rn-date" title="更新时间（YYYY-MM-DD HH:MM）">更新于 {note.date}</span>}
       </header>
 
       {note.title && <div className="rn-title">{note.title}</div>}

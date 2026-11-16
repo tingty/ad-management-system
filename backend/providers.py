@@ -404,19 +404,56 @@ def _video_find_msg(obj):
     return ""
 
 
+_TASK_ID_KEYS = ("task_id", "taskId", "job_id", "generation_id", "id", "uuid")
+
+
 def _video_find_task_id(obj):
-    """从提交响应里找任务标识（各厂商键名不一：id/task_id/uuid/job_id/generation_id/request_id）。"""
-    if isinstance(obj, dict):
-        for k in ("id", "task_id", "taskId", "uuid", "job_id", "generation_id", "request_id"):
-            if obj.get(k):
-                return str(obj[k])
-        data = obj.get("data")
-        if isinstance(data, dict):
-            for k in ("id", "task_id", "taskId", "uuid"):
-                if data.get(k):
-                    return str(data[k])
-        if isinstance(data, list) and data and isinstance(data[0], dict) and data[0].get("id"):
-            return str(data[0]["id"])
+    """从提交响应里找「可轮询」的任务标识（各厂商键名不一）。
+
+    V4.75 修复（关键）：阿里云百炼 / DashScope 的提交响应形如
+    `{"request_id": "...", "output": {"task_id": "...", "task_status": "PENDING"}}`，
+    `task_id` 嵌在 `output`（或 `data`）里，顶层只有 `request_id`。
+    旧实现把顶层键按顺序查找，`request_id` 排在候选里，于是误把「请求追踪号」
+    当成任务号去轮询 `/api/v1/tasks/{request_id}`——永远查不到任务，轮询耗尽后
+    静默回退分镜脚本。这正是「已配置视频大模型却生成不出视频」的根因。
+
+    现在的顺序：先在被包裹的 output / data / result 里找任务号，再找顶层任务号，
+    最后才把 request_id 当作部分网关的轮询键兜底。
+    """
+    if not isinstance(obj, dict):
+        return None
+
+    def _scan(d):
+        if not isinstance(d, dict):
+            return None
+        for k in _TASK_ID_KEYS:
+            v = d.get(k)
+            if v:
+                return str(v)
+        # 再下探一层常见包裹（output.result / data.task）
+        for wrap in ("result", "task", "video"):
+            inner = d.get(wrap)
+            if isinstance(inner, dict):
+                for k in _TASK_ID_KEYS:
+                    if inner.get(k):
+                        return str(inner[k])
+        return None
+
+    # 1) 被包裹的任务对象优先（阿里云 output / 通用网关 data）
+    for holder_key in ("output", "data", "result"):
+        holder = obj.get(holder_key)
+        if isinstance(holder, list) and holder:
+            holder = holder[0]
+        found = _scan(holder)
+        if found:
+            return found
+    # 2) 顶层任务号
+    found = _scan(obj)
+    if found:
+        return found
+    # 3) 兜底：少量网关确实用 request_id 作为轮询键
+    if obj.get("request_id"):
+        return str(obj["request_id"])
     return None
 
 
@@ -446,19 +483,18 @@ class ModelVideo(VideoProvider):
 
     def _poll_urls(self, task_id, endpoint):
         ep = endpoint or "/video/generations"
-        urls = []
-        # 厂商自定义轮询路径（如阿里云百炼 MaaS 的 /api/v1/tasks/{id}），优先尝试
+        # 厂商自定义轮询路径（如阿里云百炼 MaaS 的 /api/v1/tasks/{id}）：显式声明了契约
+        # 就只查这一条，避免每轮额外打 5 个必然 404 的候选地址（长轮询下会撞限流）。
         poll_path = (self.params.get("poll_path") or "").strip()
         if poll_path:
-            urls.append(f"{self.base_url}{poll_path}/{task_id}")
-        urls += [
+            return [f"{self.base_url}{poll_path}/{task_id}"]
+        return [
             f"{self.base_url}/v1/video/generations/tasks/{task_id}",
             f"{self.base_url}/video/generations/tasks/{task_id}",
             f"{self.base_url}/v1/video/generations/{task_id}",
             f"{self.base_url}{ep}/{task_id}",
             f"{self.base_url}/tasks/{task_id}",
         ]
-        return urls
 
     async def _finalize(self, url, b64, filename, output_aspect="9:16"):
         if b64:
@@ -532,8 +568,19 @@ class ModelVideo(VideoProvider):
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=600.0)) as c:
                 r = await c.post(self.base_url + endpoint, headers=headers, json=body)
-                r.raise_for_status()
-                data = r.json()
+                if r.status_code >= 400:
+                    # 不吞掉服务端原文：403（IP 白名单）/ 400（参数或模型名）/ 401（Key）
+                    # 的真实原因必须能回传到界面，否则用户只看到「生成不出视频」。
+                    snippet = ""
+                    try:
+                        snippet = (r.text or "").strip()[:280]
+                    except Exception:
+                        snippet = ""
+                    raise RuntimeError(f"HTTP {r.status_code} {snippet}".strip())
+                try:
+                    data = r.json()
+                except Exception:
+                    raise RuntimeError(f"响应不是合法 JSON：{(r.text or '')[:200]}")
                 # 1) 同步直出
                 url, b64 = _video_find_media(data)
                 if url or b64:
@@ -541,6 +588,7 @@ class ModelVideo(VideoProvider):
                 # 2) 异步任务：轮询取片
                 task_id = _video_find_task_id(data)
                 if task_id:
+                    submitted = task_id
                     for _ in range(120):  # 最多 ~6 分钟
                         await asyncio.sleep(3)
                         for u in self._poll_urls(task_id, endpoint):
@@ -561,16 +609,27 @@ class ModelVideo(VideoProvider):
                                     return await self._finalize(fu, fb, filename, out_aspect)
                                 raise RuntimeError("视频任务完成但未找到成片地址")
                             if st in ("failed", "error", "cancelled", "canceled"):
-                                raise RuntimeError("视频任务失败：" + str(_video_find_msg(obj))[:120])
+                                raise RuntimeError("视频任务失败：" + str(_video_find_msg(obj))[:160])
+                    sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
+                    sb["note"] = (f"视频任务已提交并受理（task_id={submitted}），但 6 分钟内未完成轮询，"
+                                  f"已回退分镜脚本；可稍后到厂商控制台按该任务号取片。")
+                    sb["output_aspect"] = out_aspect
+                    return sb
+                # 既没有成片也没有任务号：把响应摘要带出来便于核对契约
+                brief = ""
+                try:
+                    brief = json.dumps(data, ensure_ascii=False)[:220]
+                except Exception:
+                    brief = str(data)[:220]
+                sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
+                sb["note"] = f"视频接口已响应但未返回成片或任务号，已回退分镜脚本。响应摘要：{brief}"
+                sb["output_aspect"] = out_aspect
+                return sb
         except Exception as e:
             sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
-            sb["note"] = f"视频模型调用失败（{str(e)[:80]}），已回退分镜脚本。"
+            sb["note"] = f"视频模型调用失败（{str(e)[:200]}），已回退分镜脚本。"
             sb["output_aspect"] = out_aspect
             return sb
-        sb = await StoryboardVideo().generate(prompt, platform, filename, meta)
-        sb["note"] = "视频模型未返回可消费视频或任务标识，已回退分镜脚本。"
-        sb["output_aspect"] = out_aspect
-        return sb
 
 
 class KlingVideo(VideoProvider):

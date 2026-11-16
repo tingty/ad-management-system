@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, CreationHistory, MediaImageItem } from '../api'
 import type { CreativeAssetList } from '../api'
-import { REUSE_HISTORY_KEY, REUSE_HISTORY_EVENT } from './MaterialCreation'
 
 function fmt(iso?: string | null): string {
   if (!iso) return '—'
@@ -150,24 +149,6 @@ export default function MaterialHistory() {
     finally { setBusy(false) }
   }
 
-  /** 复用已保存的分析结论：不重新抓站 / 不重复调用大模型，直接进入推广设置。 */
-  const reuse = async (h: CreationHistory) => {
-    if (!h.analysis) { setErr('该记录未保存落地页分析结论，无法复用'); return }
-    setBusy(true); setErr('')
-    try {
-      const created = await api.createCreationHistory({
-        analysis: h.analysis, platform: h.platform, lang: h.lang, source_id: h.id,
-      })
-      sessionStorage.setItem(REUSE_HISTORY_KEY, JSON.stringify({
-        analysis: h.analysis, historyId: created.id,
-      }))
-      location.hash = '#/creation'
-      window.dispatchEvent(new Event(REUSE_HISTORY_EVENT))
-      flash('已复用分析结论并新建历史会话，正在跳转「素材创作」…')
-    } catch (e: any) { setErr(e.message) }
-    finally { setBusy(false) }
-  }
-
   return (
     <div className="ch-page">
       <div className="card ch-intro">
@@ -176,9 +157,8 @@ export default function MaterialHistory() {
           <span className="muted">共 {total} 条记录</span>
         </div>
         <p className="muted">
-          每次在「素材创作」完成落地页分析即自动建立一条历史；生成的广告文案与推广图片会增量归档。
-          这里可直接查阅分析结论、放大图片、单张或打包再下载，也可用「复用分析继续创作」跳过重复抓站与大模型推理，
-          只做新的推广设置，从而节约时间并降低重复素材的产生。
+          每次在「创意工作台」完成一次创作即自动建立一条历史；生成的广告文案与推广图片会增量归档。
+          这里可直接查阅分析结论、放大图片、单张或打包再下载，也可批量删除不再需要的历史记录。
         </p>
       </div>
 
@@ -226,7 +206,7 @@ export default function MaterialHistory() {
           <b>暂无素材历史</b>
           <p className="muted">
             {kw || platform ? '当前筛选条件下没有记录，试试重置筛选。'
-              : '前往「素材创作」完成一次落地页分析后，这里会自动归档分析结果、广告文案与推广图片。'}
+              : '前往「创意工作台」完成一次创作后，这里会自动归档分析结果、广告文案与推广图片。'}
           </p>
         </div>
       )}
@@ -276,11 +256,6 @@ export default function MaterialHistory() {
                   <a className="btn small" href={api.historyItemZipUrl(h.id)}>⬇ 打包下载</a>
                   {h.has_copy && (
                     <a className="btn small ghost" href={api.historyCopyUrl(h.id)}>下载文案</a>
-                  )}
-                  {a && (
-                    <button className="btn small primary" onClick={() => reuse(h)} disabled={busy}>
-                      复用分析继续创作
-                    </button>
                   )}
                   <button className="btn small danger" onClick={() => del([h.id])} disabled={busy}>删除</button>
                 </div>
@@ -401,7 +376,7 @@ export default function MaterialHistory() {
         </div>
       )}
 
-      {/* 放大预览（与「素材创作」共用 .lightbox 样式） */}
+      {/* 放大预览（与「创意工作台」共用 .lightbox 样式） */}
       {viewer && viewer.list[viewer.index] && (
         <div className="lightbox" onClick={() => setViewer(null)}>
           <div className="lb-inner" onClick={e => e.stopPropagation()}>

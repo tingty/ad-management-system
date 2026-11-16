@@ -1,10 +1,6 @@
 import { useEffect, useState, Fragment } from 'react'
 import type { ReactNode } from 'react'
 import { api, clearToken, getToken, User } from './api'
-import { bindSessionUser } from './creationSession'
-import CreationTaskDock from './CreationTaskDock'
-import MaterialCreation from './pages/MaterialCreation'
-import MaterialPromptLibrary from './pages/MaterialPromptLibrary'
 import MaterialHistory from './pages/MaterialHistory'
 import Login from './pages/Login'
 import LLMSettings from './pages/LLMSettings'
@@ -14,17 +10,16 @@ import ReleaseNotes from './pages/ReleaseNotes'
 import CreativeWorkbench from './pages/CreativeWorkbench'
 import CreativeAnalysis from './pages/CreativeAnalysis'
 
-/* V4.37：移除「素材管理」（创作工作台 / 批量生成 / 素材库 / 规格库）
-   与系统设置中的「提示词管理」；保留「素材创作平台」与必要的系统设置。 */
-type Tab = 'creation' | 'matprompts' | 'history'
-  | 'workbench' | 'creativeanalysis'
+/* V4.75：移除「素材创作平台」（素材创作 / 素材提示词）两个子模块及其独占代码，
+   「素材历史」迁移为「创意工作台」的最后一个二级菜单；系统设置保留。 */
+type Tab = 'workbench' | 'creativeanalysis' | 'history'
   | 'llm' | 'accounts' | 'logs' | 'releasenotes'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['creation', 'matprompts', 'history', 'workbench', 'creativeanalysis',
+const TABS: Tab[] = ['workbench', 'creativeanalysis', 'history',
   'llm', 'accounts', 'logs', 'releasenotes']
 const SB_KEY = 'admb_sidebar'
 
@@ -33,29 +28,19 @@ const SB_KEY = 'admb_sidebar'
 type NavItem = { key: Tab; label: string; desc: string; icon: string }
 type NavGroup = { name: string; icon: string; items: NavItem[] }
 
-/* V4.50 创意工作台：自动化创意素材创作中枢（与「素材创作平台」并存，不替换）。
-   包含「创意工作台」（对话式自动创作）与「全球创意分析」（参考素材 → LLM 归类 → 可复用提示词）。 */
+/* V4.50 创意工作台：自动化创意素材创作中枢。
+   包含「创意工作台」（对话式自动创作）、「全球创意分析」（参考素材 → LLM 归类 → 可复用提示词）
+   与「素材历史」（V4.75 从素材创作平台迁入，固定放最后一位）。 */
 const GROUP_WORKBENCH: NavGroup = {
   name: '创意工作台',
   icon: 'compass',
   items: [
     { key: 'workbench', label: '创意工作台', icon: 'compass',
-      desc: '自动化创意素材创作：输入落地页 / 应用链接或产品信息，选择推广媒体，剩余由大模型自动分析产品、规划创意路线并生成推广图片；视频节点下期待生成。对话式流程，人工仅介入必要输入与重要决策。' },
+      desc: '自动化创意素材创作：输入落地页 / 应用链接或产品信息，选择推广媒体，剩余由大模型自动分析产品、规划创意路线并生成推广图片与视频。对话式流程，人工仅介入必要输入与重要决策。' },
     { key: 'creativeanalysis', label: '全球创意分析', icon: 'atom',
-      desc: '分析 Meta / Google / Unity / Adsterra 等大媒体上最具创意与转化效果的素材，归类创意风格与类型，并产出可直接调用的图片 / 视频提示词模板，沉淀到「素材提示词」复用。' },
-  ],
-}
-
-const GROUP_CREATION: NavGroup = {
-  name: '素材创作平台',
-  icon: 'wand',
-  items: [
-    { key: 'creation', label: '素材创作', icon: 'sparkles',
-      desc: '输入落地页链接或正文，调用已配置的大模型推理，输出 8 项关键分析并标注实际调用模型；分析完成后，直接在本模块内基于分析结论进行营销推广设置（选平台 → 文案 → 生成推广图片）' },
-    { key: 'matprompts', label: '素材提示词', icon: 'tags',
-      desc: '集中管理「素材创作」全部提示词：按功能类型 / 使用类型分类检索与编辑；内置广告推广文案与推广图片的优秀提示词总结库，可按类型 / 风格 / 场景 / 覆盖对象四维筛选并选择系统默认，保存即生效' },
+      desc: '分析 Meta / Google / Unity / Adsterra 等大媒体上最具创意与转化效果的素材，归类创意风格与类型，并产出可直接调用的图片 / 视频提示词模板。' },
     { key: 'history', label: '素材历史', icon: 'history',
-      desc: '归档已分析整理的网站、广告文案与推广图片；可放大查阅、单张或打包再下载，复用分析结论继续创作以避免重复生成，并支持批量删除历史信息' },
+      desc: '归档已分析整理的网站、广告文案与推广图片；可放大查阅、单张或打包再下载，并支持批量删除历史信息' },
   ],
 }
 
@@ -119,7 +104,7 @@ function tabFromHash(): Tab | null {
 function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   return [
-    ...(canEdit ? (['creation', 'matprompts', 'history', 'workbench', 'creativeanalysis'] as Tab[]) : []),
+    ...(canEdit ? (['workbench', 'creativeanalysis', 'history'] as Tab[]) : []),
     ...(user.role === 'admin' ? (['llm', 'accounts', 'logs'] as Tab[]) : []),
     // 「新版通知」对所有角色开放，方便用户随时查阅每次优化与变更的版本内容
     'releasenotes',
@@ -136,9 +121,9 @@ function readCollapsed(): boolean {
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [booting, setBooting] = useState(true)
-  const [tab, setTab] = useState<Tab>(() => tabFromHash() || 'creation')
+  const [tab, setTab] = useState<Tab>(() => tabFromHash() || 'workbench')
   const [collapsed, setCollapsed] = useState<boolean>(readCollapsed)
-  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ creation: true, workbench: true, system: true })
+  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ workbench: true, system: true })
   // 版本发布「新版通知」红点：记录最新版本号 + 已读事件触发重算
   const [releaseLatest, setReleaseLatest] = useState<string | null>(null)
   const [seenTick, setSeenTick] = useState(0)
@@ -148,9 +133,6 @@ export default function App() {
     window.addEventListener('admb:unauthorized', onUnauthorized)
     return () => window.removeEventListener('admb:unauthorized', onUnauthorized)
   }, [])
-
-  // V4.38：创作会话按登录用户隔离持久化；切换账号不会串会话，重新登录可恢复上次进度。
-  useEffect(() => { bindSessionUser(user?.id ?? null) }, [user?.id])
 
   useEffect(() => {
     if (!getToken()) { setBooting(false); return }
@@ -213,7 +195,7 @@ export default function App() {
   const logout = () => {
     clearToken()
     setUser(null)
-    setTab('creation')
+    setTab('workbench')
     location.hash = ''
   }
 
@@ -228,15 +210,15 @@ export default function App() {
   const isEditor = !!user && ['admin', 'manager', 'editor'].includes(user.role)
   const isAdmin = user?.role === 'admin'
 
-  const visibleGroups: NavGroup[] = [GROUP_CREATION, GROUP_WORKBENCH, GROUP_SYSTEM]
+  const visibleGroups: NavGroup[] = [GROUP_WORKBENCH, GROUP_SYSTEM]
     .map(g => ({
       ...g,
       items: g.items.filter(it =>
-        it.key === 'releasenotes' ? true : (g === GROUP_CREATION || g === GROUP_WORKBENCH ? isEditor : isAdmin)),
+        it.key === 'releasenotes' ? true : (g === GROUP_WORKBENCH ? isEditor : isAdmin)),
     }))
     .filter(g => g.items.length > 0)
   const allItems: NavItem[] = visibleGroups.flatMap(g => g.items)
-  const cur: NavItem = allItems.find(i => i.key === tab) || allItems[0] || GROUP_CREATION.items[0]
+  const cur: NavItem = allItems.find(i => i.key === tab) || allItems[0] || GROUP_WORKBENCH.items[0]
   const curGroup = visibleGroups.find(g => g.items.some(i => i.key === tab))
 
   useEffect(() => {
@@ -281,7 +263,7 @@ export default function App() {
           {!collapsed && (
             <div className="sb-brand-txt">
               <b>广告管理系统</b>
-              <span>素材创作 · 版本通知</span>
+              <span>创意工作台 · 版本通知</span>
             </div>
           )}
           {!collapsed && (
@@ -293,8 +275,7 @@ export default function App() {
 
         <nav className="sb-nav">
           {visibleGroups.map((g, i) => {
-            const openKey = g === GROUP_CREATION ? 'creation'
-              : g === GROUP_WORKBENCH ? 'workbench' : 'system'
+            const openKey = g === GROUP_WORKBENCH ? 'workbench' : 'system'
             return (
               <Fragment key={openKey}>
                 {i > 0 && <div className="sb-sep" />}
@@ -347,30 +328,19 @@ export default function App() {
 
           {!isEditor && tab !== 'releasenotes' && (
             <div className="card">
-              <div className="muted">只读账号：可查阅「新版通知」与版本更新内容；素材创作与系统设置需相应权限。</div>
+              <div className="muted">只读账号：可查阅「新版通知」与版本更新内容；创意工作台与系统设置需相应权限。</div>
             </div>
           )}
 
-          {/* V4.38：「素材创作」常驻挂载。切到其它菜单只是隐藏，不会卸载组件，
-              因此正在进行的分析 / 文案 / 图片请求继续运行，回来后状态与结果完整保留。 */}
-          {isEditor && (
-            <div style={{ display: tab === 'creation' ? undefined : 'none' }}>
-              <MaterialCreation />
-            </div>
-          )}
-          {tab === 'matprompts' && isEditor && <MaterialPromptLibrary isAdmin={isAdmin} />}
-          {tab === 'history' && isEditor && <MaterialHistory />}
           {tab === 'workbench' && isEditor && <CreativeWorkbench />}
           {tab === 'creativeanalysis' && isEditor && <CreativeAnalysis />}
+          {tab === 'history' && isEditor && <MaterialHistory />}
           {tab === 'llm' && isAdmin && <LLMSettings />}
           {tab === 'accounts' && isAdmin && <Accounts />}
           {tab === 'logs' && isAdmin && <Logs />}
           {tab === 'releasenotes' && <ReleaseNotes />}
         </div>
       </main>
-
-      {/* V4.38：全局创作任务浮窗，任意页面都能查阅进度并一键返回工作台 */}
-      {isEditor && <CreationTaskDock onBack={() => go('creation')} />}
     </div>
   )
 }

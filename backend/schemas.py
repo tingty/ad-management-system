@@ -20,6 +20,10 @@ class ModelTestIn(BaseModel):
     model: Optional[str] = None
     protocol: Optional[str] = None
     endpoint: Optional[str] = None
+    # V4.75：视频/图像测试需要厂商契约参数（endpoint / body_shape / async_header / poll_path）。
+    # 此前缺少该字段，routers.test_model 读取 req.params 会抛 AttributeError → 接口 500，
+    # 前端「保存并测试」必然失败。
+    params: Optional[dict] = None
 
 class ModelConfigOut(BaseModel):
     id: int

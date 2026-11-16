@@ -2606,7 +2606,7 @@
 - 逻辑自检：`api_cw_video_generate` 当 `forced != requested_aspect` 时，note 含「固定输出 9:16」一致性提示；storyboard.aspect/output_aspect 均被覆写为实际比例；`api_cw_video_plan` 的 `output_aspect` 在视频模型配置存在时等于声明/默认比例。
 - 系统版本与 CHANGELOG / 发布数据一致性由发版校验（prepare_release --check）强制检查；该条目由本次改动文件自动归纳。
 
-
+## V4.73 视频大模型配置可用化：阿里云百炼做成「接口协议」一等公民，通用视频开放四项契约参数
 
 **发布日期**：2026-11-13
 **变更类型**：修复 / 优化
@@ -2637,3 +2637,43 @@
 - 前端类型检查：npx tsc --noEmit 0 错误；npm run build（tsc && vite build）通过，产出 dist 资源；修复了一处 JSX 字面量花括号导致的 TS1005 解析错误。
 - 真实联调：以 provider=aliyun-maas-video + 真实 params 调用 test_llm_connection，请求正确抵达阿里云网关（HTTP 403 AccessDenied「IP access denied」），证明端点/请求体/异步头构造与 V4.71 实测成功调用完全一致；仅余 Key 的 IP 白名单为账户侧配置（部署机公网 IP 需加入白名单）。
 - 系统版本与 CHANGELOG / 发布数据一致性由发版校验（prepare_release --check）强制检查；该条目由本次改动文件自动归纳。
+
+## V4.75 系统结构精简与视频链路修复（素材历史并入创意工作台、视频任务号解析纠错、通知时间到分钟）
+
+**发布日期**：2026-11-16 10:07
+**变更类型**：优化 / 删除 / 修复
+**涉及模块**：前端与菜单、素材历史、创意工作台、视频生成链路、大模型配置、新版通知、发版流程、系统版本
+**变更摘要**：按「素材创作平台」整体下线要求，把「素材历史」迁入「创意工作台」二级菜单末位并删除「素材创作」「素材提示词」两个子模块及其独占代码；同时修复视频生成「已配置大模型却出不了片」的根因——阿里云百炼把 task_id 嵌在 output 里，解析器误把顶层 request_id 当任务号轮询，必然轮询不到；并把「新版通知」的更新时间强制为 YYYY-MM-DD HH:MM。
+
+**更新要点**
+- 菜单重构：「素材历史」迁移为「创意工作台」的二级菜单并固定放最后一位；「素材创作平台」一级菜单整体移除
+- 模块下线：删除「素材创作」「素材提示词」两个子模块及其独占代码（页面、会话中枢、任务浮窗、临时面板、任务矩阵），其余功能保持完整
+- 视频修复（关键）：`_video_find_task_id` 优先解析 output/data 内的 task_id，不再把 request_id 误当任务号——此前会导致任务提交成功却轮询 6 分钟后静默回退分镜脚本
+- 失败可诊断：视频调用失败时回传 HTTP 状态与服务端原文；区分「任务已受理但轮询超时」与「接口未返回任务号」，不再只有一句笼统回退提示
+- 新增「诊断视频配置」：视频工作区一键自检当前生效的视频配置（用途 / 启停 / 契约参数是否齐备 / 连通状态），直接给出可行动的修复建议
+- 测试 500 修复：`ModelTestIn` 补齐 params 字段，此前读取 req.params 抛 AttributeError，导致「保存并测试」必然失败
+- 通知时间规范：「发布日期」支持并强制 `YYYY-MM-DD HH:MM`，发版脚本自动补时分，历史条目统一补齐，页面显示「更新于 …」
+- 轮询提效：声明了 poll_path 的厂商只轮询该路径，避免每轮额外打 5 个必然 404 的候选地址触发限流
+
+**本次优化与更改的功能 / 模块**
+- 【优化】前端与菜单 / 导航：素材历史移入创意工作台末位，素材创作平台一级菜单移除
+- 【删除】前端与菜单 / 素材创作：删除 MaterialCreation、MediaAdStudio、AutoCreationPanel、creationSession、CreationTaskDock、taskMatrix
+- 【删除】前端与菜单 / 素材提示词：删除 MaterialPromptLibrary 页面
+- 【优化】素材历史 / 复用入口：移除已无落点的「复用分析继续创作」，保留查阅、放大、下载、批量删除
+- 【修复】视频生成链路 / 任务解析：task_id 优先取 output.task_id，request_id 降为兜底
+- 【优化】视频生成链路 / 错误可见性：回传 HTTP 状态与服务端原文，区分轮询超时与无任务号
+- 【新增】视频生成链路 / 自检：新增 GET /api/cw-video/diagnose 与工作区「诊断视频配置」
+- 【修复】大模型配置 / 连通测试：ModelTestIn 补 params，修复测试接口 500
+- 【优化】新版通知 / 时间格式：发布日期强制 YYYY-MM-DD HH:MM，运行时归一化并显示「更新于」
+- 【优化】发版流程 / 校验：--sync 自动补时分，--check 拦截只有日期的发布日期
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.75
+
+**影响范围**
+- 前端 / 后端 / 数据 / 兼容性：导航与路由移除 creation / matprompts 两个 tab，旧地址 #/creation、#/matprompts 会回落到创意工作台；素材历史数据、后端历史/资产接口与既有归档完全保留，不受模块下线影响。视频链路仅调整任务号解析与错误文案，请求契约不变，已配置的阿里云 / 可灵 / 通用网关配置无需改动。通知时间格式对历史条目做统一补齐，不改动任何版本内容。
+- 部署：前端 dist 需随宿主 `docker compose up -d --build` 重建；后端 release_notes_data.py 已随 --sync 重建。
+
+**验证**
+- 后端校验：py_compile 通过；`_video_find_task_id` 单测通过——DashScope 响应解析为 TASK-999（此前误取 REQ-123）、OpenAI 形态取 id、仅 request_id 时兜底。
+- 端到端验证：以本地假服务复刻阿里云契约（异步头 + {model,input,parameters} 提交体 + /api/v1/tasks 轮询 + 预签名取片），ModelVideo 全链路返回 provider=model 且落盘文件非空，output_aspect=9:16。
+- 前端类型检查：npx tsc --noEmit 0 错误；npm run build 通过。
+- 发版校验：prepare_release --sync 自动补齐时分并重建发布数据，--check 通过（系统版本 == CHANGELOG 最新 == 发布数据最新）。

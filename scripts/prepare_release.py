@@ -29,7 +29,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -177,7 +177,7 @@ def build_entry(version: str, title: str, modules: list[str], kinds: list[str],
     V4.43：通知页只展示「版本号 + 更新要点」，因此 `**更新要点**` 是必备章节；
     「本次优化与更改 / 影响范围 / 验证」保留为完整归档，不进入页面展示。
     """
-    today = date.today().isoformat()
+    today = datetime.now().strftime("%Y-%m-%d %H:%M")
     mods = modules or ["系统版本"]
     mod_text = "、".join(mods)
     kind_text = " / ".join(kinds) if kinds else "优化"
@@ -228,6 +228,41 @@ def _redact(text: str) -> str:
         if tok in text:
             text = text.replace(tok, "（已移除凭据）")
     return text
+
+
+def _stamp_latest_datetime() -> bool:
+    """把 CHANGELOG 最新版本的「发布日期」补齐为 `YYYY-MM-DD HH:MM`（V4.75）。
+
+    CHANGELOG 并非严格按版本号排列（历史段落曾有插队），因此不能取「文件里第一个
+    ## V 段落」，必须按版本号取最大者，否则会改到错误的段落。
+    已有时间则不动。返回是否发生了改写。
+    """
+    if not CHANGELOG.exists():
+        return False
+    text = CHANGELOG.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    heads: list[tuple[int, str]] = []
+    for i, ln in enumerate(lines):
+        m = re.match(r"^##\s+(V\d+\.\d+(?:\.\d+)?)", ln)
+        if m:
+            heads.append((i, m.group(1)))
+    if not heads:
+        return False
+    start, ver = max(heads, key=lambda t: release_notes._vkey(t[1]))
+    later = [i for i, _ in heads if i > start]
+    end = later[0] if later else len(lines)
+    stamp = datetime.now().strftime("%H:%M")
+    for i in range(start, end):
+        raw = lines[i]
+        nl = "\n" if raw.endswith("\n") else ""
+        body = raw[:-1] if nl else raw
+        m = re.match(r"^(\*\*发布日期\*\*\s*[:：]\s*)(\d{4}-\d{2}-\d{2})(?!\s*\d{1,2}:\d{2})(.*)$", body)
+        if m:
+            lines[i] = f"{m.group(1)}{m.group(2)} {stamp}{m.group(3)}{nl}"
+            CHANGELOG.write_text("".join(lines), encoding="utf-8")
+            print(f"已为 {ver} 的「发布日期」补齐时分：{m.group(2)} {stamp}")
+            return True
+    return False
 
 
 def guess_kinds(files: dict[str, str]) -> list[str]:
@@ -365,6 +400,12 @@ def check(diff_range: str = "", strict: bool = False) -> int:
         for name, ok in required.items():
             if not ok:
                 errors.append(f"最新版本 {note['version']} 缺少「{name}」内容")
+        # V4.75：更新时间强制为 `YYYY-MM-DD HH:MM`，只有日期一律拦截。
+        if note.get("date") and not re.search(r"\d{1,2}:\d{2}", str(note["date"])):
+            errors.append(
+                f"最新版本 {note['version']} 的「发布日期」必须为 YYYY-MM-DD HH:MM"
+                f"（当前为 {note['date']}）；执行 python3 scripts/prepare_release.py --sync 可自动补齐时分"
+            )
         markers = [m for m in TODO_MARKERS if m in body]
         if markers:
             errors.append(f"最新版本仍含占位文字 {markers}，请补全后再发布")
@@ -464,6 +505,7 @@ def main() -> int:
 
     # --sync 始终重建部署发布数据，保证「代码更新 → 运行 --sync → 通知随代码入库」闭环
     if args.sync:
+        _stamp_latest_datetime()
         write_data_file()
         print("发布前执行：python3 scripts/prepare_release.py --check")
         return check(args.range, args.strict)
