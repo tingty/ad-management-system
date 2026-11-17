@@ -402,8 +402,10 @@ class TestD5CancelRestart(unittest.TestCase):
 
     def test_25_recover_interrupted_marks_unknown_not_canceled(self):
         db = fresh_db()
-        job, _ = js.create_job(db, _payload(2, kind="auto_creation"), USER,
-                               idempotency_key="rec_d5", kind="auto_creation")
+        # V4.87：recover_interrupted 只回收 kind=images 的中断任务；
+        # 视频任务由 creative_tasks 持久化 worker 按供应商任务号续查，不在此回收。
+        job, _ = js.create_job(db, _payload(2, kind="images"), USER,
+                               idempotency_key="rec_d5", kind="images")
         # 模拟「派发后结果未知」
         subs = [dict(x) for x in job.subtasks_json]
         subs[0]["status"] = "running"
@@ -418,6 +420,18 @@ class TestD5CancelRestart(unittest.TestCase):
         self.assertEqual(row.status, "failed")
         statuses = [x["status"] for x in row.subtasks_json]
         self.assertIn("unknown_outcome", statuses)
+
+    def test_25b_recover_interrupted_skips_video_jobs(self):
+        # V4.87：视频任务不得被 recover_interrupted 误标 failed（重启应续查而非误杀）
+        db = fresh_db()
+        job, _ = js.create_job(db, _payload(2, kind="video"), USER,
+                               idempotency_key="rec_d5_video", kind="video")
+        job.status = "running"
+        db.commit()
+        js.recover_interrupted()
+        db.expire_all()
+        row = db.query(GenerationJob).filter_by(job_id=job.job_id).first()
+        self.assertEqual(row.status, "running", "视频任务不应被图像恢复逻辑误标 failed")
         # 取消的任务不被 resurrect
         canceled, _ = js.create_job(db, _payload(1, kind="auto_creation"), OTHER,
                                      idempotency_key="cancel_d5", kind="auto_creation")

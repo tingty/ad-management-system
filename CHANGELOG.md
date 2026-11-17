@@ -2807,6 +2807,7 @@
 - `fetch_product`：只有 `ok` / `thin_content` 两种质量送模型；`too_large` / `unsupported_content_type` / `unsupported_scheme` / `fetch_failed` 一律判失败，交给路由给明确的 422 提示（不再把半截内容或二进制乱码当产品事实）。
 - 路由 `/cw/analyze`：按 `fetch_quality` 给出可操作的中文提示（超 8MB / 非网页内容 / 仅支持 http），不再笼统说"链接不可达"。
 - 前端 `api.ts` / `req()`：识别 nginx / Cloudflare 的 HTML 错误页（`<html>` 或 `<title>` 含 502/503/504），转成「服务暂时不可用（502 · 网关）：网关无法连接后端服务，请稍后重试」这类可读提示；JSON 错误与业务校验错误的处理保持不变。
+- 【合并远端】视频任务重启恢复不再误杀：`job_service.recover_interrupted()` 只回收 `kind=images` 的中断任务，视频任务交由 `creative_tasks` 持久化 worker 按供应商任务号续查（重启不再误标 failed、不重复提交收费）；`creative_tasks.retry(repoll)` 记录 `request_json.repoll_at`，业务期限从重查时刻起算，历史任务续查不再被误判 POLL_TIMEOUT。对应测试 `test_d4_d5_d6` 更新为 images kind 并新增视频不误杀断言。
 - `DEPLOY.md` 新增 6.2 节：502/504 按网关版本与状态码的排查表、宿主 nginx 建议配置（`proxy_read_timeout 180s`、`proxy_buffering off`），并明确容器内 nginx 已设 660s、无需修改，报错页带版本号说明是宿主 nginx 在拦。
 **本次优化与更改的功能 / 模块**
 - 【修复】落地页分析抓取无上限导致的 worker 被拖垮 / OOM → 网关 502：加体大小上限、内容类型白名单、流式读取、分层超时。
