@@ -31,6 +31,10 @@ from media_platforms import (list_media_platforms, validate_platform,
                              validate_task_matrix, media_rules_payload,
                              canonical_platform,
                              MediaRuleError, SPEC_VERSION, MEDIA_RULES)
+# V4.84：媒体素材规格标准库（图片/视频单一事实来源），生成链路统一引用
+from media_spec_library import (library_payload as spec_library_payload,
+                                video_target as spec_video_target,
+                                validate_video_delivery as spec_validate_delivery)
 from media_ad import generate_media_copy, generate_media_images
 from industry_profiles import resolve_profile
 from creation_plan_service import (
@@ -99,6 +103,16 @@ async def api_media_platforms(_: User = Depends(require_roles(*CAN_EDIT))):
 async def api_media_rules(_: User = Depends(require_roles(*ROLES))):
     """V4.40 / F08：版本化媒体规则（强制 / 政策 / 建议）、限制与各平台允许尺寸。"""
     return media_rules_payload()
+
+
+@router.get("/media-spec-library")
+async def api_media_spec_library(_: User = Depends(require_roles(*ROLES))):
+    """V4.84：媒体素材规格标准库快照（图片+视频，逐广告产品，带来源/核验分级）。
+
+    这是展示与生成的单一事实来源。前端「媒体平台设置」和导出清单都应引用本端点，
+    不再各写一套尺寸/时长；每条规则标注 A 官方核验 / B 内部基准 / C 待确认。
+    """
+    return spec_library_payload()
 
 
 def _rule_error(exc: MediaRuleError) -> HTTPException:
@@ -1238,7 +1252,16 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         if s.get("vo"): seg += f"（旁白：{s['vo']}）"
         seg_lines.append(seg)
     duration = int(plan.get("duration_sec") or options.get("duration") or 15)
-    prompt_parts = [f"产品：{product}"]
+
+    # V4.84：从标准库解析本平台的视频规格目标（比例/尺寸/时长区间/伴随素材/核验状态）。
+    # 生成前冻结进请求，交付时 creative_tasks 用同一份 spec 复核，两处结论始终一致。
+    spec_ref = spec_video_target(platform, output_aspect, duration,
+                                 ad_product=str(options.get("ad_product") or ""))
+    prompt_parts: list[str] = []
+    if spec_ref.get("duration_ok") is False:
+        # 官方已核验的规则里，所选时长越界：不静默放行，写入提示交结果区/诊断展示
+        prompt_parts.append(f"规格提示：{spec_ref['duration_reason']}")
+    prompt_parts.append(f"产品：{product}")
     if brief.get("promotionGoal"): prompt_parts.append(f"推广目标：{brief.get('promotionGoal')}")
     if brief.get("sellingPoints"): prompt_parts.append("核心卖点：" + "、".join(brief["sellingPoints"][:3]))
     prompt_parts.append(f"时长：{duration} 秒；比例：{output_aspect}")
@@ -1260,6 +1283,8 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         "lang": str(options.get("lang") or "en"),
         "duration": duration,
         "aspect": output_aspect,
+        # V4.84：把标准库冻结引用写入 meta，随任务落库、交付复核共用同一份
+        "spec_ref": spec_ref,
     }
     # 图生视频：把参考图作为 image 带入（Kling / 通用模型据端点决定是否消费）
     if str(plan.get("mode") or options.get("mode") or "") == "image_to_video" and req.reference_image:
@@ -1292,7 +1317,7 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         "product": product, "brief": brief, "cfg": cfg, "output_aspect": output_aspect,
         "requested_aspect": requested_aspect, "duration": duration, "prompt": prompt,
         "meta": meta, "skip_note": skip_note, "forced": forced, "cfg_params": cfg_params,
-        "claim_audit": claim_audit, "asset_gate": asset_gate,
+        "claim_audit": claim_audit, "asset_gate": asset_gate, "spec_ref": spec_ref,
         "has_video_cfg": bool(cfg and cfg.api_key and cfg.base_url and cfg.model),
     }
 
@@ -1311,6 +1336,7 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
     forced, cfg_params = built["forced"], built["cfg_params"]
     claim_audit = built["claim_audit"]
     asset_gate = built["asset_gate"]
+    spec_ref = built["spec_ref"]
     provider = get_video(db) if has_video_cfg else StoryboardVideo()
     if has_video_cfg:
         m_info = ModelInfo(provider=("kling" if (cfg.provider or "") == "keling" else "model"),
@@ -1415,6 +1441,16 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
             action="原片已保留可预览下载；如需达标成片请点「重新生成」（会产生新费用），"
                    "或确认视频模型支持所选时长后重试。")
 
+    # V4.84：标准库规格复核——用同一份冻结的 spec_ref 与实测值对照。
+    # 只有 A 级（官方已核验）规则越界才升级为硬失败；B/C 级仅提示，不冒充官方硬规则。
+    spec_check = spec_validate_delivery(spec_ref, measured_sec, actual_aspect) if res.get("file_path") else {}
+    if spec_check.get("status") == "hard_fail" and err is None:
+        err = VideoPipelineError(
+            "SPEC_MISMATCH", spec_check["note"], stage="validating",
+            action="成片不符合该平台官方规格（已核验），原片保留可下载；请按规格调整时长/比例后重新生成。")
+    if spec_check.get("note") and res.get("file_path"):
+        note = (note + " " + spec_check["note"]).strip()
+
     # 始终回传分镜方案（展示 + 可下载 JSON），比例标注为实际输出比例
     storyboard = dict(plan)
     storyboard["platform"] = platform
@@ -1448,6 +1484,8 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
         requested_duration=verdict["requested"] if res.get("file_path") else 0,
         measured_duration=verdict["actual"] if res.get("file_path") else 0,
         delivery_status=delivery_status,
+        spec_check=spec_check,
+        spec_ref=spec_ref if res.get("file_path") else {},
     )
 
 

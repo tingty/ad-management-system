@@ -2795,6 +2795,44 @@
 - 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
 - 补充：出片模型徽标只在「诊断成功」或「接口已回传视频模型」时展示；诊断请求失败（未授权 / 网络异常）不再显示「未配置（回退分镜）」，避免误报。
 
+## V4.84 媒体素材规格标准库——展示与生成共用一份官方核验规则，新增「素材标准库」二级菜单
+
+**发布日期**：2026-11-17 11:15
+**变更类型**：新增 / 优化
+**涉及模块**：素材创作平台 / 媒体素材规格（新建标准库）、创意工作台（视频请求 / 交付复核）、创作任务后台 worker、创意工作台导航（新增二级菜单「素材标准库」）、媒体规范 API、大模型配置（视频请求规格引用）、发版流程、系统版本
+**变更摘要**：按《创意工作台状态一致性与主流媒体素材规格诊断实施方案》第五至十四节，联网复核了 Meta、Google、Unity、AppLovin、Mintegral、TikTok、Moloco、Adsterra 八平台的官方帮助文档（2026-11-17）。核验结果与文档逐条对照：Google App 图片 1:1/1.91:1/4:5、Unity 视频 ≤60s+端卡、AppLovin Advertise 9:16≤1GB 与 oRTB 5–30s 分入口、Mintegral icon 512/主图 1200x627/视频 200MB 与旧 API 50MB 冲突、TikTok In-Feed 三比例≤10 分钟、Moloco 普通视频 6–180s 与 Native 6–100s 分规则、Adsterra Native 320x240 原文比例自相矛盾、Meta 官方页仍受限——全部一致。此前图片目录 `media_platforms.py` 只有版位/尺寸、视频链路完全不查规格，展示与生成各写一套数字，无法统一纠错。本次新建唯一标准库，让展示与生成都引用同一份带来源、核验日期与 A/B/C 分级的规则，并新增「素材标准库」二级菜单供查阅核对。
+**更新要点**
+- 新建 `backend/media_spec_library.py`：44 条逐广告产品规则，覆盖 8 平台图片与视频；每条带 `verification`（A 官方已核验 / B 内部制作基准 / C 受限待确认）、`source_url`、`verified_on`，未知项一律 None，不编造最大值
+- 联网核验纪律：A 级必须带官方来源与核验日期（Google/Unity/AppLovin/Mintegral/TikTok/Moloco/Adsterra 官方页）；Meta 受限保持 B 级、Adsterra 视频能力与 Mintegral 旧 API 容量保持 C 级，不冒充官方硬规则
+- 生成前冻结：`_cw_video_request_build` 调用 `video_target()` 解析目标比例/尺寸/时长区间/伴随素材/核验状态，写入请求 `meta.spec_ref` 随任务落库，同步与后台链路共用
+- 交付时复核：即时链路与持久 worker 都用 `validate_video_delivery()` 按冻结 spec 与实测值复核；仅 A 级越界升级为 `SPEC_MISMATCH` / `needs_attention`，B/C 级只提示不改结论，避免把内部基准当硬规则
+- 图片目录对账：`reconcile_image_catalog()` 以标准库为准找出展示目录缺失尺寸，防止只改一侧造成漂移
+- 新增 `GET /api/media-spec-library`：标准库快照端点（需鉴权），供菜单页与导出统一查询
+- 新增二级菜单「素材标准库」（创意工作台分组，编辑角色可见）：只读查阅页，支持平台/图片视频/核验级别筛选与搜索，展示尺寸、比例、格式、大小、时长、伴随素材、来源链接与核验日期；不改任何现有页面布局或按钮
+**本次优化与更改的功能 / 模块**
+- 【新增】`media_spec_library.py` 媒体素材规格标准库（单一事实来源，44 条规则 / 8 平台 / A-B-C 分级）
+- 【新增】`video_target()` / `validate_video_delivery()` / `reconcile_image_catalog()` / `library_payload()` 标准库查询与联动 API
+- 【新增】`GET /api/media-spec-library` 与前端 `api.mediaSpecLibrary()`
+- 【新增】创意工作台二级菜单「素材标准库」与只读页面 `SpecLibrary.tsx`
+- 【优化】视频生成请求与结果新增 `spec_ref` / `spec_check` 字段（向后兼容，旧任务缺省值不影响读取）
+- 【优化】新增交付错误码 `SPEC_MISMATCH` 与阶段标签「规格未达标」，原片保留可下载
+- 【优化】专项验收 `scripts/check_media_spec_library.py` 31/31、接口测试 `tests/test_media_spec_library.py` 4/4
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.84
+**影响范围**
+- 后端：新增 `media_spec_library.py`；`routers.py`（新端点 + 视频请求冻结 spec + 交付复核 + schema 字段）、`creative_tasks.py`（worker 交付复核 + spec 落库 + 视图字段）、`schemas.py`（结果新增可选字段）。
+- 前端：新增 `pages/SpecLibrary.tsx`；`App.tsx`（Tab / 菜单 / 权限 / 挂载）、`api.ts`（新端点方法）、`useCreativeTasks.ts`、`CreativeTasksDrawer.tsx`、`styles.css`（均新增可选字段，不改布局）。
+- 数据：不新增表、不改列；`meta_json` / `result_json` 新增 `spec_ref` / `spec_check` 可选字段，旧任务读取缺省兼容。
+- 行为变化（重要）：选 Moloco 出 5s 竖片这类「官方规格越界」现在会在结果里明确标规格不符（原片仍保留）；Meta 等 B/C 级规则只作提示，不会误判成不合格。
+- 纪律边界：标准库是代码级规则库，非规格管理界面；未知/受限字段留空标注，不自动判定合规；技术规格通过不等于广告审核通过或转化提升。
+**验证**
+- 标准库专项：`python3 scripts/check_media_spec_library.py` **31/31 通过**（结构与 A/B/C 纪律、逐平台与文档一致、video_target 三态、交付复核、目录对账、生成链路引用点）。
+- 接口测试：`tests/test_media_spec_library.py` **4/4 通过**（鉴权、库结构、A 级必带来源、生成与展示同源）。
+- 回归未退化：`check_video_v483.py` 14/14、`check_video_pipeline_p0.py` 19/19、`check_video_p0_api.py` 8/8、`check_video_p1.py` 14/14、`check_creative_tasks.py` 23/23、`check_video_claims.py` 16/16；`tests/run_all.py` **185 项，失败 0 / 错误 0 / 跳过 2**。
+- 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
+- 界面约束：新增一个二级菜单「素材标准库」及其只读页面；未改任何其他页面布局、按钮或一级导航。
+- 四种状态：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌；本轮未发起付费出片，也未做各平台实际上传审核。
+- 待确认：Meta 官方 Ads Guide 访问受限，需后续取得可核验当前参数后把相关条目升级为 A；Adsterra 原生 320x240 比例冲突与视频入口能力、Mintegral 200MB/50MB 按入口的适用边界，正式投放前须按账户实际广告产品复核。
+
 ## V4.83 状态一致性与交付时长门——同批次始终一份状态，5 秒原片不再冒充 15 秒成片
 
 **发布日期**：2026-11-17 10:55

@@ -179,6 +179,15 @@ export default function CreativeTasksDrawer(props: Props) {
                               {s.delivery_status === 'noncompliant' ? ' · 未达标' : ''}
                             </span>
                           ) : null}
+                          {/* V4.84：标准库规格核验（A 官方已核验才标硬结论，B/C 只标待确认） */}
+                          {s.spec_ref?.ad_product && (
+                            <span className={s.spec_check?.status === 'hard_fail' ? 'ctd-sub-bad' : 'ctd-sub-spec'}
+                              title={s.spec_check?.note || `${s.spec_ref.ad_product} · ${s.spec_ref.verification_label || ''}`}>
+                              规格 {s.spec_ref.ad_product}
+                              {s.spec_check?.status === 'hard_fail' ? ' · 不符'
+                                : s.spec_ref.verification === 'A' ? ' · 官方' : ' · 待确认'}
+                            </span>
+                          )}
                           {s.success_count > 0 && <span className="ctd-sub-ok">成功 {s.success_count}</span>}
                         </div>
                         {(s.assets || []).length > 0 && (

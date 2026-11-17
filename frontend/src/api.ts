@@ -949,6 +949,21 @@ export const api = {
   // V4.40 / F08：版本化媒体规则（强制 / 政策 / 建议、上限、行业版位偏好）
   mediaRules: () =>
     req<MediaRules>('/api/media-rules'),
+  // V4.84：媒体素材规格标准库（图片+视频，逐广告产品，带来源/核验分级）——展示与生成的单一事实来源
+  mediaSpecLibrary: () =>
+    req<{
+      library_version: string
+      reviewed_on: string
+      verification_label: Record<string, string>
+      entries: {
+        platform: string; ad_product: string; asset_role: string; media: string
+        verification: string; verification_label: string; source_url: string | null
+        verified_on: string | null; sizes: string[]; min_sizes: string[]
+        aspect_ratios: string[]; formats: string[]; max_bytes: number | null
+        duration_min: number | null; duration_max: number | null; fps_min: number | null
+        codec: string | null; companions: string[]; note: string; library_version: string
+      }[]
+    }>('/api/media-spec-library'),
   // V4.42 / F06：供应商尺寸能力 / 核验状态
   imageCapabilities: () =>
     req<ImageCapabilities>('/api/image-capabilities'),

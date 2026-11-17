@@ -35,6 +35,8 @@ export interface CreativeSubtask {
   requested_duration?: number
   measured_duration?: number
   delivery_status?: string         // compliant / noncompliant / unverified
+  spec_check?: { status?: string; spec_ok?: boolean | null; reasons?: string[]; note?: string; verification?: string; library_version?: string }
+  spec_ref?: { ad_product?: string; target_aspect?: string; target_size?: string; duration_min?: number | null; duration_max?: number | null; verification?: string; verification_label?: string; source_url?: string | null }
   retry_of?: string                // 重生成链：同一逻辑资产的旧 attempt
   attempts?: number
   note?: string

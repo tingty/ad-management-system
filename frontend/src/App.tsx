@@ -9,18 +9,19 @@ import Logs from './pages/Logs'
 import ReleaseNotes from './pages/ReleaseNotes'
 import CreativeWorkbench from './pages/CreativeWorkbench'
 import CreativeAnalysis from './pages/CreativeAnalysis'
+import SpecLibrary from './pages/SpecLibrary'
 import CwTaskDock from './CwTaskDock'
 
 /* V4.75：移除「素材创作平台」（素材创作 / 素材提示词）两个子模块及其独占代码，
    「素材历史」迁移为「创意工作台」的最后一个二级菜单；系统设置保留。 */
-type Tab = 'workbench' | 'creativeanalysis' | 'history'
+type Tab = 'workbench' | 'creativeanalysis' | 'speclibrary' | 'history'
   | 'llm' | 'accounts' | 'logs' | 'releasenotes'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['workbench', 'creativeanalysis', 'history',
+const TABS: Tab[] = ['workbench', 'creativeanalysis', 'speclibrary', 'history',
   'llm', 'accounts', 'logs', 'releasenotes']
 const SB_KEY = 'admb_sidebar'
 
@@ -40,6 +41,8 @@ const GROUP_WORKBENCH: NavGroup = {
       desc: '自动化创意素材创作：输入落地页 / 应用链接或产品信息，选择推广媒体，剩余由大模型自动分析产品、规划创意路线并生成推广图片与视频。对话式流程，人工仅介入必要输入与重要决策。' },
     { key: 'creativeanalysis', label: '全球创意分析', icon: 'atom',
       desc: '分析 Meta / Google / Unity / Adsterra 等大媒体上最具创意与转化效果的素材，归类创意风格与类型，并产出可直接调用的图片 / 视频提示词模板。' },
+    { key: 'speclibrary', label: '素材标准库', icon: 'tags',
+      desc: '图片与视频素材规格的唯一标准来源，逐平台逐广告产品列出尺寸、比例、格式、大小、时长与伴随素材，并标注官方核验状态与来源；生成链路直接引用，展示与生成始终一致。' },
     { key: 'history', label: '素材历史', icon: 'history',
       desc: '归档已分析整理的网站、广告文案与推广图片；可放大查阅、单张或打包再下载，并支持批量删除历史信息' },
   ],
@@ -105,7 +108,7 @@ function tabFromHash(): Tab | null {
 function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   return [
-    ...(canEdit ? (['workbench', 'creativeanalysis', 'history'] as Tab[]) : []),
+    ...(canEdit ? (['workbench', 'creativeanalysis', 'speclibrary', 'history'] as Tab[]) : []),
     ...(user.role === 'admin' ? (['llm', 'accounts', 'logs'] as Tab[]) : []),
     // 「新版通知」对所有角色开放，方便用户随时查阅每次优化与变更的版本内容
     'releasenotes',
@@ -344,6 +347,7 @@ export default function App() {
             </div>
           )}
           {tab === 'creativeanalysis' && isEditor && <CreativeAnalysis />}
+          {tab === 'speclibrary' && isEditor && <SpecLibrary />}
           {tab === 'history' && isEditor && <MaterialHistory />}
           {tab === 'llm' && isAdmin && <LLMSettings />}
           {tab === 'accounts' && isAdmin && <Accounts />}

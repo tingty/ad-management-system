@@ -2079,6 +2079,8 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ctd-sub-ok { margin-left: auto; color: var(--ok); }
 /* V4.83：未达标成片的时长标记，沿用现有失败色，不新增控件 */
 .ctd-sub-bad { color: #b42318; font-weight: 600; }
+/* V4.84：标准库规格核验标记（灰色待确认 / 官方已在 title 说明），不新增控件 */
+.ctd-sub-spec { color: var(--muted); font-size: 11px; }
 .ctd-assets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .ctd-assets a { display: block; width: 74px; height: 74px; border-radius: 8px; overflow: hidden;
   border: 1px solid var(--border); background: #f4f7fb; }

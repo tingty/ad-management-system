@@ -514,6 +514,9 @@ class CWVideoGenerateResult(BaseModel):
     requested_duration: float = 0
     measured_duration: float = 0
     delivery_status: str = ""      # compliant / noncompliant / unverified
+    # V4.84：标准库规格复核（生成前冻结 spec_ref → 交付时用实测值复核）
+    spec_check: dict = {}          # {status, spec_ok, reasons, note, verification, library_version}
+    spec_ref: dict = {}            # 生成前冻结的平台规格目标（比例/尺寸/时长区间/伴随素材/来源）
 
 
 class CWVideoJobOut(BaseModel):

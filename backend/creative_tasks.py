@@ -30,6 +30,8 @@ from job_service import IdempotencyConflict, payload_hash_of
 from providers import (
     VideoPipelineError, save_video_media, video_provider_of_config,
 )
+# V4.84：交付时用生成前冻结的 spec_ref 复核平台规格（与即时出片链路共用同一份标准库）
+from media_spec_library import validate_video_delivery as spec_validate_delivery
 
 # ---------------- 常量 ----------------
 ACTIVE = ("queued", "running")
@@ -228,6 +230,7 @@ def job_to_task(job: GenerationJob) -> dict:
     task_status = job.status or ""
     if task_status in TERMINAL:
         stage_label = ("时长未达标" if job.error_code == "DURATION_MISMATCH"
+                       else "规格未达标" if job.error_code == "SPEC_MISMATCH"
                        else {"succeeded": "已完成", "needs_attention": "待核实",
                              "failed": "失败", "canceled": "已停止"}.get(task_status, task_status))
     elif is_video:
@@ -262,6 +265,8 @@ def job_to_task(job: GenerationJob) -> dict:
         "measured_duration": result.get("measured_duration") or result.get("duration_sec") or 0,
         "delivery_status": result.get("delivery_status") or ("compliant" if task_status == "succeeded" else ""),
         "duration_tolerance_sec": result.get("duration_tolerance_sec") or 0,
+        "spec_check": result.get("spec_check") or {},
+        "spec_ref": result.get("spec_ref") or {},
         "note": result.get("note") or "",
         "attempts": int(job.attempts or 0),
         "retry_of": job.retry_of or "",
@@ -651,6 +656,12 @@ async def _drive(db: Session, job: GenerationJob) -> None:
             return
         job.stage = "validating"
         verdict = _duration_verdict(snap, saved)
+        # V4.84：用生成前冻结的 spec_ref（在 meta 里）复核平台规格，与即时出片链路共用标准库。
+        # 只有官方已核验（A 级）规则越界才构成硬失败；B/C 级只作为提示，不冒充官方硬规则。
+        spec_ref = (snap.get("meta") or {}).get("spec_ref") or {}
+        spec_check = spec_validate_delivery(spec_ref, saved.get("duration_sec") or 0,
+                                            saved.get("output_aspect") or "") if spec_ref else {}
+        spec_hard_fail = verdict["ok"] and spec_check.get("status") == "hard_fail"
         asset = _archive(db, job, saved, snap, verdict)
         job.asset_ids = [asset.asset_id]
         # V4.83 / C04+C05：终态与资产、校验结论在同一事务里写入。
@@ -658,15 +669,22 @@ async def _drive(db: Session, job: GenerationJob) -> None:
         # 原片与下载入口保留（不篡改媒体、不慢放冒充），但绝不标成功、不计入合格成功数。
         job.stage = "completed"
         job.finished_at = _now()
-        job.status = "succeeded" if verdict["ok"] else "needs_attention"
-        if verdict["ok"]:
+        job.status = "succeeded" if (verdict["ok"] and not spec_hard_fail) else "needs_attention"
+        if verdict["ok"] and not spec_hard_fail:
             job.error_code = job.error_stage = job.error_message = job.error_action = ""
-        else:
+        elif not verdict["ok"]:
             job.error_code = "DURATION_MISMATCH"
             job.error_stage = "validating"
             job.error_message = verdict["note"]
             job.error_action = ("原片已保留可预览下载；如需达标成片，点「重新生成」（会产生新费用）——"
                                 "或在「大模型配置」确认视频模型支持所选时长后重试。")
+        else:
+            # 时长达标，但不符合该平台官方规格（如低于 Moloco 6s 下限）
+            job.error_code = "SPEC_MISMATCH"
+            job.error_stage = "validating"
+            job.error_message = spec_check.get("note") or "成片不符合平台官方规格"
+            job.error_action = ("原片已保留可预览下载；请按平台规格调整时长/比例后"
+                                "点「重新生成」（会产生新费用）。")
         job.result_json = {
             "media": media,
             "assets": [{"asset_id": asset.asset_id, "url": f"/files/{asset.file}",
@@ -679,7 +697,9 @@ async def _drive(db: Session, job: GenerationJob) -> None:
             "measured_duration": verdict["actual"],
             "delivery_status": verdict["delivery_status"],
             "duration_tolerance_sec": DURATION_TOLERANCE_SEC,
-            "note": verdict["note"],
+            "spec_check": spec_check,
+            "spec_ref": spec_ref,
+            "note": (verdict["note"] + (" " + spec_check["note"] if spec_check.get("note") else "")).strip(),
         }
         job.evidence_json = saved.get("evidence") or evidence
         job.updated_at = _now()
