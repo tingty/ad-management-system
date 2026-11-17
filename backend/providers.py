@@ -1030,9 +1030,16 @@ class ModelVideo(VideoProvider):
         out_aspect = forced or meta.get("aspect", "9:16")
         if forced:
             meta["aspect"] = forced
+        # V4.85：X-DashScope-Async 只在「提交」时必需（触发异步任务），查询任务接口
+        # （GET /api/v1/tasks/{id}）不应携带该头，部分网关会因此返回 400/403。
+        # 冻结一份与提交头分离的「轮询头」，worker 重启续查复用同一份，不读实时配置。
+        submit_headers = self._headers()
+        poll_headers = {k: v for k, v in submit_headers.items()
+                        if k.lower() != "x-dashscope-async"}
         return {
             "family": family, "endpoint": endpoint, "out_aspect": out_aspect, "meta": meta,
-            "body": self._body(prompt, meta), "headers": self._headers(),
+            "body": self._body(prompt, meta), "headers": submit_headers,
+            "poll_headers": poll_headers,
             "poll_timeout": float(self.params.get("poll_timeout_sec") or 360),
             "poll_interval": max(0.2, float(self.params.get("poll_interval_sec") or 3)),
             "max_failures": max(1, int(self.params.get("poll_max_failures") or 6)),
@@ -1099,10 +1106,17 @@ class ModelVideo(VideoProvider):
         ev.setdefault("polls", [])
         n = len(ev.get("polls") or []) + 1
         obj, poll_http, poll_url, last_reason = None, 0, "", ""
+        # V4.85：查询任务只带「轮询头」，绝不携带提交用的 X-DashScope-Async。
+        # 兼容 worker 重启后读到的旧任务快照（冻结时还没有 poll_headers 字段）：
+        # 这里再做一次防御性剔除，保证任何来源的查询都不带异步头。
+        poll_headers = request.get("poll_headers")
+        if not poll_headers:
+            poll_headers = {k: v for k, v in (request.get("headers") or {}).items()
+                            if k.lower() != "x-dashscope-async"}
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=15.0, read=60.0)) as c:
             for u in self._poll_urls(task_id, request["endpoint"]):
                 try:
-                    q = await c.get(u, headers=request["headers"])
+                    q = await c.get(u, headers=poll_headers)
                 except Exception as e:
                     last_reason = f"查询请求异常：{type(e).__name__}"
                     continue

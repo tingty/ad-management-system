@@ -2795,6 +2795,36 @@
 - 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
 - 补充：出片模型徽标只在「诊断成功」或「接口已回传视频模型」时展示；诊断请求失败（未授权 / 网络异常）不再显示「未配置（回退分镜）」，避免误报。
 
+## V4.85 视频任务轮询不再带异步头——提交请求头与查询请求头彻底分离
+
+**发布日期**：2026-11-17 11:40
+**变更类型**：修复 / 新增
+**涉及模块**：素材创作平台 / 创意工作台（视频生成与任务拉取）、大模型配置 / 视频供应商协议层（ModelVideo）、创作任务后台 worker、发版流程、系统版本
+**变更摘要**：修复「提交视频生成后，拉取任务（轮询）时不需要请求头 `X-DashScope-Async`」的问题。此前 `ModelVideo.poll_job()` 直接复用提交时的 `request["headers"]`，而提交头由 `_headers()` 生成并含 `X-DashScope-Async: enable`——该头仅百炼 MaaS「提交」阶段必需（用于触发异步任务），查询任务接口（GET `{base_url}/api/v1/tasks/{task_id}`）携带它会被部分网关判为 400/403，导致长轮询拿不到任务状态。本次把「提交头」与「轮询头」在请求冻结时分叉：提交照旧带异步头，查询头剔除该头；并对 worker 重启后读到的旧任务快照做防御性剔除，保证任何来源的续查都不带异步头。提交行为与异步头的配置开关（`async_header`）完全不变，仅影响查询阶段。
+**更新要点**
+- `plan_request()` 冻结请求形态时，从提交头派生一份 `poll_headers`（去掉 `X-DashScope-Async`），与 `headers` 一并写入冻结请求；两份字典相互独立。
+- `poll_job()` 改用 `poll_headers` 发起 GET；若任务快照缺该字段（worker 重启读旧任务），从 `headers` 现场剔除异步头兜底，不留兼容缺口。
+- 提交链路 `submit_job()` 仍用 `headers`（含异步头），`async_header` 开关语义（true/1/yes 才附加）保持不变。
+- `KlingVideo` 与连通测试 `_test_generic_video` 不受影响：前者 `_headers()` 从不含该头，后者只提交、不轮询。
+**本次优化与更改的功能 / 模块**
+- 【修复】`providers.py` / `ModelVideo.plan_request()`：冻结请求新增 `poll_headers`（无异步头），提交头保持原样。
+- 【修复】`providers.py` / `ModelVideo.poll_job()`：GET 查询改用轮询头，并对旧快照防御性剔除 `X-DashScope-Async`。
+- 【新增】专项验收 `scripts/check_poll_header_v485.py` 9/9（提交含头 / 轮询无头 / 旧快照兜底 / 开关未开时两处都无头）。
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.85。
+**影响范围**
+- 后端：仅 `providers.py` 的 `ModelVideo`（dashscope_maas 与 generic 两族）请求冻结与轮询两处；不改 `submit_job`、`generate`、`_body`、`_headers` 的既有行为。
+- 任务数据：`plan_request` 返回的冻结请求新增可选字段 `poll_headers`；旧任务快照无此字段时由 `poll_job` 现场剔除兜底，无需迁移、不影响读取。
+- 前端：无改动，无需改界面或按钮。
+- 行为变化（重要）：只在视频任务「查询阶段」少带一个请求头；提交、鉴权、成片下载、时长与规格交付门、任务状态机全部不变。
+- 纪律边界：本修复针对确定性的请求头语义错误（异步头只用于提交），不引入新配置、不改变厂商协议契约。
+**验证**
+- 专项验收：`python3 scripts/check_poll_header_v485.py` **9/9 通过**（C1 冻结头分离、C2 真实 POST 含头、C3 真实 GET 无头且拿到 SUCCEEDED、C4 旧快照兜底、C5 开关未开两处都无头）。
+- 回归未退化：`check_video_pipeline_p0.py` 19/19、`check_video_p0_api.py` 8/8、`check_video_p1.py` 14/14、`check_creative_tasks.py` 23/23、`check_video_claims.py` 16/16、`check_video_v483.py` 14/14、`check_media_spec_library.py` 31/31；`tests/run_all.py` **185 项，失败 0 / 错误 0 / 跳过 2**。
+- 质量：`python3 -m py_compile backend/providers.py` 通过；后端全量回归实际执行通过。
+- 界面约束：无前端改动，界面布局、按钮、一级/二级导航均不变。
+- 四种状态：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌；本轮未发起付费出片。
+- 待确认：真实百炼环境下查询接口对该头的容忍度因 Key/网关而异，本修复按「查询不该带异步头」的确定性语义收紧；如需在白名单部署机补真实付费出片证据，运行 `python3 scripts/verify_real_video_once.py --yes`。
+
 ## V4.84 媒体素材规格标准库——展示与生成共用一份官方核验规则，新增「素材标准库」二级菜单
 
 **发布日期**：2026-11-17 11:15
