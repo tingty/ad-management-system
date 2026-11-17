@@ -296,7 +296,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
             )}
             <AspectChip aspect={state.outputAspect} />
           </div>
-          <span className="vs-sub">基于网站分析 + 媒体平台规则，逐镜规划视频分镜</span>
+          <span className="vs-sub">基于网站分析 + 媒体平台规则，逐镜规划视频分镜；字幕稿 / CTA 仅用于策划与旁白，不绘制进画面</span>
         </div>
 
         <div className="vs-options">
@@ -390,7 +390,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
                     <span className="vs-shot-kind">{s.shot}</span>
                   </div>
                   <div className="vs-shot-visual">{s.visual}</div>
-                  {s.text && <div className="vs-shot-line"><b>字幕</b> {s.text}</div>}
+                  {s.text && <div className="vs-shot-line"><b>字幕稿</b> {s.text}</div>}
                   {s.vo && <div className="vs-shot-line"><b>VO</b> {s.vo}</div>}
                   {s.camera && <div className="vs-shot-line"><b>运镜</b> {s.camera}</div>}
                   {s.motion && <div className="vs-shot-line"><b>运动</b> {s.motion}</div>}

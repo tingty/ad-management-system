@@ -933,7 +933,7 @@ export default function CreativeWorkbench() {
                       <option value="text_button">图片+文字+按钮</option>
                     </select>
                   </div>
-                  <span className="cwb-field-hint">默认「纯图片」：生成素材不含文字 / 按钮 / logo</span>
+                  <span className="cwb-field-hint">{overlayMode === 'pure' ? '纯图片：无字、无按钮、无 Logo，满版真实场景且无预留空白' : overlayMode === 'text' ? '图片+文字：保留文案区并叠加文字' : '图片+文字+按钮：保留文案区并叠加文字与按钮'}</span>
                 </div>
               </div>
               {/* 参考图（upload / URL） */}
@@ -967,9 +967,9 @@ export default function CreativeWorkbench() {
                 {brandLogo && (
                   <div className="cwb-brand-logo-preview">
                     <img src={api.mediaFileDownloadUrl(brandLogo)} alt={brandLogoName} title={brandLogoName} />
-                    <label className="cwb-inject-toggle" title="勾选后将品牌 Logo 融入图片 / 视频素材">
+                    <label className="cwb-inject-toggle" title="图片叠加模式会合成 Logo；视频仅作品牌主体参考，不叠加 Logo 图层">
                       <input type="checkbox" checked={injectLogo} onChange={e => setInjectLogo(e.target.checked)} />
-                      <span>注入生成链路（将 Logo 融入图片/视频素材）</span>
+                      <span>注入生成链路（图片叠加模式合成 Logo；视频仅作品牌主体参考）</span>
                     </label>
                   </div>
                 )}
