@@ -2464,10 +2464,14 @@ def _client_ip(request: Request) -> Optional[str]:
 
 
 def _log_login(db: Session, username: Optional[str], request: Request,
-               success: bool = True, detail: dict = None):
-    """V4.47：记录一次登录尝试（成功与失败均记录）。异常不阻断登录主流程。"""
+               success: bool = True, detail: dict = None, action: str = "login"):
+    """V4.47 / V4.86：记录一次账号事件（login 登录 / logout 登出，成功与失败均记录）。
+
+    异常不阻断登录 / 登出主流程；username / ip / created_at 三要素一律落库。
+    """
     try:
         db.add(LoginLog(username=username, ip=_client_ip(request),
+                        action=action or "login",
                         user_agent=request.headers.get("user-agent"),
                         success=success, detail=detail))
         db.commit()
@@ -2483,8 +2487,22 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
                    detail={"reason": "invalid_credentials" if (u and u.active) else "no_user_or_inactive",
                            "attempt": req.email})
         raise HTTPException(401, "邮箱或密码错误")
-    _log_login(db, u.username, request, success=True)
+    _log_login(db, u.username, request, success=True, action="login")
     return create_token(u)
+
+
+@router.post("/auth/logout")
+def logout(request: Request, db: Session = Depends(get_db),
+           user: User = Depends(current_user)):
+    """V4.86：登出记录。前端清除本地 token 前调用，落库 username / IP / 时间。
+
+    这是「会话终止」的事件记录；JWT 本身无服务端状态，无法强制失效，
+    但审计上必须能追溯谁在何时从何 IP 退出。写库失败不阻断前端登出（异常已被 _log_login 吞掉）。
+    """
+    _log_login(db, user.username, request, success=True, action="logout",
+               detail={"event": "logout"})
+    return {"ok": True}
+
 
 @router.get("/auth/me")
 def whoami(user: User = Depends(current_user)):
@@ -2576,17 +2594,50 @@ def audit_logs(limit: int = 50, db: Session = Depends(get_db),
 
 @router.get("/login-logs")
 def login_logs(limit: int = 100, success: Optional[bool] = None,
+               action: Optional[str] = None,
                db: Session = Depends(get_db),
                _: User = Depends(require_roles("admin"))):
-    """V4.47：账号登录日志（admin 可见）。可选 success 过滤（true=成功 / false=失败）。"""
+    """V4.47 / V4.86：账号事件日志（登录 + 登出，admin 可见）。
+
+    可选过滤：success（true=成功 / false=失败）、action（login / logout）。
+    """
     limit = min(max(int(limit), 1), 2000)
     q = db.query(LoginLog)
     if success is not None:
         q = q.filter_by(success=success)
+    if action and str(action).strip().lower() in ("login", "logout"):
+        q = q.filter_by(action=str(action).strip().lower())
     rows = q.order_by(LoginLog.id.desc()).limit(limit).all()
     return [{"id": r.id, "username": r.username, "ip": r.ip,
+             "action": r.action or "login",
              "user_agent": r.user_agent, "success": bool(r.success),
              "detail": r.detail, "created_at": r.created_at} for r in rows]
+
+
+@router.get("/log-stats")
+def log_stats(db: Session = Depends(get_db),
+              _: User = Depends(require_roles("admin"))):
+    """V4.86：日志真实统计（admin 可见），与列表的 limit / 前端搜索无关。
+
+    返回全表口径的条数，供「日志」页标题显示准确总数；不再用「已加载且被过滤的条数」
+    冒充总数（此前搜索或切换 limit 会让标题的 N 条随意变化）。
+    """
+    from sqlalchemy import func
+    login_q = db.query(LoginLog)
+    total = login_q.count()
+    success = login_q.filter(LoginLog.success.is_(True)).count()
+    fail = login_q.filter(LoginLog.success.is_(False)).count()
+    # 兼容旧库：action 为 NULL 的历史记录按 login 计入（迁移默认 'login'）。
+    logout = login_q.filter(LoginLog.action == "logout").count()
+    login = total - logout
+    return {
+        "audit_total": db.query(AuditLog).count(),
+        "login_total": total,
+        "login_success": success,
+        "login_fail": fail,
+        "login_count": login,
+        "logout_count": logout,
+    }
 
 
 @router.post("/creation-recommendation")

@@ -831,10 +831,20 @@ export interface LoginLog {
   id: number
   username: string | null
   ip: string | null
+  action?: 'login' | 'logout'   // V4.86：登录 / 登出（旧数据缺省视为 login）
   user_agent: string | null
   success: boolean
   detail: any | null
   created_at: string
+}
+
+export interface LogStats {
+  audit_total: number
+  login_total: number
+  login_success: number
+  login_fail: number
+  login_count: number   // 登录事件数（含成功/失败）
+  logout_count: number  // 登出事件数
 }
 
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -939,8 +949,12 @@ export const api = {
     req<User>(`/api/users/${id}`, { method: 'PUT', body: JSON.stringify(u) }),
   deactivateUser: (id: number) => req<any>(`/api/users/${id}`, { method: 'DELETE' }),
   auditLogs: (limit = 100) => req<any[]>(`/api/audit-logs?limit=${limit}`),
-  loginLogs: (limit = 100, success?: boolean) =>
-    req<LoginLog[]>(`/api/login-logs?limit=${limit}${success === undefined ? '' : `&success=${success}`}`),
+  loginLogs: (limit = 100, success?: boolean, action?: 'login' | 'logout') =>
+    req<LoginLog[]>(`/api/login-logs?limit=${limit}${success === undefined ? '' : `&success=${success}`}${action ? `&action=${action}` : ''}`),
+  // V4.86：全表真实统计，与列表 limit / 前端搜索无关
+  logStats: () => req<LogStats>('/api/log-stats'),
+  // V4.86：登出记录（失败不阻断本地登出，由调用方 catch）
+  logout: () => req<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   landingAnalysis: (payload: { url?: string; text?: string }) =>
     req<LandingAnalysis>('/api/landing-analysis', { method: 'POST', body: JSON.stringify(payload) }),
   // 素材创作：营销推广的媒体平台设置 —— 平台规格目录

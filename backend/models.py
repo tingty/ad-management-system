@@ -202,11 +202,14 @@ class LoginLog(Base):
     """V4.47：账号登录日志（成功与失败均记录），用于安全追溯与合规审计。
 
     字段与需求一一对应：username=登陆账号名称，ip=登陆 IP 地址，created_at=登陆时间。
+    V4.86：action 区分 login（登录，成功/失败均记）与 logout（登出）；两类都记录 IP 与时间。
+    旧库由 migrations.ensure_schema 自动补列，默认 'login'，历史数据语义不变。
     """
     __tablename__ = "login_logs"
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(64), nullable=True, index=True)   # 登陆账号名称（成功为系统内 username；失败为尝试输入的邮箱/用户名）
     ip = Column(String(64), nullable=True, index=True)          # 登陆来源 IP 地址
+    action = Column(String(16), default="login", index=True)    # V4.86：login / logout
     user_agent = Column(String(512), nullable=True)
     success = Column(Boolean, default=True, index=True)
     detail = Column(JSON, nullable=True)                        # 失败原因 / 备注

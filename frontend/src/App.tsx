@@ -197,6 +197,9 @@ export default function App() {
   }
 
   const logout = () => {
+    // V4.86：先发起服务端登出记录（此刻 token 仍在，后端可解析出当前用户与 IP/时间）。
+    // 不等待结果、失败也照常本地退出——审计记录写入失败不应卡住或阻断用户退出。
+    try { void api.logout().catch(() => {}) } catch { /* ignore */ }
     clearToken()
     setUser(null)
     setTab('workbench')
