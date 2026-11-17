@@ -370,11 +370,37 @@ def extract_logo(html: str, base_url: str = "", final_url: str = "") -> str:
     return extract_logo_checked(html, base_url, final_url)["url"]
 
 
+# V4.87：抓取健壮性上限——防止「大文件链接 / 二进制直链」把单次分析拖到网关超时（502/504）
+# 或把整个 uvicorn worker 的内存吃满导致进程重启（nginx 随即 502）。
+MAX_FETCH_BYTES = 8 * 1024 * 1024          # 单页最多读 8MB，超出的正文不送模型（落地页正文通常 <1MB）
+MAX_REDIRECTS = 5                          # 显式限制跳转链，避免跳转环绕圈
+_FETCH_TIMEOUT = httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0)
+# 只接受「文本型」落地页；图片 / PDF / 视频 / 压缩包不是落地页，r.text 会把二进制解成巨型乱码 → OOM
+_TEXTUAL_CONTENT = ("text/html", "application/xhtml+xml", "text/plain", "application/json", "text/xml", "application/xml")
+_ALLOWED_SCHEMES = ("http", "https")
+
+
+def _parse_fetched_html(html: str, final_url: str) -> dict:
+    """同步的页面解析（正则 / unescape / 元信息），在线程里执行，不阻塞事件循环。"""
+    meta = parse_page_meta(html, final_url)
+    cleaned = re.sub(r"(?is)<(script|style|noscript|svg)[^>]*>.*?</\1>", " ", html)
+    cleaned = re.sub(r"(?is)<br\s*/?>|</(p|div|li|h[1-6]|section|header|footer|td)>", "\n", cleaned)
+    text = re.sub(r"(?s)<[^>]+>", " ", cleaned)
+    text = html_lib.unescape(text)
+    lines = [re.sub(r"\s+", " ", l).strip() for l in text.splitlines()]
+    body = "\n".join([l for l in lines if l])
+    return {**meta, "text": body, "chars": len(body),
+            "fetch_quality": "ok" if len(body) >= 200 else "thin_content"}
+
+
 async def fetch_page(url: str) -> dict:
-    """抓一次落地页，返回正文 + 页面结构 + 抓取环境（V4.39 / F02）。
+    """抓一次落地页，返回正文 + 页面结构 + 抓取环境（V4.39 / F02，V4.87 健壮化）。
 
     分别保存 input_url / final_url / redirect_chain / status / content_type / fetch_quality，
     所有相对链接解析都以最终地址为准。抓取失败不抛异常，交由上层明确写"没抓到"。
+
+    V4.87：加响应体上限（8MB）+ 文本型 content-type 白名单 + 分层超时 + 流式读取，
+    并把 CPU 密集的解析放进线程，避免异常链接拖垮 worker 引发网关 502。
     """
     empty = {"text": "", "chars": 0, "status": 0, "fetched": False,
              "title": "", "description": "", "lang": "", "h1": [], "h2": [],
@@ -384,39 +410,58 @@ async def fetch_page(url: str) -> dict:
              "og_site_name": "", "jsonld_brand": "", "canonical_url": "", "html": ""}
     if not url:
         return empty
+    try:
+        scheme = (urlparse(url).scheme or "").lower()
+    except Exception:
+        scheme = ""
+    if scheme not in _ALLOWED_SCHEMES:
+        return {**empty, "fetch_quality": "unsupported_scheme"}
+
     html, status = "", 0
     final_url, redirects, content_type = url, [], ""
+    too_large = False
     for attempt in range(2):          # 网关偶发 502，重试一次比直接失败更划算
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True,
+            async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT, follow_redirects=True,
+                                         max_redirects=MAX_REDIRECTS,
                                          headers={"User-Agent": "Mozilla/5.0 (compatible; AdFactory/3.2)"}) as cli:
-                r = await cli.get(url)
-                status = r.status_code
-                final_url = str(r.url) or url
-                redirects = [str(x.url) for x in (r.history or [])]
-                content_type = r.headers.get("content-type") or ""
-                if r.status_code < 400:
-                    html = r.text
+                async with cli.stream("GET", url) as r:
+                    status = r.status_code
+                    final_url = str(r.url) or url
+                    redirects = [str(x.url) for x in (r.history or [])]
+                    content_type = (r.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+                    if r.status_code >= 400:
+                        print("[fetch] http", r.status_code, url)
+                        continue
+                    # 二进制直链不当落地页解析：避免 r.text 解码成巨型乱码吃满内存
+                    if content_type and not any(t in content_type for t in _TEXTUAL_CONTENT):
+                        return {**empty, "status": status, "final_url": final_url,
+                                "input_url": url, "redirect_chain": redirects,
+                                "content_type": content_type, "fetch_quality": "unsupported_content_type"}
+                    # 流式读取，超出上限即停止（不把整页读进内存）
+                    buf = bytearray()
+                    async for chunk in r.aiter_bytes():
+                        buf.extend(chunk)
+                        if len(buf) >= MAX_FETCH_BYTES:
+                            too_large = True
+                            break
+                    html = buf.decode(r.encoding or "utf-8", errors="replace")
                     break
-                print("[fetch] http", r.status_code, url)
+        except httpx.HTTPError as e:
+            print("[fetch] http error:", url, str(e)[:120])
         except Exception as e:
-            print("[fetch] failed:", url, str(e)[:120])
+            print("[fetch] failed:", url, type(e).__name__, str(e)[:120])
         await asyncio.sleep(0.8)
+
     env = {"status": status, "final_url": final_url, "input_url": url,
            "redirect_chain": redirects, "content_type": content_type}
     if not html:
-        return {**empty, **env, "fetch_quality": "fetch_failed"}
-
-    meta = parse_page_meta(html, final_url)
-    cleaned = re.sub(r"(?is)<(script|style|noscript|svg)[^>]*>.*?</\1>", " ", html)
-    cleaned = re.sub(r"(?is)<br\s*/?>|</(p|div|li|h[1-6]|section|header|footer|td)>", "\n", cleaned)
-    text = re.sub(r"(?s)<[^>]+>", " ", cleaned)
-    text = html_lib.unescape(text)
-    lines = [re.sub(r"\s+", " ", l).strip() for l in text.splitlines()]
-    body = "\n".join([l for l in lines if l])
-    return {**empty, **meta, **env, "text": body, "chars": len(body),
-            "fetched": True, "html": html,
-            "fetch_quality": "ok" if len(body) >= 200 else "thin_content"}
+        quality = "too_large" if too_large else "fetch_failed"
+        return {**empty, **env, "fetch_quality": quality}
+    # CPU 密集解析移出事件循环：大 HTML 的正则清洗不再卡住整个 worker
+    parsed = await asyncio.to_thread(_parse_fetched_html, html[:MAX_FETCH_BYTES], final_url)
+    return {**empty, **parsed, **env, "fetched": True, "html": html[:MAX_FETCH_BYTES],
+            "fetch_quality": "too_large" if too_large else parsed["fetch_quality"]}
 
 
 async def fetch_page_text(url: str) -> str:

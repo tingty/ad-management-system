@@ -866,6 +866,20 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   }
   if (!res.ok) {
     const t = await res.text().catch(() => '')
+    // V4.87：网关（nginx / Cloudflare）错误页是 HTML，不是后端 JSON。
+    // 旧实现把整段 HTML（含 padding 注释）塞进 message，用户看到一大坨乱码。
+    // 这里识别并转成可诊断的中文提示，同时保留状态码便于排查。
+    const isHtmlError = /<html[\s>]/i.test(t.slice(0, 300)) || /<title>[^<]*(502|503|504|bad gateway|gateway timeout)/i.test(t.slice(0, 500))
+    if (isHtmlError) {
+      const code = res.status
+      const byGateway = /nginx|cloudflare|bad gateway|gateway timeout/i.test(t.slice(0, 1000))
+      const hint = code === 502 || code === 503
+        ? '网关无法连接后端服务，通常是服务正在重启或负载过高，请稍后重试'
+        : code === 504
+          ? '网关等待后端响应超时，请稍后重试；若持续出现请联系管理员检查部署代理超时配置'
+          : '网关返回异常，请稍后重试'
+      throw new Error(`服务暂时不可用（${code}${byGateway ? ' · 网关' : ''}）：${hint}`)
+    }
     let detail = t
     try {
       const d = JSON.parse(t).detail

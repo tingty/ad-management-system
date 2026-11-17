@@ -12,6 +12,7 @@ evidence_contract / claim_contract），但把「降噪耳机演示数据」隔�
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List
 
 from services import fetch_page, build_evidence_pack
@@ -74,7 +75,11 @@ async def fetch_product(url: str) -> Dict[str, Any]:
     page = await fetch_page(url)
     fetched = bool(page.get("fetched"))
     quality = page.get("fetch_quality") or "not_fetched"
-    if not fetched or quality == "fetch_failed":
+    # V4.87：只有正常抓取（ok / thin_content）才送模型；
+    # too_large / unsupported_content_type / unsupported_scheme / fetch_failed 一律阻断，
+    # 避免半截内容或错误内容被当成产品事实（也避免大正文继续吃 CPU）。
+    acceptable = quality in ("ok", "thin_content")
+    if not fetched or not acceptable:
         return {
             "ok": False,
             "page": page,
@@ -92,7 +97,9 @@ async def fetch_product(url: str) -> Dict[str, Any]:
             "error": "fetch_failed",
         }
 
-    pack = build_evidence_pack(page, page.get("text") or "")
+    # V4.87：证据包构造（分区 / 预算采样 / 索引）是 CPU 密集操作，放线程执行，
+    # 避免大正文阻塞事件循环导致整个 worker 无响应（nginx 502）。
+    pack = await asyncio.to_thread(build_evidence_pack, page, page.get("text") or "")
     return {
         "ok": True,
         "page": page,
@@ -119,6 +126,11 @@ def evidence_prompt_part(url: str, page: Dict[str, Any], pack: Dict[str, Any]) -
     """
     from services import build_landing_prompt
     return build_landing_prompt(url, page.get("text") or "", page, evidence_pack=pack)
+
+
+async def evidence_prompt_part_async(url: str, page: Dict[str, Any], pack: Dict[str, Any]) -> str:
+    """V4.87：evidence_prompt_part 的线程版，避免提示词拼装阻塞事件循环。"""
+    return await asyncio.to_thread(evidence_prompt_part, url, page, pack)
 
 
 def is_demo_request(req_payload: Dict[str, Any]) -> bool:

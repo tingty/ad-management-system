@@ -2795,6 +2795,42 @@
 - 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
 - 补充：出片模型徽标只在「诊断成功」或「接口已回传视频模型」时展示；诊断请求失败（未授权 / 网络异常）不再显示「未配置（回退分镜）」，避免误报。
 
+## V4.87 落地页分析 502 修复——抓取加约束不拖垮服务，网关错误页转成可读提示
+
+**发布日期**：2026-11-17 14:20
+**变更类型**：修复 / 新增 / 优化
+**涉及模块**：素材创作平台 / 创意工作台（落地页分析）、后端抓取与证据链、前端 API 错误处理（系统设置相关接口共用层）、部署文档（DEPLOY.md）、发版流程、系统版本
+**变更摘要**：修复「创意工作台分析网址落地页报 502 Bad Gateway」的问题。经排查，502 是宿主 nginx（`nginx/1.31.5`，非容器内 `nginx:alpine`）返回，说明网关没能从后端拿到有效响应。根因有两层：一、后端 `fetch_page` 抓取任意网址时 `r.text` 无大小上限、无内容类型判断、解析在事件循环里同步执行——遇到大文件直链或图片/PDF/视频链接会把单 uvicorn worker 的内存吃满或长时间阻塞，进程重启 / 连接被重置后 nginx 就返回 502；二、前端把 nginx 的原始 HTML 错误页（含 padding 注释）整段塞进提示，用户看到一大坨乱码，无法判断原因。本次对抓取加响应体上限（8MB）、文本型 content-type 白名单、分层超时、流式读取、scheme 白名单，并把 CPU 密集的解析 / 证据包构造 / 提示词拼装移出事件循环；前端将网关 HTML 错误页转成按状态码分类的中文诊断提示。同时在 DEPLOY.md 补充 502/504 的分层排查表与宿主反代建议配置。
+**更新要点**
+- `services.fetch_page`：新增 `MAX_FETCH_BYTES=8MB` / `MAX_REDIRECTS=5` / 分层 `httpx.Timeout`（connect 5s、read 12s、write 5s、pool 5s）；流式读取 `aiter_bytes` 超限即停；只接受 `text/html` 等文本型 content-type，图片/PDF/视频等非网页内容直接判 `unsupported_content_type`；新增 `unsupported_scheme`（仅 http/https）。失败原因可按 `fetch_quality` 分类。
+- CPU 密集操作移出事件循环：`parse_page_meta` + 正则清洗 → `asyncio.to_thread(_parse_fetched_html)`；`build_evidence_pack` → `asyncio.to_thread`；`build_landing_prompt` 提示词拼装 → `evidence_prompt_part_async`。大页面解析不再卡住整个 worker。
+- `fetch_product`：只有 `ok` / `thin_content` 两种质量送模型；`too_large` / `unsupported_content_type` / `unsupported_scheme` / `fetch_failed` 一律判失败，交给路由给明确的 422 提示（不再把半截内容或二进制乱码当产品事实）。
+- 路由 `/cw/analyze`：按 `fetch_quality` 给出可操作的中文提示（超 8MB / 非网页内容 / 仅支持 http），不再笼统说"链接不可达"。
+- 前端 `api.ts` / `req()`：识别 nginx / Cloudflare 的 HTML 错误页（`<html>` 或 `<title>` 含 502/503/504），转成「服务暂时不可用（502 · 网关）：网关无法连接后端服务，请稍后重试」这类可读提示；JSON 错误与业务校验错误的处理保持不变。
+- `DEPLOY.md` 新增 6.2 节：502/504 按网关版本与状态码的排查表、宿主 nginx 建议配置（`proxy_read_timeout 180s`、`proxy_buffering off`），并明确容器内 nginx 已设 660s、无需修改，报错页带版本号说明是宿主 nginx 在拦。
+**本次优化与更改的功能 / 模块**
+- 【修复】落地页分析抓取无上限导致的 worker 被拖垮 / OOM → 网关 502：加体大小上限、内容类型白名单、流式读取、分层超时。
+- 【修复】CPU 密集解析阻塞异步事件循环：解析 / 证据包 / 提示词拼装移入线程池。
+- 【优化】网关 HTML 错误页前端可读化，失败原因按状态码分类。
+- 【优化】失败抓取给出分类提示（过大 / 非网页 / scheme 不支持），便于用户自助修正输入。
+- 【新增】`tests/test_fetch_robustness.py` 7/7（正常解析、二进制拒绝、超限截断、跳转、scheme 拦截、fetch_product 阻断、上限合理性）。
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.87。
+**影响范围**
+- 后端：`services.py`（fetch_page 重写 + 线程解析）、`fetchers.py`（线程证据包 + 质量判定 + async 提示词）、`routers.py`（import + await + 422 分类提示）。
+- 前端：`api.ts`（req 的 HTML 错误页识别）；不改页面布局、按钮或导航。
+- 文档：`DEPLOY.md`（6.2 排查节）。
+- 数据：无表结构变更。
+- 行为变化（重要）：抓取正文上限 8MB、单页读超时 12s、仅文本型内容可分析；此前能"分析"的图片/PDF/超大文件链接现在会给明确的失败提示（这些本就不是落地页）。正常落地页（HTML、正文 <8MB）行为不变。
+- 边界：本修复针对后端健壮性与错误可读性；宿主 nginx 的 `proxy_read_timeout` 属部署配置，代码无法修改，需按 DEPLOY.md 6.2 由运维调整——即便如此，V4.87 后分析链路本身已显著缩短（抓取最长约 26s + 推理 90s）。
+- 纪律边界：502 可能与目标网站自身不可用或部署环境资源有关；本轮无法访问用户生产环境日志确认具体一次 502 的根因，修复基于代码级确定性风险与报错页特征推断。
+**验证**
+- 新增测试：`tests/test_fetch_robustness.py` **7/7 通过**；既有 `tests/test_cw.py`（落地页分析主链路）全绿。
+- 回归未退化：`tests/run_all.py` **199 项，失败 0 / 错误 0 / 跳过 2**（原 192 + 新增 7）。
+- 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
+- 冒烟：`file://` scheme 被拦、不可达地址正确分类为 `fetch_failed`，均不抛异常到路由层。
+- 四种状态：代码已实现 ✅、模拟测试通过 ✅、真实生产环境 502 复现验证 ❌、真实付费出片 ❌；本轮无可访问的生产日志，未在用户部署机上复现确认。
+- 待确认：若用户生产机在 V4.87 后仍对正常落地页报 502，请按 `docker compose logs --tail=200 backend` 查是否有 OOM / 异常堆栈，并按 DEPLOY.md 6.2 调整宿主反代；前端提示会显示具体状态码便于判断。
+
 ## V4.86 日志模块补齐登出记录与真实统计——登录/登出均有账号、IP、时间，标题不再随搜索乱跳
 
 **发布日期**：2026-11-17 12:00

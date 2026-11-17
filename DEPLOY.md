@@ -129,6 +129,37 @@ location /api/ {
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
+### 6.2 落地页分析报 502 / 504 的排查
+
+「创意工作台 → 分析网址」是一次同步长请求：`POST /api/cw/analyze` =
+服务端抓取目标网页（V4.87 起限 8MB / 12s 读超时 / 仅文本型内容）+ 大模型推理（最长约 90s）。
+两段相加可能超过宿主反代的默认 60s，因此报错要看**网关版本与状态码**：
+
+| 报错页 | 含义 | 处理 |
+|---|---|---|
+| `nginx/x.y.z` + **504** | 宿主反代等待后端超时（最常见） | 放宽宿主 `proxy_read_timeout`（见下方配置） |
+| `nginx/x.y.z` + **502** | 网关连不上 / 上游连接被重置：后端正在重启、OOM，或分析大页面把单 worker 拖垮 | 查 `docker compose logs --tail=200 backend`；V4.87 已对大文件/二进制链接做抓取层拦截，若仍复现请升高宿主内存 |
+| `cloudflare` + 100s | Cloudflare 隧道硬上限 | 走内网直连排查，或升级套餐 |
+
+前端已把网关的 HTML 错误页转成中文提示（V4.87），不再展示整段 `<html>` padding。
+
+**宿主反代建议配置**（分析 + 同步出片共用一个宽松窗口）：
+
+```nginx
+# /etc/nginx/sites-enabled/<your-site>
+location /api/ {
+    proxy_pass http://127.0.0.1:80;
+    proxy_read_timeout 180s;   # 覆盖落地页分析（抓取+推理）；同步出片用 660s
+    proxy_send_timeout 180s;
+    proxy_buffering off;        # 长响应避免缓冲导致提前断连
+}
+```
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+> 注：容器内 `web` nginx 已设 660s，**无需修改**；报错页若显示具体版本号（如 1.31.5）说明是宿主 nginx 在拦，改容器内配置无效。
+
 ---
 
 ## 7. 配置说明（技术向）

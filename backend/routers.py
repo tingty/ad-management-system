@@ -61,7 +61,7 @@ from creation_history import (
     build_history_zip, cleanup_orphan_files,
 )
 from fetchers import (fetch_product, demo_product, demo_snapshot,
-                      evidence_prompt_part)
+                      evidence_prompt_part, evidence_prompt_part_async)
 
 router = APIRouter(prefix="/api")
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
@@ -616,17 +616,26 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
         fetch = await fetch_product(url)
         if not fetch["ok"]:
             # 抓取失败且无文本：明确阻断，不再静默套用演示数据
+            quality = fetch["page"].get("fetch_quality") or "fetch_failed"
+            # V4.87：按失败类别给可操作提示，避免用户反复试同一个大文件/二进制链接
+            reason_map = {
+                "too_large": "页面内容超过 8MB 上限（可能是文件下载页），已停止抓取以保护服务稳定",
+                "unsupported_content_type": "链接返回的是图片 / PDF / 视频等非网页内容，不是可分析的落地页",
+                "unsupported_scheme": "仅支持 http / https 链接",
+            }
+            errors = [reason_map.get(quality,
+                      "链接不可达或返回空页；请检查网址可达性，或开启「演示模式」，或直接粘贴产品描述文本")]
             raise HTTPException(422, detail={
                 "message": "产品链接抓取失败，已在调用模型前阻断分析（needs_input）",
-                "errors": ["链接不可达或返回空页；请检查网址可达性，或开启「演示模式」，或直接粘贴产品描述文本"],
-                "fetch_quality": fetch["page"].get("fetch_quality") or "fetch_failed",
+                "errors": errors,
+                "fetch_quality": quality,
                 "final_url": fetch["page"].get("final_url") or url,
                 "hint": "系统不会从 URL 猜测产品事实；请补充正文或开启演示模式后重试。",
             })
         page = fetch["page"]
         pack = fetch["pack"]
         snapshot = ProductSnapshot(**fetch["snapshot"])
-        evidence_text = evidence_prompt_part(url, page, pack)
+        evidence_text = await evidence_prompt_part_async(url, page, pack)
         user_prompt = (
             json.dumps({"url": url, "platforms": platforms}, ensure_ascii=False)
             + "\n\n" + evidence_text
