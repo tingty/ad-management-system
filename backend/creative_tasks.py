@@ -20,7 +20,7 @@ import asyncio
 import os
 import uuid
 from typing import Optional
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -377,6 +377,10 @@ def retry(db: Session, user, batch_id: str, job_id: str, action: str) -> dict:
             raise ValueError("该任务没有供应商任务号，无法续查；请重新生成")
         job.status, job.stage = "queued", "provider_pending"
         job.next_poll_at, job.lease_until = _now(), None
+        # 记录重查起点：_drive 的业务期限（waited > deadline）从 repoll 时刻重新起算，
+        # 否则历史遗留任务会因 created_at 太老而在真正查询前就被误判 POLL_TIMEOUT。
+        job.request_json = dict(job.request_json or {})
+        job.request_json["repoll_at"] = _iso(_now())
         _clear_error(job)
     elif action == "redownload":
         media = (job.result_json or {}).get("media") or {}
@@ -605,7 +609,13 @@ async def _drive(db: Session, job: GenerationJob) -> None:
         # 业务期限：超过后转「待核实」而不是判失败 —— 供应商可能仍在渲染，保留任务号可续查
         deadline_sec = float((getattr(prov, "params", {}) or {}).get("job_deadline_sec")
                              or max(request["poll_timeout"] * 2, 300))
-        waited = (_now() - (_n(job.created_at) or _now())).total_seconds()
+        _repoll_t0 = None
+        try:
+            _rp = (job.request_json or {}).get("repoll_at")
+            _repoll_t0 = datetime.fromisoformat(_rp) if _rp else None
+        except Exception:
+            _repoll_t0 = None
+        waited = (_now() - (_n(_repoll_t0) or _n(job.created_at) or _now())).total_seconds()
         if waited > deadline_sec:
             _fail(db, job, VideoPipelineError(
                 "POLL_TIMEOUT",
