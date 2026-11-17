@@ -47,6 +47,9 @@ from version import ENABLE_AUTO_CREATION_PLAN
 # V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
 from video_claims import (video_evidence_context, audit_video_plan,
                           repair_video_plan, video_asset_gate)
+# V4.90：视频文字 / 文案预检与保守修复（只管文本形态和批准文案，不重复证据门）
+from video_text_guard import (audit_video_text, repair_video_text,
+                              render_video_text_guard_block)
 
 # V4.81 / P2-P3：出片任务持久化（唯一任务事实在库，进程重启不丢）与创作批次列表
 import creative_tasks
@@ -472,7 +475,11 @@ _CW_VIDEO_PLAN_SYS = (
     "定位并保留原有「最多 / 测试条件 / 计费周期 / 适用范围」限定；原文没有就一个字都不要写，"
     "不得用「信息不足时给合理默认」作为编造数值的借口。\n"
     "V4.88 无字策略：text / cta 字段仍按上述 JSON 结构保留，但只用于内部节奏、VO 与策划"
-    "追溯；出片提示词不会把它们绘制到画面，不要把它们设计成上屏字幕或端卡。"
+    "追溯；出片提示词不会把它们绘制到画面，不要把它们设计成上屏字幕或端卡。\n"
+    "V4.90 文字审查：hook / cta / 每镜 text / vo 必须完整、无乱码、无截断、无连续重复标点；"
+    "不要写出画面放不下的长句。若确实需要上屏文字，必须在 plan.approved_texts 中逐字列出，"
+    "并把对应镜头标记 text_effect（或 shot=motion_graphics）；未列入批准清单的文字一律不得上屏。"
+    "效果化文字仍必须保持原文完整、清晰、可辨认。"
 )
 
 
@@ -835,11 +842,25 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
     a0 = (analysis.get("analysis") if isinstance(analysis.get("analysis"), dict) else analysis) or {}
     plan, claim_audit, repaired = repair_video_plan(
         plan, analysis, str(a0.get("product") or analysis.get("title") or ""))
+    # V4.90：文本形态 / 批准文案再过一道预检。修不掉的留在 text_guard 报告里并阻断提交。
+    plan, text_guard, text_repaired = repair_video_text(plan, analysis, req.options or {})
+    if text_repaired:
+        # 文字修复可能改动字幕 / VO 的数字与限定，证据审计必须基于修复后的 plan 重跑。
+        claim_audit = audit_video_plan(plan, analysis)
+        plan["claim_audit"] = claim_audit
+        if claim_audit["status"] == "needs_revision":
+            plan["generation_blocked"] = True
     gate = video_asset_gate(plan, req.reference_image)
     plan["asset_gate"] = gate
     plan["delivery_grade"] = gate["delivery_grade"]
     if repaired:
         extra = f"已移除 {repaired} 处页面原文不支持的数字 / 承诺。"
+        reply = (reply + extra if reply else extra)[:240]
+    if text_repaired:
+        extra = f"已修正 {text_repaired} 处文字截断 / 乱码 / 可读性问题。"
+        reply = (reply + extra if reply else extra)[:240]
+    if text_guard["status"] == "needs_revision":
+        extra = f"文字审查未通过：{text_guard['blocking_count']} 处需修正后才可出片。"
         reply = (reply + extra if reply else extra)[:240]
     if gate["status"] == "asset_missing":
         reply = (reply + " 图生视频缺少参考图，请补充后出片。" if reply
@@ -866,6 +887,7 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
         model_info=_mini_model_info(info), video_model_info=video_info,
         video_model_ready=bool(vcfg), source=info.get("source", "local"),
         claim_status=claim_audit["status"],
+        text_guard_status=text_guard["status"],
         generation_blocked=bool(plan.get("generation_blocked")),
         delivery_grade=gate["delivery_grade"])
 
@@ -1138,6 +1160,11 @@ async def api_cw_video_create_job(req: CWVideoGenerateRequest, db: Session = Dep
         bad = "；".join(str(v.get("reason") or v.get("field") or "")[:80]
                        for v in (built["claim_audit"].get("violations") or [])[:3])
         raise HTTPException(422, "分镜文案未通过证据校验，未提交出片：" + bad)
+    # V4.90：文字形态 / 批准文案未通过时不产生厂商费用，直接拦截。
+    if built["text_guard"]["status"] == "needs_revision":
+        bad = "；".join(str(v.get("reason") or v.get("field") or "")[:80]
+                       for v in (built["text_guard"].get("violations") or [])[:3])
+        raise HTTPException(422, "视频文字未通过预检，未提交出片：" + bad)
     if built["asset_gate"]["status"] == "asset_missing":
         raise HTTPException(422, built["asset_gate"]["note"])
     payload = {
@@ -1244,6 +1271,8 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
     a = (analysis.get("analysis") if isinstance(analysis.get("analysis"), dict) else analysis) or {}
     product = a.get("product") or analysis.get("title") or "Product"
     brief = analysis.get("brief") or {}
+    # V4.90：出片前同样跑文字预检，避免前端绕过规划接口直接提交带问题文字的 plan。
+    plan, text_guard, text_repaired = repair_video_text(plan, analysis, options)
 
     # 解析当前视频配置，确定「实际输出比例」并显式标注：
     # 部分厂商（阿里云百炼 MaaS / wan3.0-video 等）忽略 size、固定输出某一比例；
@@ -1284,7 +1313,9 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
     prompt_contract = build_prompt_contract(
         media_type="video", analysis=analysis, brief=brief,
         profile_key=str(a.get("industry_profile") or ""), plan=plan,
-        placement=placement_spec)
+        placement=placement_spec,
+        text_policy=str(text_guard.get("text_policy") or "none"),
+        approved_texts=list(text_guard.get("approved_texts") or []))
     prompt_parts: list[str] = []
     if spec_ref.get("duration_ok") is False:
         # 官方已核验的规则里，所选时长越界：不静默放行，写入提示交结果区/诊断展示
@@ -1303,6 +1334,7 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         # V4.88：Logo 只作品牌主体一致性参考；无字策略下不绘制图形 Logo / 角标 / 端卡。
         prompt_parts.append(f"品牌参考资产：{req.brand_logo}（仅用于保持品牌主体一致；不叠加图形 Logo、水印或文字端卡）")
     prompt_parts.append(render_video_contract_block(prompt_contract))
+    prompt_parts.append(render_video_text_guard_block(text_guard))
     prompt = "\n".join(prompt_parts)
 
     meta = {
@@ -1318,6 +1350,10 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         # V4.88：提示词契约快照随任务落库，便于追溯每次出片实际使用的无字约束。
         "prompt_contract_id": prompt_contract["prompt_id"],
         "prompt_contract": prompt_contract,
+        # V4.90：文字审查快照随任务落库，批准清单 / 修正记录 / 未通过原因均可追溯。
+        "text_guard": text_guard,
+        "text_policy": text_guard.get("text_policy") or "none",
+        "text_repair_count": text_repaired,
     }
     # 图生视频：把参考图作为 image 带入（Kling / 通用模型据端点决定是否消费）
     if str(plan.get("mode") or options.get("mode") or "") == "image_to_video" and req.reference_image:
@@ -1352,6 +1388,7 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         "meta": meta, "skip_note": skip_note, "forced": forced, "cfg_params": cfg_params,
         "claim_audit": claim_audit, "asset_gate": asset_gate, "spec_ref": spec_ref,
         "prompt_contract": prompt_contract,
+        "text_guard": text_guard, "text_repaired": text_repaired,
         "has_video_cfg": bool(cfg and cfg.api_key and cfg.base_url and cfg.model),
     }
 
@@ -1369,6 +1406,7 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
     skip_note, has_video_cfg = built["skip_note"], built["has_video_cfg"]
     forced, cfg_params = built["forced"], built["cfg_params"]
     claim_audit = built["claim_audit"]
+    text_guard = built["text_guard"]
     asset_gate = built["asset_gate"]
     spec_ref = built["spec_ref"]
     provider = get_video(db) if has_video_cfg else StoryboardVideo()
@@ -1393,6 +1431,19 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
             + " 处缺少原文证据或限定的表述：" + "；".join(
                 str(v.get("reason") or v.get("field") or "")[:80]
                 for v in (claim_audit.get("violations") or [])[:3]),
+            stage="config", evidence=ev)
+        evidence = ev
+        res = await StoryboardVideo().generate(prompt, platform, filename, meta)
+        res["note"] = ""
+    # V4.90：文字预检未通过同样只保留分镜，不调用视频厂商。
+    elif text_guard["status"] == "needs_revision":
+        ev = {"text_guard": text_guard, "claim_audit": claim_audit}
+        err = VideoPipelineError(
+            "TEXT_GUARD_BLOCKED",
+            "分镜文字含 " + str(text_guard.get("blocking_count", 0))
+            + " 处截断 / 乱码 / 不可读 / 未批准文字：" + "；".join(
+                str(v.get("reason") or v.get("field") or "")[:80]
+                for v in (text_guard.get("violations") or [])[:3]),
             stage="config", evidence=ev)
         evidence = ev
         res = await StoryboardVideo().generate(prompt, platform, filename, meta)
@@ -1497,6 +1548,7 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
     storyboard["output_aspect"] = actual_aspect
     storyboard.setdefault("shots", [])
     storyboard["claim_audit"] = claim_audit
+    storyboard["text_guard"] = text_guard
     storyboard["asset_gate"] = asset_gate
     # V4.79：证据落盘（best-effort，绝不因写日志失败影响出片结果）
     if evidence:

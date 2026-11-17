@@ -462,6 +462,8 @@ class CWVideoPlanResult(BaseModel):
     source: str = "local"          # llm / mock / local
     # V4.82：分镜已过证据 / 限定审计；generation_blocked 时提交端会拒绝入队
     claim_status: str = "ok"
+    # V4.90：视频文字 / 文案预检状态；needs_revision 时提交端会拒绝入队
+    text_guard_status: str = "ok"
     generation_blocked: bool = False
     delivery_grade: str = "draft"
 

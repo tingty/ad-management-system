@@ -249,7 +249,8 @@ def _video_contract(plan: dict, analysis: dict) -> dict:
             "transition": _clean(shot.get("motion")),
             "audio": _clean(shot.get("vo")),
             "must_preserve": _evidence_ids(analysis)[:6],
-            "failure_checks": ["no_text", "no_button", "identity_continuity", "actual_duration"],
+            "failure_checks": ["no_text", "no_button", "identity_continuity",
+                               "actual_duration", "text_guard"],
         })
     return {
         "requested_duration": p.get("duration_sec"),
@@ -266,7 +267,8 @@ def build_prompt_contract(*, media_type: str, analysis: dict | None = None,
                           brief: dict | None = None, profile_key: str = "",
                           route: dict | None = None, plan: dict | None = None,
                           placement: dict | None = None,
-                          overlay_mode: str = "pure") -> dict:
+                          overlay_mode: str = "pure", text_policy: str = "none",
+                          approved_texts: list[str] | None = None) -> dict:
     """把现有分析 / 简报 / 版位 / 分镜编译成文档要求的结构化提示词源记录。"""
     media = "video" if _clean(media_type).lower() == "video" else "image"
     a = _unwrap(analysis)
@@ -285,11 +287,20 @@ def build_prompt_contract(*, media_type: str, analysis: dict | None = None,
                           or a.get("coreAudience") or aud["label"])
     composition = _clean(b.get("composition") or "满版真实场景，主体位于实际媒体安全区")
     lighting = _clean(b.get("lighting_material") or "待确认：自然光方向与真实材质，不凭空生成品牌规范")
-    no_text = media == "video" or _clean(overlay_mode) == "pure"
+    video_policy = (
+        "approved_only" if media == "video"
+        and _clean(text_policy).lower() in {"approved", "approved_only", "allowlist",
+                                            "whitelist", "explicit", "visible",
+                                            "on", "true", "yes", "1"}
+        else "none"
+    )
+    no_text = (media == "video" and video_policy == "none") or _clean(overlay_mode) == "pure"
     digest_src = {
         "m": media, "i": ind["id"], "a": aud["id"], "t": ctp["id"],
         "p": product, "v": promise, "f": facts, "e": eids,
         "pl": _placement(placement, analysis), "nt": no_text,
+        "vp": video_policy,
+        "at": [_clean(x) for x in (approved_texts or []) if _clean(x)][:12],
     }
     digest = hashlib.sha256(json.dumps(
         digest_src, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:8]
@@ -321,6 +332,8 @@ def build_prompt_contract(*, media_type: str, analysis: dict | None = None,
         "no_text_policy": no_text,
     }
     if media == "video":
+        contract["video_text_policy"] = video_policy
+        contract["approved_texts"] = [_clean(x) for x in (approved_texts or []) if _clean(x)][:12]
         contract["video"] = _video_contract(plan, analysis)
     return contract
 
@@ -369,17 +382,35 @@ def render_image_contract_block(contract: dict) -> str:
 
 
 def render_video_contract_block(contract: dict) -> str:
-    """视频出片提示词尾部追加块；字幕 / CTA / Logo 字段不再绘制进画面。"""
+    """视频出片提示词尾部追加块。默认无字；仅批准清单可产生受控文字例外。"""
     pl = contract.get("placement") or {}
     spec_line = "；".join(
         f"{k}={pl[k]}" for k in ("platform", "ad_product", "target_aspect", "target_size", "duration", "spec_version", "verification") if pl.get(k)
     ) or "规格未标注（不猜）"
+    approved = [_clean(x) for x in (contract.get("approved_texts") or []) if _clean(x)]
+    if contract.get("video_text_policy") == "approved_only" and approved:
+        text_rule = (
+            "[文字例外 · V4.90]\n"
+            "仅允许以下批准文字逐字出现在画面：" + " | ".join(approved[:12]) + "。\n"
+            "清单外文字、字幕、数字、角标、按钮、水印与假 UI 一律禁止；不得改写、缩略、补字或截断。"
+            "被批准文字可以做动效 / 光效 / 景深处理，但处理后仍须完整、清晰、可辨认。"
+        )
+        field_rule = (
+            "字段纪律：分镜中的普通字幕 / CTA / 品牌 Logo 字段仍不自动绘制；"
+            "只有上面的批准清单是唯一上屏文字来源。"
+        )
+    else:
+        text_rule = GLOBAL_VISUAL_CONTRACT
+        field_rule = (
+            "字段纪律：分镜中的字幕 / CTA / 品牌 Logo 字段只用于内部节奏、VO 与策划追溯，"
+            "不绘制到画面；不生成文字端卡、按钮或伪界面。"
+        )
     return "\n".join([
         _header(contract),
         _compiled_line(contract),
-        GLOBAL_VISUAL_CONTRACT,
+        text_rule,
         VIDEO_MASTER_PURE,
-        "字段纪律：分镜中的字幕 / CTA / 品牌 Logo 字段只用于内部节奏、VO 与策划追溯，不绘制到画面；不生成文字端卡、按钮或伪界面。",
+        field_rule,
         "音频纪律：画外音只能复述已核实事实并保留限定；无 VO 时静音也应能理解主动作；不模仿未授权声音。",
         "规格注入：" + spec_line,
         "负向约束：" + NEGATIVE_PROMPT,
