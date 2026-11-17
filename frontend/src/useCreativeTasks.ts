@@ -32,6 +32,11 @@ export interface CreativeSubtask {
   assets: { asset_id?: string; url: string; caption?: string; kind?: string; size?: string }[]
   duration_sec?: number
   duration_source?: string
+  requested_duration?: number
+  measured_duration?: number
+  delivery_status?: string         // compliant / noncompliant / unverified
+  retry_of?: string                // 重生成链：同一逻辑资产的旧 attempt
+  attempts?: number
   note?: string
   created_at?: string
   finished_at?: string

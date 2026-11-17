@@ -44,7 +44,8 @@ from video_claims import (video_evidence_context, audit_video_plan,
 
 # V4.81 / P2-P3：出片任务持久化（唯一任务事实在库，进程重启不丢）与创作批次列表
 import creative_tasks
-from creative_tasks import create_video_batch, STAGE_LABEL as CREATIVE_STAGE_LABEL
+from creative_tasks import (create_video_batch, STAGE_LABEL as CREATIVE_STAGE_LABEL,
+                            _duration_verdict)
 from job_service import IdempotencyConflict
 from image_capabilities import public_capabilities
 import job_service
@@ -1043,6 +1044,9 @@ def _cw_video_result_of(job) -> CWVideoGenerateResult:
         error_action=job.error_action or "",
         error_task_id=job.provider_task_id or "",
         evidence=ev,
+        requested_duration=res.get("requested_duration") or 0,
+        measured_duration=res.get("measured_duration") or res.get("duration_sec") or 0,
+        delivery_status=res.get("delivery_status") or "",
     )
 
 
@@ -1057,9 +1061,19 @@ def _cw_video_job_out(job) -> CWVideoJobOut:
     started = job.created_at
     end = job.finished_at or job.updated_at or started
     elapsed = int(max(0.0, (end - started).total_seconds())) if (started and end) else 0
+    # V4.83 / C04：终态阶段标签以 status / 错误码为准，不能出现「done 但下载校验中」。
+    if job.status == "succeeded":
+        stage_label = "已完成"
+    elif job.error_code == "DURATION_MISMATCH":
+        stage_label = "时长未达标"
+    elif job.status in ("needs_attention", "failed", "canceled"):
+        stage_label = {"needs_attention": "待核实", "failed": "失败",
+                       "canceled": "已停止"}.get(job.status, job.status)
+    else:
+        stage_label = CREATIVE_STAGE_LABEL.get(job.stage or "") or job.stage or ""
     return CWVideoJobOut(
         job_id=job.job_id, status=status,
-        stage=(CREATIVE_STAGE_LABEL.get(job.stage or "") or job.stage or ""),
+        stage=stage_label,
         elapsed_sec=elapsed,
         error=(job.error_message or "")[:400],
         error_code=job.error_code or "",
@@ -1388,10 +1402,18 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
         forced_note = f"⚠️ 当前视频模型固定输出 {actual_aspect}（{label}），已按实际比例 {actual_aspect} 标注（与所选「{requested_aspect}」不一致）。"
         note = (note + " " + forced_note).strip() if note else forced_note
 
-    # 实测时长与所选时长明显不符时必须明说（否则用户以为拿到了 15s，实际只有 5s）
-    if measured_sec > 0 and abs(measured_sec - duration) >= 1.0:
-        dur_note = (f"⚠️ 实测成片时长 {measured_sec:.1f}s，与所选 {duration}s 不一致（厂商按自身模板输出）。")
-        note = (note + " " + dur_note).strip() if note else dur_note
+    # V4.83 / C05：交付时长门。同步链路与持久任务共用同一判定，不允许「这里警告、那里标成功」。
+    verdict = _duration_verdict({"duration": duration},
+                                {"duration_sec": measured_sec,
+                                 "duration_source": res.get("duration_source") or ""})
+    delivery_status = verdict["delivery_status"] if res.get("file_path") else ""
+    note = (note + " " + verdict["note"]).strip() if (verdict["note"] and res.get("file_path")) else note
+    if delivery_status and not verdict["ok"] and err is None:
+        # 原片保留可下载，但交付结论改为未达标（needs_attention 语义），不计合格成片。
+        err = VideoPipelineError(
+            "DURATION_MISMATCH", verdict["note"], stage="validating",
+            action="原片已保留可预览下载；如需达标成片请点「重新生成」（会产生新费用），"
+                   "或确认视频模型支持所选时长后重试。")
 
     # 始终回传分镜方案（展示 + 可下载 JSON），比例标注为实际输出比例
     storyboard = dict(plan)
@@ -1423,6 +1445,9 @@ async def _cw_video_generate_impl(req: CWVideoGenerateRequest, db: Session, user
         error_action=(err.action if err else ""),
         error_task_id=(err.task_id if err else ""),
         evidence=evidence,
+        requested_duration=verdict["requested"] if res.get("file_path") else 0,
+        measured_duration=verdict["actual"] if res.get("file_path") else 0,
+        delivery_status=delivery_status,
     )
 
 
@@ -1824,11 +1849,30 @@ def get_creation_history(hid: int, db: Session = Depends(get_db),
 
 
 @router.get("/creation-history/{hid}/export.zip")
-def export_one_creation_history(request: Request, hid: int, db: Session = Depends(get_db)):
-    """再下载整条历史：图片 + 广告文案 TXT/JSON + 落地页分析 + 生成信息。"""
+def export_one_creation_history(request: Request, hid: int, batch_id: str = "",
+                                db: Session = Depends(get_db)):
+    """再下载整条历史：图片 + 广告文案 TXT/JSON + 落地页分析 + 生成信息。
+
+    V4.83 / C06：可选 `batch_id` 把该创作批次的视频 / 配套素材并入同一个 ZIP。
+    视频资产以 `concept_id = batch_id` 关联，并按 owner 隔离，避免越权导出他人成片。
+    """
     _download_access(request)
     row = _history_row(db, hid)
-    buf = build_history_zip([row], multi=False)
+    extra: list[dict] = []
+    if batch_id:
+        claims = _download_access(request)
+        owner_id = claims.get("user_id") or claims.get("sub") or claims.get("uid")
+        q = db.query(CreativeAsset).filter(CreativeAsset.concept_id == batch_id)
+        if owner_id:
+            q = q.filter(CreativeAsset.owner_id == owner_id)
+        for a in q.all():
+            meta = a.meta_json if isinstance(a.meta_json, dict) else {}
+            extra.append({"file": a.file or "",
+                          "role": meta.get("kind") or a.size or "asset",
+                          "delivery_status": meta.get("delivery_status") or "compliant",
+                          "note": f"时长 {meta.get('duration_sec') or 0}s（{meta.get('duration_source') or '未探测'}）"
+                                  if meta.get("duration_sec") else ""})
+    buf = build_history_zip([row], multi=False, extra_assets=extra)
     return StreamingResponse(buf, media_type="application/zip",
                              headers={"Content-Disposition":
                                       f'attachment; filename="creation_history_{hid}.zip"'})

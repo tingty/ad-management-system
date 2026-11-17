@@ -2795,6 +2795,48 @@
 - 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
 - 补充：出片模型徽标只在「诊断成功」或「接口已回传视频模型」时展示；诊断请求失败（未授权 / 网络异常）不再显示「未配置（回退分镜）」，避免误报。
 
+## V4.83 状态一致性与交付时长门——同批次始终一份状态，5 秒原片不再冒充 15 秒成片
+
+**发布日期**：2026-11-17 10:55
+**变更类型**：修复 / 优化 / 新增
+**涉及模块**：素材创作平台（创意工作台：视频工作区 / 分镜微调 / 结果回填 / 交付导出）、创作任务与后台 worker、视频模型请求与落盘校验、大模型配置（视频请求时长 / media 输入开关）、任务抽屉与任务浮窗、媒体平台规格目录（差异登记）、发版流程、系统版本
+**变更摘要**：按《创意工作台状态一致性与主流媒体素材规格诊断实施方案》逐条自查 V4.82（提交 `f844395`）后确认 C01–C06 全部仍存在：工作区按 `applyingRef` 只回填一次、详情失败被吞成 null 就清空订阅；分镜生成 / 微调走另一条长轮询链路；多视频只取第一个子任务；服务端已 `succeeded` 却保留 `stage=validating`；dashscope_maas 请求根本没传 `duration`，实测 5.04s 与所选 15s 只写警告仍标成功；历史 ZIP 不含批次视频、刷新丢草稿。本次在不改整体布局与按钮位置的前提下，把工作区与抽屉统一到同一份服务端任务快照，把时长偏差升级为交付判定，并让导出包与刷新恢复覆盖批次内成片。
+**更新要点**
+- 状态单一事实：视频结果按 `batch_id` 持续订阅服务端详情（首次 2.5s、后续 5s），`appliedRef` 只存快照指纹而非「应用过」布尔；失败续查转成功、重试出新 attempt 都会重新回填，详情读取失败只显示「状态暂未同步」并保留追踪
+- 当前执行版本：同一 retry 链按 `retry_of / attempts / created_at` 取当前 attempt，批次内多个目标视频全部展示，不再 `find(kind==='video')` 只取最早一个
+- 入口统一：原 VideoStudio 的「生成」与「微调并重生成」不再各自调用长轮询接口，改为父级 `onSubmitJob` —— 与批量生成共用同一持久任务提交、草稿、批次、幂等键与错误清理；网络重试复用同一幂等键，换分镜或微调才换键
+- 新执行清旧错：提交前清 `videoFail / error / videos / note`，旧红色失败框不会跟到新任务；任务失败时错误与资产均来自本次 job
+- 终态一致：`creative_tasks.py` 在成片校验成功时把 `status=succeeded`、`stage=completed`、`finished_at`、资产与结论放进同一事务；`job_to_task` 与兼容接口在终态按 status 取中文标签，杜绝「已完成 · 下载校验中」
+- 时长真正下发：`ModelVideo._body` 的 dashscope_maas 请求在 `parameters` 中携带 `duration`，图生视频可按 `media_input=true` 切到官方 `input.media`；`send_duration=false` 为不兼容该字段的厂商保留配置出口
+- 交付时长门：新增 `_duration_verdict`，目标值来自冻结任务快照、实测值来自 ffprobe/mvhd；容差默认 ±0.5s（`CW_VIDEO_DURATION_TOLERANCE` 可配）。5.04s/15s → `needs_attention + DURATION_MISMATCH`，原片保留可预览下载并标 `noncompliant`，不计合格成功；探测不到时长标 `unverified`，同样不冒充合格
+- 恢复与导出：`draft_id / batch_id` 写入浏览器会话引用（换账号自动清除），刷新后按 ID 续追；历史导出 ZIP 支持 `batch_id` 参数并入批次视频，`交付清单.json` 标明角色、交付状态与实测时长
+- 展示细节：任务抽屉和工作区视频卡在原有位置显示实测时长 / 目标时长与「未达标 / 时长未验证」文字标记，不新增页面、抽屉、导航或按钮
+**本次优化与更改的功能 / 模块**
+- 【修复】C01 一次性回填与详情失败清空订阅（T01/T02/T07）
+- 【修复】C02 主路径 / 单独生成 / 微调两条链路分裂，提交不清旧失败（T04/T06）
+- 【修复】C03 同批多视频 / 重生成取错 attempt（T05）
+- 【修复】C04 成功但阶段仍显示下载校验中（T08）
+- 【修复】C05 15 秒未下发、5 秒原片标成功（T09/T10）
+- 【修复】C06 导出漏批次视频、刷新丢草稿（T16/T07）
+- 【优化】任务浮窗只在视频批次仍运行时保持 running，不再按「结果页且没视频」猜失败
+- 【优化】视频请求与响应新增 `requested_duration / measured_duration / delivery_status`，兼容旧字段
+- 【优化】导出包新增 `交付清单.json`，不合格原片可追溯但不静默混入可投放成品
+- 【优化】新增专项验收脚本 `scripts/check_video_v483.py` 14/14，并把 P0/P1/P2 假成片升级为带真实 mvhd 的 15s MP4
+- 【优化】系统版本 / 版本更新：系统版本升至 V4.83
+**影响范围**
+- 后端：`providers.py`（请求体时长 / media）、`creative_tasks.py`（交付门 / 原子终态 / 快照字段）、`routers.py`（终态标签 / 同步链路共用交付门 / 批次 ZIP 参数）、`schemas.py`、`creation_history.py`。
+- 前端：`CreativeWorkbench.tsx`（订阅式回填 / 唯一提交入口 / 会话恢复 / 导出）、`VideoStudio.tsx`（父级提交回调 / 未达标标记）、`useCreativeTasks.ts`、`CreativeTasksDrawer.tsx`、`api.ts`、`styles.css`。
+- 数据：不新增表、不改列；资产 `meta_json` 与任务 `result_json` 新增可选字段，旧任务读取时缺省值兼容。历史文件不改写、不慢放、不改元数据冒充 15 秒。
+- 行为变化（重要）：请求 15s 而厂商只给 5s 时不再显示「已完成」，而显示「时长未达标」并保留原片；用户需重新生成（新费用）或确认模型支持目标时长。
+- 平台规格：本版只完成状态与时长 P0；Meta 视频 4:5、Google Search/RDA/App/PMax/上传横幅拆分、Unity/AppLovin/Mintegral/Moloco/TikTok/Adsterra 的资产角色与容量边界、图片字节预算与伴随资产校验仍按文档 P1/P2 单独推进。`SPEC_VERIFIED_ON` 保持为空，不把内部目录冒充官方核验。
+**验证**
+- V4.83 专项：`python3 scripts/check_video_v483.py` **14/14 通过**（duration 下发 / 关闭开关 / media 输入 / 时长判定三态 / 5.04s→DURATION_MISMATCH / 终态 stage=completed / 原片 noncompliant / 快照字段 / 不提供无效续查 / 批次不计 done / ZIP 并入视频）。
+- 回归未退化：`check_video_pipeline_p0.py` 19/19、`check_video_p0_api.py` 8/8、`check_video_p1.py` 14/14、`check_creative_tasks.py` 23/23、`check_video_claims.py` 16/16；`tests/run_all.py` **181 项，失败 0 / 错误 0 / 跳过 2**。
+- 质量：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
+- 界面约束：未新增页面、一级导航、抽屉或按钮；仅新增状态文案与时长 / 未达标文字标记。
+- 四种状态：代码已实现 ✅、模拟测试通过 ✅、真实模型验证 ❌、真实投放验证 ❌；本次未发起付费出片。文档线上证据（a8026eac… 任务 5.04s）仅作问题定位，未被本轮测试改写。
+- 待确认：真实供应商是否接受 `parameters.duration` 与 `input.media` 需在白名单部署机执行 `python3 scripts/verify_real_video_once.py --yes` 补齐；不支持时配置 `send_duration=false` 并换用支持目标时长的视频模型。
+
 ## V4.82 视频链路补齐 D0 证据门——分镜不再出现无出处的评分与数字承诺
 
 **发布日期**：2026-11-16 17:13

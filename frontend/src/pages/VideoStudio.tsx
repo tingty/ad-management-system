@@ -37,6 +37,12 @@ interface VideoStudioProps {
   setState: (updater: (prev: VideoState) => VideoState) => void
   // 工作区模式下，由父级注入「生成中」的聚合进度文本（可选）
   progressText?: string
+  // V4.83 / C02：出片统一由父级提交（持久任务 + 幂等 + 批次订阅）。
+  // VideoStudio 不再自己长轮询 /cw-video/generate，避免出现「抽屉一条、页面另一条」两套状态。
+  // 返回 false 表示父级拒绝提交（未选草稿 / 未规划等），组件保持当前状态即可。
+  onSubmitJob?: (payload: {
+    plan: any; options: any; refinement?: string
+  }) => Promise<boolean> | boolean
 }
 
 const MODE_OPTS = [
@@ -117,7 +123,7 @@ function AspectChip({ aspect }: { aspect?: string }) {
   )
 }
 
-export default function VideoStudio({ analysis, platform, referenceImage, brandLogo, injectLogo, mode, state, setState }: VideoStudioProps) {
+export default function VideoStudio({ analysis, platform, referenceImage, brandLogo, injectLogo, mode, state, setState, onSubmitJob }: VideoStudioProps) {
   const { messages, plan, videos, options, note, modelInfo, videoModel, planning, generating, error, refineInput } = state
   const chatRef = useRef<HTMLDivElement>(null)
   // V4.75：视频链路自检结果（只读配置，不触发出片）
@@ -189,21 +195,23 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
       setState(s => ({ ...s, error: '请先在第二步生成分镜方案（点击「生成分镜草案」或输入构想）' }))
       return
     }
-    setState(s => ({ ...s, error: '', generating: true, videos: [], note: '' }))
+    if (!onSubmitJob) {
+      setState(s => ({ ...s, error: '出片入口尚未就绪，请从创意工作台第三步提交' }))
+      return
+    }
+    // V4.83 / C01+C02：新执行先清旧失败与旧成片，旧红色失败框不再跟到新任务；
+    // 提交统一交给父级（持久任务 / 幂等键 / batch_id），本组件不再独立长轮询。
+    setState(s => ({ ...s, error: '', generating: true, videos: [], note: '', videoFail: null }))
     setGenSec(0); setGenStage('提交中')
     try {
-      // V4.76：改为「提交任务 + 轮询」，不让 HTTP 请求长时间挂着（否则宿主 nginx 60s 就 504）
-      const r: any = await api.cwVideoGenerateAsync({
-        analysis: analysis || {},
-        platform: platform || '',
-        reference_image: referenceImage || '',
-        brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
-        plan,
-        options: { ...options, prompt_hint: options.prompt_hint },
-      }, info => { setGenSec(info.elapsed); setGenStage(info.stage || '') })
-      setState(s => ({ ...s, videos: r?.videos || [], note: r?.note || '', modelInfo: r?.model_info || s.modelInfo, videoModel: r?.model_info || s.videoModel, outputAspect: r?.output_aspect || s.outputAspect, generating: false, plan: r?.storyboard || s.plan, error: '', videoFail: failOf(r) }))
+      const ok = await onSubmitJob({
+        plan, options: { ...options, prompt_hint: options.prompt_hint },
+      })
+      if (ok === false) setState(s => ({ ...s, generating: false }))
+      // 返回 true 时父级负责把 generating 归位并按 batch 回填，避免两处写同一份状态。
     } catch (e: any) {
-      setState(s => ({ ...s, error: '视频生成失败：' + (e?.message || ''), generating: false }))
+      const fail = { code: 'CLIENT_ERROR', message: e?.message || '', action: '稍后重试；连续失败请展开「诊断视频配置」核对链路。' }
+      setState(s => ({ ...s, error: '视频提交失败：' + (e?.message || ''), generating: false, videoFail: fail }))
     }
   }
 
@@ -229,20 +237,22 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
       const newPlan = r?.plan || plan
       setState(s => ({ ...s, messages: next, plan: newPlan, modelInfo: r?.model_info || s.modelInfo, videoModel: r?.video_model_info || s.videoModel, outputAspect: r?.output_aspect || s.outputAspect, planning: false, error: '' }))
       if (newPlan && newPlan.shots?.length) {
-        setState(s => ({ ...s, generating: true, videos: [], note: '' }))
+        if (!onSubmitJob) {
+          setState(s => ({ ...s, planning: false, error: '出片入口尚未就绪，请从创意工作台第三步提交' }))
+          return
+        }
+        // V4.83 / C02：微调与批量生成共用同一提交链路；带 refinement 便于日志区分，
+        // 但批次、草稿、幂等键仍由父级统一生成，结果只从服务端任务快照回填。
+        setState(s => ({ ...s, generating: true, videos: [], note: '', videoFail: null }))
         setGenSec(0); setGenStage('提交中')
-        const g: any = await api.cwVideoGenerateAsync({
-          analysis: analysis || {},
-          platform: platform || '',
-          reference_image: referenceImage || '',
-          brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
-          plan: newPlan,
-          options: { ...options, prompt_hint: options.prompt_hint },
-        }, info => { setGenSec(info.elapsed); setGenStage(info.stage || '') })
-        setState(s => ({ ...s, videos: g?.videos || [], note: g?.note || '', modelInfo: g?.model_info || s.modelInfo, videoModel: g?.model_info || s.videoModel, outputAspect: g?.output_aspect || s.outputAspect, generating: false, plan: g?.storyboard || s.plan, error: '', videoFail: failOf(g) }))
+        const ok = await onSubmitJob({
+          plan: newPlan, options: { ...options, prompt_hint: options.prompt_hint }, refinement: seed,
+        })
+        if (ok === false) setState(s => ({ ...s, generating: false }))
       }
     } catch (e: any) {
-      setState(s => ({ ...s, error: '视频微调失败：' + (e?.message || ''), planning: false, generating: false }))
+      const fail = { code: 'CLIENT_ERROR', message: e?.message || '', action: '稍后重试；连续失败请展开「诊断视频配置」核对链路。' }
+      setState(s => ({ ...s, error: '视频微调提交失败：' + (e?.message || ''), planning: false, generating: false, videoFail: fail }))
     }
   }
 
@@ -513,6 +523,10 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
                       {v.duration_sec}{v.duration_source === 'measured' ? 's · 实测' : 's'}
                     </span>
                   ) : null}
+                  {/* V4.83：原片保留但不冒充达标成品 */}
+                  {v.delivery_status && v.delivery_status !== 'compliant'
+                    ? <span className="vs-video-bad">{v.delivery_status === 'noncompliant' ? '未达要求' : '时长未验证'}</span>
+                    : null}
                 </div>
                 <a className="vs-video-dl" href={fileUrl(v.url)} download target="_blank" rel="noreferrer">下载视频</a>
               </div>

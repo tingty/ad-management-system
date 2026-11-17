@@ -1905,6 +1905,8 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .vs-video video { width: 100%; border-radius: 7px; background: #000; max-height: 320px; }
 .vs-video-cap { font-size: 12px; color: var(--text); margin: 6px 2px 2px; }
 .vs-video-dur { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: var(--primary); background: #eef2f7; }
+/* V4.83：不合格原片标记（沿用失败色，只是文本标签，不改变视频卡布局） */
+.vs-video-bad { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: #b42318; background: #fdecec; }
 .vs-video-dl { display: inline-block; font-size: 12px; color: var(--primary2); text-decoration: none; margin: 0 2px 4px; }
 .vs-video-dl:hover { text-decoration: underline; }
 
@@ -2075,6 +2077,8 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ctd-sub-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
 .ctd-sub-stage { color: var(--muted); }
 .ctd-sub-ok { margin-left: auto; color: var(--ok); }
+/* V4.83：未达标成片的时长标记，沿用现有失败色，不新增控件 */
+.ctd-sub-bad { color: #b42318; font-weight: 600; }
 .ctd-assets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .ctd-assets a { display: block; width: 74px; height: 74px; border-radius: 8px; overflow: hidden;
   border: 1px solid var(--border); background: #f4f7fb; }

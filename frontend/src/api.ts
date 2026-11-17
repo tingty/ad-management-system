@@ -1169,8 +1169,9 @@ export const api = {
   mediaZipUrl: (files: string[], label = '推广图片') =>
     `${API_BASE}/api/media-files/zip?files=${encodeURIComponent(files.join(','))}` +
     `&label=${encodeURIComponent(label)}&token=${encodeURIComponent(getToken())}`,
-  historyItemZipUrl: (id: number) =>
-    `${API_BASE}/api/creation-history/${id}/export.zip?token=${encodeURIComponent(getToken())}`,
+  historyItemZipUrl: (id: number, batchId = '') =>
+    `${API_BASE}/api/creation-history/${id}/export.zip?token=${encodeURIComponent(getToken())}`
+      + (batchId ? `&batch_id=${encodeURIComponent(batchId)}` : ''),
   historyBatchZipUrl: (ids: number[]) =>
     `${API_BASE}/api/creation-history/export?ids=${ids.join(',')}&token=${encodeURIComponent(getToken())}`,
   historyCopyUrl: (id: number) =>

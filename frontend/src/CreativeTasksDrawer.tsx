@@ -172,6 +172,13 @@ export default function CreativeTasksDrawer(props: Props) {
                         <div className="ctd-sub-head">
                           <b>{KIND_LABEL[s.kind] || s.kind}</b>
                           <span className="ctd-sub-stage">{s.stage_label || s.status}</span>
+                          {/* V4.83：时长按实测显示；未达标的原片保留但明确标记，不计合格 */}
+                          {s.measured_duration ? (
+                            <span className={s.delivery_status === 'noncompliant' ? 'ctd-sub-bad' : 'ctd-sub-ok'}>
+                              {s.measured_duration}s 实测{s.requested_duration ? ` / 目标 ${s.requested_duration}s` : ''}
+                              {s.delivery_status === 'noncompliant' ? ' · 未达标' : ''}
+                            </span>
+                          ) : null}
                           {s.success_count > 0 && <span className="ctd-sub-ok">成功 {s.success_count}</span>}
                         </div>
                         {(s.assets || []).length > 0 && (

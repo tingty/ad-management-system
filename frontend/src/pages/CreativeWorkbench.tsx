@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { api } from '../api'
+import { api, getToken } from '../api'
 import VideoStudio, { VideoState } from './VideoStudio'
-import { cwTaskBegin, cwTaskDismiss, cwTaskEnd, cwTaskReset, getCwTask, type CwStageStatus, type CwTaskStage } from '../cwTask'
+import { cwTaskBegin, cwTaskDismiss, cwTaskEnd, cwTaskReset, cwTaskUpdate, getCwTask, type CwStageStatus, type CwTaskStage } from '../cwTask'
 import CreativeTasksDrawer from '../CreativeTasksDrawer'
 import { useCreativeTasks } from '../useCreativeTasks'
 
@@ -76,6 +76,39 @@ function aspectOf(img: any): string {
   const g = gcd(Math.round(w), Math.round(h)); return `${w / g}:${h / g}`
 }
 function gcd(a: number, b: number): number { return b ? gcd(b, a % b) : a }
+
+/* V4.83 / C06：浏览器只存「我在看哪一个草稿 / 批次」的引用，不存任务事实。
+   换账号（token 变）自动丢弃；跨账号不串任务。服务端任务始终按 batch_id 查。 */
+const CW_SESSION_KEY = 'admb_cw_session_v1'
+function newDraftId() { return 'd_' + Math.random().toString(36).slice(2, 10) }
+function restoreCwSession(): { draftId: string; pendingBatch: string; submittedBatch: string } {
+  const fresh = { draftId: newDraftId(), pendingBatch: '', submittedBatch: '' }
+  try {
+    const raw = sessionStorage.getItem(CW_SESSION_KEY)
+    if (!raw) return fresh
+    const s = JSON.parse(raw) || {}
+    const acct = String(getToken() || '').slice(0, 40)
+    if (s.account && acct && s.account !== acct) return fresh
+    return {
+      draftId: s.draftId || fresh.draftId,
+      pendingBatch: s.pendingBatch || '',
+      submittedBatch: s.submittedBatch || s.pendingBatch || '',
+    }
+  } catch { return fresh }
+}
+function saveCwSession(s: { draftId: string; pendingBatch: string; submittedBatch: string }) {
+  try {
+    sessionStorage.setItem(CW_SESSION_KEY, JSON.stringify({ ...s, account: String(getToken() || '').slice(0, 40) }))
+  } catch { /* 隐私模式：刷新恢复降级为不可用，不影响本轮生成 */ }
+}
+/** 从 /files/xxx 或外链取纯文件名（导出 ZIP 用，防目录穿越由后端再做一次） */
+function fileOf(a: any): string {
+  const u = String(a?.url || a?.file || a?.path || '')
+  try {
+    if (/^https?:\/\//i.test(u)) return decodeURIComponent(new URL(u).pathname.split('/').pop() || '')
+  } catch { /* 退回字符串切分 */ }
+  return u.split('?')[0].split('/').pop() || ''
+}
 function specOf(img: any): { dim: string; ratio: string; fmt: string } {
   const w = Number(img?.w) || (img?.size ? parseInt(String(img.size).split('x')[0]) : 0)
   const h = Number(img?.h) || (img?.size ? parseInt(String(img.size).split('x')[1]) : 0)
@@ -167,11 +200,15 @@ export default function CreativeWorkbench() {
      - draftId：草稿标识，新建创作只换草稿，不动任何已有任务与结果；
      - pendingBatch：本次提交的视频批次，服务端跑完后按 batch_id 回写结果（旧任务不会污染新草稿）；
      - drawerOpen：任务抽屉开关（任务事实在服务端，见 useCreativeTasks）。 */
-  const [draftId, setDraftId] = useState(() => 'd_' + Math.random().toString(36).slice(2, 10))
-  const [pendingBatch, setPendingBatch] = useState('')
+  const [draftId, setDraftId] = useState(() => restoreCwSession().draftId)
+  const [pendingBatch, setPendingBatch] = useState(() => restoreCwSession().pendingBatch)
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [submittedBatch, setSubmittedBatch] = useState('')
-  const applyingRef = useRef('')
+  const [submittedBatch, setSubmittedBatch] = useState(() => restoreCwSession().submittedBatch)
+  // V4.83：只记录「已应用过的服务端快照指纹」，相同快照不重复 setState；
+  // 快照变化（继续查询从失败转成功、重试出新 attempt）必须重新回填。
+  const appliedRef = useRef('')
+  const [syncNote, setSyncNote] = useState('')
+  const submitKeyRef = useRef<{ sig: string; key: string }>({ sig: '', key: '' })
   const tasks = useCreativeTasks(true)
 
   // V4.55 新增：单独放大查阅（灯箱）
@@ -231,33 +268,68 @@ export default function CreativeWorkbench() {
     } catch { /* 忽略 */ }
   }, [])
 
-  /* V4.81 / P3：视频任务在服务端跑，结果按 batch_id 回写。
-     只回写「本次草稿提交的那个批次」，旧任务完成后回到页面也不会覆盖当前空白草稿。 */
+  /* V4.83 / C01+C03：按 batch_id 持续订阅服务端任务快照，直到用户新建创作 / 离开页面。
+     - 不再「回填一次就清 pending」：从失败续查成功、重试出新 attempt 都会重新应用；
+     - 详情读取失败只显示「状态暂未同步」，保留关联并下一轮重试，不把 null 当无任务；
+     - 同一 retry 链只展示当前 attempt，多个目标视频全部展示，不再只取第一个子任务。 */
   useEffect(() => {
-    if (!pendingBatch || applyingRef.current === pendingBatch) return
-    const b = tasks.items.find(x => x.batch_id === pendingBatch)
-    if (!b) return
-    if (['queued', 'running'].includes(b.status)) return
-    applyingRef.current = pendingBatch
-    ;(async () => {
+    if (!pendingBatch) return
+    let alive = true
+    let timer: number | undefined
+    const myDraft = draftId
+    const apply = async (first: boolean) => {
       const d = await tasks.detail(pendingBatch)
-      if (d && d.draft_id && d.draft_id !== draftId) { setPendingBatch(''); return }
-      const sub = (d?.subtasks || []).find((x: any) => x.kind === 'video')
-      if (!sub) { setPendingBatch(''); return }
-      const vids = (sub.assets || []).map((a: any) => ({
-        type: 'video', url: a.url, caption: a.caption || '',
-        duration_sec: sub.duration_sec || 0, duration_source: sub.duration_source || '',
-      }))
-      const fail = sub.error_code
-        ? { code: sub.error_code, message: sub.error_message || '', action: sub.error_action || '',
-            stage: sub.error_stage || '', taskId: sub.provider_task_id || '', evidence: null }
-        : null
-      setVs(s => ({ ...s, videos: vids, note: sub.note || '', generating: false, videoFail: fail }))
-      if (vids.length) showToast(`视频已生成 ${vids.length} 个（${sub.duration_sec ? sub.duration_sec + 's · 实测' : '可在结果区预览下载'}）`)
-      else if (fail) showToast(`视频未出片（${fail.code}）—— 点顶部「任务」查看原因与处理建议`)
-      setPendingBatch('')
-    })()
-  }, [tasks.items, pendingBatch, draftId])
+      if (!alive) return
+      if (!d) {
+        setSyncNote('状态暂未同步，正在重试读取')
+        timer = window.setTimeout(() => { void apply(false) }, 3000)
+        return
+      }
+      setSyncNote('')
+      // 草稿已切换：旧批次继续在抽屉里跑，但不能污染当前空白草稿
+      if (d.draft_id && myDraft && d.draft_id !== myDraft) return
+      const all: any[] = (d.subtasks || []).filter((s: any) => s.kind === 'video')
+      const byChain = new Map<string, any>()
+      for (const s of all) {
+        const chain = String(s.retry_of || s.job_id || Math.random())
+        const prev = byChain.get(chain)
+        if (!prev || Number(s.attempts || 0) > Number(prev.attempts || 0)
+          || String(s.created_at || '') > String(prev.created_at || '')) byChain.set(chain, s)
+      }
+      const current = [...byChain.values()].filter(s =>
+        (s.assets || []).length || s.status === 'succeeded' || !!s.error_code)
+      const fp = JSON.stringify(current.map(s => [
+        s.job_id, s.status, s.attempts, (s.assets || []).map((a: any) => a.url),
+        s.error_code, s.error_message, s.duration_sec, s.delivery_status,
+      ]))
+      if (fp && fp !== appliedRef.current) {
+        const hadApplied = !!appliedRef.current
+        appliedRef.current = fp
+        const vids = current.flatMap(s => (s.assets || []).filter((a: any) => a.url).map((a: any) => ({
+          type: 'video', url: a.url, caption: a.caption || '',
+          duration_sec: a.duration_sec ?? s.duration_sec ?? 0,
+          duration_source: a.duration_source || s.duration_source || '',
+          delivery_status: s.delivery_status || '', file: fileOf(a),
+        })))
+        const failed = current.filter(s => !!s.error_code)
+        const fail = failed.length ? {
+          code: failed[0].error_code, message: failed[0].error_message || '',
+          action: failed[0].error_action || '', stage: failed[0].error_stage || '',
+          taskId: failed[0].provider_task_id || '', evidence: null,
+        } : null
+        setVs(s => ({
+          ...s, videos: vids, generating: false,
+          note: current.map(s => s.note).filter(Boolean).join('；'), videoFail: fail,
+        }))
+        if (!hadApplied && vids.length) showToast(`视频已生成 ${vids.length} 个（可在结果区预览下载）`)
+        else if (!hadApplied && fail) showToast(`视频未出片（${fail.code}）—— 点顶部「任务」查看原因与处理建议`)
+      }
+      // 保持 pendingBatch：刷新后仍按 ID 追踪；终态也维持低频轮询以反映抽屉里的继续查询 / 重新生成。
+      timer = window.setTimeout(() => { void apply(false) }, first ? 2500 : 5000)
+    }
+    void apply(true)
+    return () => { alive = false; if (timer) window.clearTimeout(timer) }
+  }, [pendingBatch, draftId, tasks.detail])
 
   /* V4.77 素材创作任务常驻：把「批量生成」的实时进度同步到全局任务栏。
      切换菜单时工作台只是隐藏不卸载（见 App.tsx），请求与状态都在；
@@ -306,15 +378,22 @@ export default function CreativeWorkbench() {
       cwTaskBegin(payload)
       return
     }
-    // 结果页：只在任务确实处于运行中时收尾，避免用户后续操作用结果状态被反复重写
+    // V4.83 / C04：旧浮窗只镜像服务端快照，不再按「结果页且还没有视频」猜失败。
+    // 视频批次仍排队 / 生成中时保持 running，交给后台任务抽屉给终态。
     if (getCwTask().status !== 'running') return
+    const vidBatch = submittedBatch ? tasks.items.find(b => b.batch_id === submittedBatch) : null
+    const vidActive = !!vidBatch && ['queued', 'running'].includes(vidBatch.status)
+    if (materialType !== 'image' && vidActive) {
+      cwTaskUpdate({ ...payload, statusText: '图片已出，视频在后台继续' })
+      return
+    }
     const ok = imgDone > 0 || vidCount > 0
     cwTaskEnd(ok ? 'done' : 'failed', {
       ...payload,
       statusText: ok ? '创作完成' : '本次未生成素材',
       error: ok ? '' : (error || '本次生成未返回素材，请调整媒体或重试'),
     })
-  }, [view, progressPct, progressText, jobs, materialType, vs.generating, vs.videos, assets.length, selected, cw, error])
+  }, [view, progressPct, progressText, jobs, materialType, vs.generating, vs.videos, assets.length, selected, cw, error, submittedBatch, tasks.items])
 
   function showToast(m: string) {
     setToast(m); window.setTimeout(() => setToast(t => (t === m ? null : t)), 3500)
@@ -525,31 +604,78 @@ export default function CreativeWorkbench() {
     return { okImages, anyFailed, errs }
   }
 
-  async function generateVideo(hid: number | null, batchId = ''): Promise<{ ok: boolean; fail: any; submitted?: boolean }> {
-    if (!vs.plan || !vs.plan.shots?.length) return { ok: false, fail: null }
+  /** V4.83 / C02：所有视频入口（批量生成 / 单独生成 / 微调）唯一提交实现。 */
+  async function generateVideo(hid: number | null, batchId = '',
+    override?: { plan: any; options: any; refinement?: string })
+    : Promise<{ ok: boolean; fail: any; submitted?: boolean }> {
+    const plan = override?.plan || vs.plan
+    const options = override?.options || vs.options
+    if (!plan?.shots?.length) return { ok: false, fail: null }
     const analysis = normalizeAnalysis(cw?.analysis)
     if (selectedBrand && selectedBrand.trim()) analysis.brand = selectedBrand.trim()
-    setVs(s => ({ ...s, generating: true, error: '', videos: [], note: '' }))
+    setVs(s => ({ ...s, generating: true, error: '', videos: [], note: '', videoFail: null }))
     try {
       // V4.81 / P3：提交即返回，页面不再等 1–6 分钟；进度看顶部「任务」抽屉。
-      // 同一幂等键重复点击只会拿到同一任务，不会产生第二次收费出片。
+      // V4.83：幂等键绑定本次「草稿 + 批次 + 冻结的分镜/参数 + 是否微调」，网络重试复用同一键；
+      // 真正换创意（新分镜 / 新微调）才算新的收费执行。
+      const sig = JSON.stringify([draftId, batchId || submittedBatch, plan.shots,
+        options?.duration, options?.aspect, options?.mode, options?.prompt_hint,
+        override?.refinement || ''])
+      if (submitKeyRef.current.sig !== sig) {
+        submitKeyRef.current = {
+          sig, key: `cwvid_${draftId}_${Math.abs(hashCode(sig)).toString(36)}_${Date.now().toString(36)}`,
+        }
+      }
       const job: any = await api.submitVideoJob({
         analysis, platform: selectedPlatform,
         reference_image: referenceImage || '',
         brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
-        plan: vs.plan, options: { ...vs.options, prompt_hint: vs.options.prompt_hint },
+        plan, options: { ...options, prompt_hint: options.prompt_hint },
       }, {
-        idempotencyKey: `cwvid_${batchId || draftId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        idempotencyKey: submitKeyRef.current.key,
         draftId, batchId,
       })
       setVs(s => ({ ...s, generating: false }))
-      if (job?.batch_id) { setPendingBatch(job.batch_id); setSubmittedBatch(job.batch_id) }
+      const bid = job?.batch_id || batchId
+      if (bid) {
+        setPendingBatch(bid); setSubmittedBatch(bid)
+        saveCwSession({ draftId, pendingBatch: bid, submittedBatch: bid })
+      }
       return { ok: false, fail: null, submitted: true }
     } catch (e: any) {
       const fail = { code: 'CLIENT_ERROR', message: e?.message || '', action: '稍后重试；连续失败请展开「诊断视频配置」核对链路。' }
       setVs(s => ({ ...s, generating: false, error: '视频提交失败：' + (e?.message || ''), videoFail: fail }))
       return { ok: false, fail }
     }
+  }
+
+  /** 稳定字符串哈希：只为生成幂等键，不用于安全用途 */
+  function hashCode(s: string): number {
+    let h = 0
+    for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
+    return h
+  }
+
+  /** VideoStudio 的「生成 / 微调」统一走上面的持久任务提交；界面与按钮位置不变。 */
+  async function submitVideoFromStudio(payload: { plan: any; options: any; refinement?: string }): Promise<boolean> {
+    if (materialType === 'image') return false
+    if (imgBusy) {
+      setError('图片任务正在生成，请等图片完成后再提交视频')
+      return false
+    }
+    let bid = submittedBatch
+    if (!bid) {
+      // 从第二步直接生成、或结果页微调：补一个批次头，让图片 / 视频 / 结果订阅仍指向同一创作。
+      const bh: any = await api.createCreativeTask({
+        product_name: String((cw as any)?.title || (cw as any)?.analysis?.product || '').slice(0, 120),
+        source_url: String((cw as any)?.snapshot?.final_url || input || ''),
+        material_types: ['video'], platforms: selected, draft_id: draftId,
+      }).catch(() => null)
+      bid = bh?.batch_id || ''
+      if (bid) { setSubmittedBatch(bid); saveCwSession({ draftId, pendingBatch: pendingBatch || bid, submittedBatch: bid }) }
+    }
+    const r = await generateVideo(null, bid, payload)
+    return !!r.submitted
   }
 
   async function batchGenerate() {
@@ -573,7 +699,10 @@ export default function CreativeWorkbench() {
         draft_id: draftId,
       }).catch(() => null)
       batchId = bh?.batch_id || ''
-      if (batchId) setSubmittedBatch(batchId)
+      if (batchId) {
+        setSubmittedBatch(batchId)
+        saveCwSession({ draftId, pendingBatch: pendingBatch || batchId, submittedBatch: batchId })
+      }
     }
     setProgressPct(10)
     const imgRes = doImg ? await generateImages(hid, batchId) : { okImages: 0, anyFailed: false, errs: [] }
@@ -614,11 +743,18 @@ export default function CreativeWorkbench() {
   function downloadSelected() {
     const f = selectedFiles(); if (f.length) window.open(api.mediaZipUrl(f, '创意工作台素材'), '_blank')
   }
-  // B5：优先用历史导出包（含图片/视频 + ad_copy.csv + delivery_notes.md + 文案/分析）；
-  // 仅在缺少 historyId 时回退到纯素材 ZIP（理论上 generate 后必有 historyId）。
+  // B5 + V4.83 / C06：历史导出包含文案 / 分析 / 生成信息，并带上当前批次的视频；
+  // 没有 historyId 时用素材 ZIP，图片 + 视频都在，不再遗漏只在批次里的成片。
   function downloadAll() {
-    if (historyId) { window.open(api.historyItemZipUrl(historyId), '_blank'); return }
-    const f = assets.filter(a => a.file).map(a => a.file)
+    if (historyId) {
+      // 横幅被点掉后 submittedBatch 会清空，但追踪引用仍在 pendingBatch——导出仍带上批次视频。
+      window.open(api.historyItemZipUrl(historyId, submittedBatch || pendingBatch), '_blank')
+      return
+    }
+    const f = [...new Set([
+      ...assets.filter(a => a.file).map(a => a.file),
+      ...(vs.videos || []).map(fileOf).filter(Boolean),
+    ])]
     if (f.length) window.open(api.mediaZipUrl(f, '创意工作台素材'), '_blank')
   }
   // V4.60 / B3：文案下载（单平台 TXT / 全部 JSON）
@@ -663,13 +799,17 @@ export default function CreativeWorkbench() {
     setBrandLogo(''); setBrandLogoName('')
     setAnalysisValid(false)
   }
-  /** V4.81 / P3：新建创作只创建空白草稿，不删除任何已有任务与结果；后台任务继续执行。 */
+  /** V4.81 / P3 + V4.83：新建创作只创建空白草稿，不删除任何已有任务与结果；后台任务继续执行。 */
   function startNewCreation() {
     resetAll()
-    setDraftId('d_' + Math.random().toString(36).slice(2, 10))
+    const d = newDraftId()
+    setDraftId(d)
     setPendingBatch('')
     setSubmittedBatch('')
-    applyingRef.current = ''
+    setSyncNote('')
+    appliedRef.current = ''
+    submitKeyRef.current = { sig: '', key: '' }
+    saveCwSession({ draftId: d, pendingBatch: '', submittedBatch: '' })
     showToast('已开始新的创作；后台任务仍在继续，可随时点「任务」查看进度与结果')
   }
   // 图片任务仍在前端等待返回：此时重置会把在跑的图片任务与界面状态断开，因此先拦住
@@ -738,7 +878,7 @@ export default function CreativeWorkbench() {
       {/* 提交后的引导：任务在服务端继续，页面可以继续用（不是假进度，也不阻塞输入） */}
       {submittedBatch && (
         <div className="cwb-submitted">
-          <span>任务已加入后台，可继续创作。图片先完成即可预览下载，视频在后台继续生成。</span>
+          <span>任务已加入后台，可继续创作。图片先完成即可预览下载，视频在后台继续生成。{syncNote ? ` · ${syncNote}` : ''}</span>
           <button className="cwb-link" onClick={() => setDrawerOpen(true)}>查看任务</button>
           <button className="cwb-link" onClick={startNewCreation} disabled={imgBusy}>开始新创作</button>
           <button className="cwb-link ghost" onClick={() => setSubmittedBatch('')}>知道了</button>
@@ -1059,7 +1199,7 @@ export default function CreativeWorkbench() {
               <div className="cwb-work-area">
                 <VideoStudio mode="work" analysis={cw?.analysis} platform={selectedPlatform}
                   referenceImage={referenceImage} brandLogo={brandLogo} injectLogo={injectLogo}
-                  state={vs} setState={setVs} />
+                  state={vs} setState={setVs} onSubmitJob={submitVideoFromStudio} />
               </div>
             )}
 

@@ -49,7 +49,15 @@ STAGE_LABEL = {
     "provider_pending": "模型生成中",
     "downloading": "下载校验中",
     "validating": "下载校验中",
+    "completed": "已完成",
 }
+# V4.83 / C05：交付时长容差（工程验收策略，不是任何媒体平台的官方容差）。
+# 实测时长与用户所选目标差在容差内才算合格成片；超出时保留原片但判 needs_attention /
+# DURATION_MISMATCH，绝不让 5s 原片以 15s 的名义标成 succeeded。可用环境变量覆盖。
+try:
+    DURATION_TOLERANCE_SEC = max(0.0, float(os.getenv("CW_VIDEO_DURATION_TOLERANCE", "0.5") or 0.5))
+except (TypeError, ValueError):
+    DURATION_TOLERANCE_SEC = 0.5
 
 _RUNNING: set[str] = set()      # 本进程正在驱动的 job_id，避免同一 tick 内被重复领取
 _WORKER: asyncio.Task | None = None
@@ -215,8 +223,17 @@ def job_to_task(job: GenerationJob) -> dict:
                    "caption": a.get("placement") or "", "kind": "image",
                    "size": a.get("size") or ""}
                   for a in (result.get("images") or []) if isinstance(a, dict)]
-    stage_label = (STAGE_LABEL.get(job.stage or "") or (job.stage or "")) if is_video \
-        else IMG_STAGE_LABEL.get(job.status or "", job.status or "")
+    # V4.83 / C04：终态以 status 为准，杜绝「succeeded 却显示下载校验中」。
+    # stage 仍是执行轨迹（供排查），但面向用户的标签在终态一律取终态语义。
+    task_status = job.status or ""
+    if task_status in TERMINAL:
+        stage_label = ("时长未达标" if job.error_code == "DURATION_MISMATCH"
+                       else {"succeeded": "已完成", "needs_attention": "待核实",
+                             "failed": "失败", "canceled": "已停止"}.get(task_status, task_status))
+    elif is_video:
+        stage_label = STAGE_LABEL.get(job.stage or "") or (job.stage or "")
+    else:
+        stage_label = IMG_STAGE_LABEL.get(task_status, task_status)
     return {
         "job_id": job.job_id,
         "batch_id": job.batch_id or "",
@@ -233,14 +250,21 @@ def job_to_task(job: GenerationJob) -> dict:
         "error_stage": job.error_stage or "",
         "error_message": job.error_message or "",
         "error_action": job.error_action or "",
-        "can_repoll": bool(job.provider_task_id) and job.status in ("needs_attention", "failed"),
+        # 时长未达标靠「重新生成」换一次新出片，重复续查同一厂商任务不会改变成片时长。
+        "can_repoll": (bool(job.provider_task_id) and task_status in ("needs_attention", "failed")
+                       and job.error_code != "DURATION_MISMATCH"),
         "can_redownload": bool((result.get("media") or {}).get("url")
                                or (result.get("media") or {}).get("b64")),
         "assets": assets,
         "duration_sec": result.get("duration_sec") or 0,
         "duration_source": result.get("duration_source") or "",
+        "requested_duration": result.get("requested_duration") or 0,
+        "measured_duration": result.get("measured_duration") or result.get("duration_sec") or 0,
+        "delivery_status": result.get("delivery_status") or ("compliant" if task_status == "succeeded" else ""),
+        "duration_tolerance_sec": result.get("duration_tolerance_sec") or 0,
         "note": result.get("note") or "",
         "attempts": int(job.attempts or 0),
+        "retry_of": job.retry_of or "",
         "created_at": _iso(job.created_at),
         "updated_at": _iso(job.updated_at),
         "finished_at": _iso(job.finished_at),
@@ -626,10 +650,23 @@ async def _drive(db: Session, job: GenerationJob) -> None:
                 "STORAGE_FAILED", f"成片落盘异常：{type(e).__name__}: {e}", stage="downloading"))
             return
         job.stage = "validating"
-        asset = _archive(db, job, saved, snap)
+        verdict = _duration_verdict(snap, saved)
+        asset = _archive(db, job, saved, snap, verdict)
         job.asset_ids = [asset.asset_id]
-        job.status, job.finished_at = "succeeded", _now()
-        job.error_code = job.error_stage = job.error_message = job.error_action = ""
+        # V4.83 / C04+C05：终态与资产、校验结论在同一事务里写入。
+        # 时长合格 → succeeded + completed；不合格 → needs_attention + DURATION_MISMATCH，
+        # 原片与下载入口保留（不篡改媒体、不慢放冒充），但绝不标成功、不计入合格成功数。
+        job.stage = "completed"
+        job.finished_at = _now()
+        job.status = "succeeded" if verdict["ok"] else "needs_attention"
+        if verdict["ok"]:
+            job.error_code = job.error_stage = job.error_message = job.error_action = ""
+        else:
+            job.error_code = "DURATION_MISMATCH"
+            job.error_stage = "validating"
+            job.error_message = verdict["note"]
+            job.error_action = ("原片已保留可预览下载；如需达标成片，点「重新生成」（会产生新费用）——"
+                                "或在「大模型配置」确认视频模型支持所选时长后重试。")
         job.result_json = {
             "media": media,
             "assets": [{"asset_id": asset.asset_id, "url": f"/files/{asset.file}",
@@ -638,7 +675,11 @@ async def _drive(db: Session, job: GenerationJob) -> None:
                         "duration_source": saved.get("duration_source") or ""}],
             "duration_sec": saved.get("duration_sec") or 0,
             "duration_source": saved.get("duration_source") or "",
-            "note": _duration_note(snap, saved),
+            "requested_duration": verdict["requested"],
+            "measured_duration": verdict["actual"],
+            "delivery_status": verdict["delivery_status"],
+            "duration_tolerance_sec": DURATION_TOLERANCE_SEC,
+            "note": verdict["note"],
         }
         job.evidence_json = saved.get("evidence") or evidence
         job.updated_at = _now()
@@ -646,24 +687,53 @@ async def _drive(db: Session, job: GenerationJob) -> None:
         return
 
 
-def _duration_note(snap: dict, saved: dict) -> str:
-    planned = int(snap.get("duration") or 0)
+def _duration_verdict(snap: dict, saved: dict) -> dict:
+    """时长交付门：实测值来自媒体探测，目标值来自冻结的任务快照。
+
+    V4.83 / C05：`note` 只提示不再改变结论；这里把偏差升级为交付判定。
+    - 目标缺失（旧任务）→ 不判不合格，按原片交付（note 说明未做时长约定）；
+    - 探测拿不到时长 → 不冒充合格，标 unverified / needs_attention；
+    - 偏差在工程容差内 → compliant / succeeded；
+    - 偏差超容差 → noncompliant / needs_attention + DURATION_MISMATCH。
+    """
+    requested = int(snap.get("duration") or 0)
     actual = float(saved.get("duration_sec") or 0)
-    if planned and actual and abs(actual - planned) >= 1.0:
-        return f"⚠️ 实测成片时长 {actual:.1f}s，与所选 {planned}s 不一致（厂商按自身模板输出）。"
-    return ""
+    source = str(saved.get("duration_source") or "")
+    base = {"requested": requested, "actual": actual, "source": source,
+            "tolerance": DURATION_TOLERANCE_SEC}
+    if not requested:
+        return {**base, "ok": True, "delivery_status": "compliant",
+                "note": "本次任务未约定目标时长，按厂商原片交付（未做时长一致性校验）。"}
+    if not actual or source not in ("ffprobe", "mvhd"):
+        return {**base, "ok": False, "delivery_status": "unverified",
+                "note": f"成片已落盘但无法实测时长（探测来源：{source or '无'}），"
+                        f"不能确认满足所选 {requested}s 要求。"}
+    diff = abs(actual - requested)
+    if diff <= DURATION_TOLERANCE_SEC:
+        return {**base, "ok": True, "delivery_status": "compliant",
+                "note": f"实测 {actual:.1f}s，符合所选 {requested}s（容差 ±{DURATION_TOLERANCE_SEC:g}s）。"}
+    return {**base, "ok": False, "delivery_status": "noncompliant",
+            "note": f"⚠️ 实测成片时长 {actual:.1f}s，未满足所选 {requested}s 要求"
+                    f"（容差 ±{DURATION_TOLERANCE_SEC:g}s）。原片保留可下载，但不计入合格成片。"}
 
 
-def _archive(db: Session, job: GenerationJob, saved: dict, snap: dict) -> CreativeAsset:
+def _archive(db: Session, job: GenerationJob, saved: dict, snap: dict,
+             verdict: Optional[dict] = None) -> CreativeAsset:
     file = os.path.basename(saved.get("file_path") or "")
+    v = verdict or {}
+    # V4.83：不合格原片仍归档（可预览下载、可追溯），但状态明确标 noncompliant，
+    # 交付包与合格计数据此区分，不静默混入可投放成品。
+    asset_status = "ok" if v.get("ok", True) else "noncompliant"
     asset = CreativeAsset(
         asset_id=_uid("asset_"), job_id=job.job_id, history_id=None,
         owner_id=job.owner_id, file=file, size="video",
         placement=str(snap.get("aspect") or ""), concept_id=job.batch_id or "",
-        spec_version="video/v1", status="ok",
+        spec_version="video/v1", status=asset_status,
         meta_json={"kind": "video", "bytes": saved.get("file_bytes"),
                    "duration_sec": saved.get("duration_sec"),
-                   "duration_source": saved.get("duration_source")},
+                   "duration_source": saved.get("duration_source"),
+                   "requested_duration": v.get("requested") or 0,
+                   "delivery_status": v.get("delivery_status") or "compliant"},
         created_at=_now(),
     )
     db.add(asset)

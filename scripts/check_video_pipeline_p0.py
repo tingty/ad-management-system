@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import json
 import os
+import struct
 import sys
 import threading
 import time
@@ -38,7 +39,13 @@ def _mp4_bytes(with_moov: bool = True) -> bytes:
     head = b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00isomiso2avc1mp41"
     body = b"\x00\x00\x00\x08free"
     if with_moov:
-        body += b"\x00\x00\x00\x40moov" + b"\x00" * 60
+        # V4.83：假成片带真实 mvhd（15s / timescale 1000），让时长交付门也能在旧回归里跑通；
+        # 不再用全 0 的 moov——那种「文件可用但时长未知」现在会正确判 unverified。
+        mvhd_body = (b"\x00\x00\x00\x00" + b"\x00" * 8
+                     + struct.pack(">I", 1000) + struct.pack(">I", 15000) + b"\x00" * 80)
+        mvhd = struct.pack(">I", 8 + len(mvhd_body)) + b"mvhd" + mvhd_body
+        moov_body = mvhd
+        body += struct.pack(">I", 8 + len(moov_body)) + b"moov" + moov_body
     body += b"\x00" * 9000
     return head + body
 

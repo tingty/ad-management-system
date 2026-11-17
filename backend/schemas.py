@@ -510,6 +510,10 @@ class CWVideoGenerateResult(BaseModel):
     error_action: str = ""         # 唯一可执行动作
     error_task_id: str = ""        # 厂商任务号（POLL_TIMEOUT 时可凭它继续查询）
     evidence: dict = {}            # 脱敏证据链
+    # V4.83 / C05：交付时长判定（实测来自媒体探测，不由计划值回填）
+    requested_duration: float = 0
+    measured_duration: float = 0
+    delivery_status: str = ""      # compliant / noncompliant / unverified
 
 
 class CWVideoJobOut(BaseModel):

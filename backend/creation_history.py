@@ -482,8 +482,14 @@ def _delivery_notes(row) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_history_zip(rows: list, multi: bool = False) -> io.BytesIO:
-    """打包一条或多条历史：图片 + 广告文案 + 落地页分析 + 生成信息 + B5 交付物。"""
+def build_history_zip(rows: list, multi: bool = False,
+                      extra_assets: list[dict] | None = None) -> io.BytesIO:
+    """打包一条或多条历史：图片 + 广告文案 + 落地页分析 + 生成信息 + B5 交付物。
+
+    V4.83 / C06：`extra_assets` 用于把「只在创作批次里、未写进 history.images_json」的
+    视频 / 端卡 / 图标一并打进同一个交付包，避免导出 ZIP 漏掉批次视频。
+    每项为 {file, role?, delivery_status?}；不合格原片保留但写入清单标记。
+    """
     buf = io.BytesIO()
     manifest = []
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -562,6 +568,27 @@ def build_history_zip(rows: list, multi: bool = False) -> io.BytesIO:
             }))
             manifest.append({"id": row.id, "title": row.title, "folder": base or ".",
                              "images": packed})
+        # V4.83 / C06：批次内未写进历史的视频 / 配套素材，按原文件名打进同一 ZIP。
+        extra_manifest = []
+        for i, asset in enumerate(extra_assets or [], 1):
+            raw = str(asset.get("file") or os.path.basename(str(asset.get("url") or "")) or "")
+            fname = os.path.basename(raw)
+            src = safe_image_path(fname)
+            if not src or not os.path.isfile(src):
+                continue
+            z.write(src, fname)
+            extra_manifest.append({
+                "file": fname,
+                "role": asset.get("role") or "video",
+                "delivery_status": asset.get("delivery_status") or "compliant",
+                "note": asset.get("note") or "",
+            })
+        if extra_manifest or multi:
+            z.writestr("交付清单.json", _json_bytes({
+                "spec_note": "内部整理规则，正式投放前须按平台官方文档复核",
+                "extra_assets": extra_manifest,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }))
         if multi:
             z.writestr("历史清单.json", _json_bytes({
                 "count": len(rows), "items": manifest,

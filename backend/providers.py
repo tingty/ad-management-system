@@ -962,17 +962,33 @@ class ModelVideo(VideoProvider):
     def _body(self, prompt: str, meta: dict) -> dict:
         if self.family == "dashscope_maas":
             # 阿里云百炼 MaaS（wan3.0-video 等）契约：提交体为
-            # {model, input:{prompt}, parameters:{size,count}}，且需 X-DashScope-Async 头。
-            # 实测该端点忽略 size、固定输出 9:16 竖屏，这里仍按宽高比推导一个合理 size。
+            # {model, input:{prompt}, parameters:{size,count,duration}}，且需 X-DashScope-Async 头。
+            # V4.83 / C05：此前只发 size/count，未传 duration，厂商按自身模板固定出 5s；
+            # 用户选 15s 也只拿到 5.04s，页面仅提示警告仍标成功。现在把目标时长真正写进请求，
+            # 并在交付门按实测时长判定（见 creative_tasks._duration_verdict）。
             aspect = meta.get("aspect", "9:16")
             size = meta.get("size") or ("1080*1920" if aspect == "9:16" else "1280*720")
+            parameters: dict = {"size": size, "count": 1}
+            duration = int(meta.get("duration") or 0)
+            # 只有明确选了时长才发送；不传 0 给不支持该字段的旧模型。
+            # send_duration=false 是给「该字段会 400」的厂商留的配置出口，默认发送以满足 15s 交付。
+            if duration > 0 and str(self.params.get("send_duration", "true")).strip().lower() not in ("false", "0", "no"):
+                parameters["duration"] = duration
             body = {
                 "model": self.model,
                 "input": {"prompt": prompt},
-                "parameters": {"size": size, "count": 1},
+                "parameters": parameters,
             }
             if meta.get("image"):
-                body["input"]["image"] = meta["image"]
+                # wan3.0 官方图生视频用 input.media（type + media_url）；老端点仍接受 input.image。
+                # 通过模型配置 media_input=true 显式切换，不猜入口、不把本地路径当公网 URL。
+                if str(self.params.get("media_input", "false")).strip().lower() in ("true", "1", "yes"):
+                    body["input"]["media"] = {
+                        "type": "image_url",
+                        "media_url": meta["image"],
+                    }
+                else:
+                    body["input"]["image"] = meta["image"]
                 body["parameters"]["mode"] = "image_to_video"
             return body
         body = {
