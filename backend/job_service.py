@@ -209,7 +209,13 @@ def recover_interrupted() -> int:
     """
     db = SessionLocal()
     try:
-        rows = db.query(GenerationJob).filter(GenerationJob.status.in_(["running", "queued"])).all()
+        # 只回收「图像」任务：视频任务（kind=video）由 creative_tasks 的持久化 worker
+        # 按供应商任务号续查（重启后继续轮询，不重复提交、不重复收费）。这里若不加
+        # kind 过滤，会在每次重启时把在途视频任务一律标 failed，导致重启即全部失败。
+        rows = (db.query(GenerationJob)
+                .filter(GenerationJob.kind == "images",
+                        GenerationJob.status.in_(["running", "queued"]))
+                .all())
         for r in rows:
             subs = [dict(x) for x in (r.subtasks_json or []) if isinstance(x, dict)]
             req = (r.request_json or {}).get("images_request") or {}
