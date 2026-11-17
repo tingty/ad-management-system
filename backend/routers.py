@@ -35,6 +35,8 @@ from media_platforms import (list_media_platforms, validate_platform,
 from media_spec_library import (library_payload as spec_library_payload,
                                 video_target as spec_video_target,
                                 validate_video_delivery as spec_validate_delivery)
+# V4.88：文档提示词契约——视频出片提示词与图片纯图模式共用同一套无字视觉约束
+from prompt_contract import build_prompt_contract, render_video_contract_block
 from media_ad import generate_media_copy, generate_media_images
 from industry_profiles import resolve_profile
 from creation_plan_service import (
@@ -468,7 +470,9 @@ _CW_VIDEO_PLAN_SYS = (
     "V4.82 硬约束：必须严格遵守 payload.evidence_contract。字幕 / 旁白 / 钩子 / CTA 中"
     "任何数字、评分、用户数、价格、效果、试用、订阅或兼容性表述，都必须能在本次页面原文"
     "定位并保留原有「最多 / 测试条件 / 计费周期 / 适用范围」限定；原文没有就一个字都不要写，"
-    "不得用「信息不足时给合理默认」作为编造数值的借口。"
+    "不得用「信息不足时给合理默认」作为编造数值的借口。\n"
+    "V4.88 无字策略：text / cta 字段仍按上述 JSON 结构保留，但只用于内部节奏、VO 与策划"
+    "追溯；出片提示词不会把它们绘制到画面，不要把它们设计成上屏字幕或端卡。"
 )
 
 
@@ -1252,12 +1256,12 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         forced = "9:16"
     output_aspect = forced or requested_aspect
 
-    # 从分镜方案构造一段可供文生/图生视频模型消费的提示词
+    # 从分镜方案构造一段可供文生/图生视频模型消费的提示词。
+    # V4.88：无字策略下不再把 shot.text 送进模型（它只保留在分镜 JSON 供节奏 / VO 策划）。
     shots = plan.get("shots") or []
     seg_lines = []
     for s in shots:
         seg = f"[{s.get('t') or ''}] {s.get('visual') or ''}"
-        if s.get("text"): seg += f"（字幕：{s['text']}）"
         if s.get("vo"): seg += f"（旁白：{s['vo']}）"
         seg_lines.append(seg)
     duration = int(plan.get("duration_sec") or options.get("duration") or 15)
@@ -1266,6 +1270,21 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
     # 生成前冻结进请求，交付时 creative_tasks 用同一份 spec 复核，两处结论始终一致。
     spec_ref = spec_video_target(platform, output_aspect, duration,
                                  ad_product=str(options.get("ad_product") or ""))
+    # V4.88：把同一份规格快照编译成文档要求的结构化提示词契约，随 meta 落库可追溯。
+    placement_spec = {
+        "platform": platform,
+        "ad_product": options.get("ad_product") or spec_ref.get("ad_product"),
+        "target_aspect": output_aspect,
+        "target_size": spec_ref.get("target_size"),
+        "duration": duration,
+        "spec_version": spec_ref.get("library_version"),
+        "verification": spec_ref.get("verification"),
+        "source_url": spec_ref.get("source_url"),
+    }
+    prompt_contract = build_prompt_contract(
+        media_type="video", analysis=analysis, brief=brief,
+        profile_key=str(a.get("industry_profile") or ""), plan=plan,
+        placement=placement_spec)
     prompt_parts: list[str] = []
     if spec_ref.get("duration_ok") is False:
         # 官方已核验的规则里，所选时长越界：不静默放行，写入提示交结果区/诊断展示
@@ -1281,7 +1300,9 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
     asset_gate = video_asset_gate(plan, req.reference_image)
     if options.get("prompt_hint"): prompt_parts.append("补充要求：" + str(options["prompt_hint"]))
     if req.brand_logo:
-        prompt_parts.append(f"品牌 Logo：{req.brand_logo}（如适用，将品牌标识有机融入画面与结尾定格，不得遮挡主体）")
+        # V4.88：Logo 只作品牌主体一致性参考；无字策略下不绘制图形 Logo / 角标 / 端卡。
+        prompt_parts.append(f"品牌参考资产：{req.brand_logo}（仅用于保持品牌主体一致；不叠加图形 Logo、水印或文字端卡）")
+    prompt_parts.append(render_video_contract_block(prompt_contract))
     prompt = "\n".join(prompt_parts)
 
     meta = {
@@ -1294,6 +1315,9 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         "aspect": output_aspect,
         # V4.84：把标准库冻结引用写入 meta，随任务落库、交付复核共用同一份
         "spec_ref": spec_ref,
+        # V4.88：提示词契约快照随任务落库，便于追溯每次出片实际使用的无字约束。
+        "prompt_contract_id": prompt_contract["prompt_id"],
+        "prompt_contract": prompt_contract,
     }
     # 图生视频：把参考图作为 image 带入（Kling / 通用模型据端点决定是否消费）
     if str(plan.get("mode") or options.get("mode") or "") == "image_to_video" and req.reference_image:
@@ -1327,6 +1351,7 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         "requested_aspect": requested_aspect, "duration": duration, "prompt": prompt,
         "meta": meta, "skip_note": skip_note, "forced": forced, "cfg_params": cfg_params,
         "claim_audit": claim_audit, "asset_gate": asset_gate, "spec_ref": spec_ref,
+        "prompt_contract": prompt_contract,
         "has_video_cfg": bool(cfg and cfg.api_key and cfg.base_url and cfg.model),
     }
 

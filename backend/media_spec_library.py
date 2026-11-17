@@ -338,6 +338,45 @@ def entries_for(platform: str, media: str = "", ad_product: str = "") -> list[Sp
             and (not ad_product or _norm(e.ad_product) == _norm(ad_product))]
 
 
+def image_targets(platform: str, ad_product: str = "", asset_role: str = "") -> list[dict]:
+    """V4.88：图片生成目标解析（与 video_target 对称，供任务矩阵与提示词共用）。
+
+    只返回本库已登记的图片规则；未知平台 / 未知广告产品返回空列表，调用方不得据此
+    编造尺寸，保留旧目录时也必须标注“标准库未登记”。
+    """
+    out: list[dict] = []
+    for e in entries_for(platform, "image", ad_product):
+        if asset_role and _norm(e.asset_role) != _norm(asset_role):
+            continue
+        out.append({
+            "platform": e.platform,
+            "ad_product": e.ad_product,
+            "asset_role": e.asset_role,
+            "sizes": list(e.sizes or ()),
+            "min_sizes": list(e.min_sizes or ()),
+            "aspect_ratios": list(e.aspect_ratios or ()),
+            "formats": list(e.formats or ()),
+            "max_bytes": e.max_bytes,
+            "verification": e.verification,
+            "verification_label": VERIFY_LABEL.get(e.verification, "未标注"),
+            "source_url": e.source_url,
+            "verified_on": e.verified_on,
+            "note": e.note,
+            "library_version": LIBRARY_VERSION,
+        })
+    return out
+
+
+def image_target_for_size(platform: str, size: str, ad_product: str = "",
+                          asset_role: str = "") -> dict | None:
+    """按目标像素尺寸找已登记规则；未登记返回 None，不把内部目录冒充官方规则。"""
+    key = _norm(size).replace(" ", "")
+    for row in image_targets(platform, ad_product, asset_role):
+        if any(_norm(s) == key for s in row["sizes"]):
+            return row
+    return None
+
+
 def video_target(platform: str, aspect: str = "", duration=None,
                  ad_product: str = "") -> dict:
     """视频生成目标解析：把平台/产品/用户选择映射为一份**冻结的规格目标**。

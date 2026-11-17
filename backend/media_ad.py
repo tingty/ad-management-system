@@ -29,6 +29,7 @@ import time
 import uuid
 import urllib.request
 import urllib.parse
+import re
 
 from providers import (get_llm_with_info, finalize_invocation,
                        get_image, parse_json, UPLOAD_DIR, _active_config)
@@ -44,6 +45,9 @@ from text_utils import fit_text, clip_report
 from industry_profiles import (resolve_profile, is_complete_sentence, missing_protected,
                                protected_fragments)
 from media_platforms import get_media_platform, SPEC_VERSION
+from media_spec_library import (image_targets as spec_image_targets,
+                                image_target_for_size as spec_image_target_for_size)
+from prompt_contract import build_prompt_contract, render_image_contract_block
 from batch_workspace import BatchWorkspace
 # V4.42 / F06：供应商尺寸能力目录、按比例构图与主体保护
 from image_capabilities import (plan_generation_size, composition_goal,
@@ -620,7 +624,9 @@ def build_overlay_text(headline: str, sub: str, cta: str, w: int, h: int,
 
 
 def _media_image_prompt(analysis: dict, platform: str, config: dict,
-                        brief: dict | None = None, db=None) -> str:
+                        brief: dict | None = None, db=None, *,
+                        overlay_mode: str = "pure", placement: dict | None = None,
+                        contract: dict | None = None) -> str:
     """V4.41 / F03 + F04：按「概念 → 视觉简报 → 提示词」顺序逐任务构建背景提示词。
 
     与 V4.40 的根本差别：本函数**收标题 / 证据 / 概念 / 版式**，且只在文案组合
@@ -670,6 +676,11 @@ def _media_image_prompt(analysis: dict, platform: str, config: dict,
     subject = (f"行业视觉约束（局部调整）: {profile['visual_subject']}。"
                f"表达重点: {'; '.join(profile['value_axes'])}。")
 
+    # V4.88：纯图片模式必须删除旧模板中的“为叠加文案留白”指令，避免与新契约互相打架。
+    if str(overlay_mode or "") == "pure":
+        base = re.sub(r"(?i)[,，]?\s*(?:keep|leave|reserve|保留|留出)[^.\n]*?"
+                      r"(?:negative space|copy space|文案区|留白)[^.\n]*[.。]?", "", base)
+        base = re.sub(r"(?im)^.*(?:negative space|copy space|文案区|留白).*$\n?", "", base)
     blocks = [base, subject]
     preset_text = visual_text_block(cfg)
     if preset_text:
@@ -678,6 +689,12 @@ def _media_image_prompt(analysis: dict, platform: str, config: dict,
     if brief:
         # F03：先确定概念再写画面；同一 concept_key 跨尺寸保持承诺一致
         blocks.append(brief_prompt_block(brief))
+    # V4.88：文档提示词契约。纯图片追加无字 / 满版主模板；叠加模式只追加底线约束。
+    contract = contract or build_prompt_contract(
+        media_type="image", analysis=analysis, brief=brief,
+        profile_key=profile.get("key") or "", placement=placement,
+        overlay_mode=overlay_mode)
+    blocks.append(render_image_contract_block(contract))
     needs = [b for b in blocks if b and b.strip()]
     return "\n".join(needs)
 
@@ -751,7 +768,11 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
     # 上线保留开关：strict_text=False 可临时回到旧的宽松排版（默认严格）
     strict_text = style_opts.get("strict_text", True) is not False
     spec = get_media_platform(platform) or {}
-    spec_sizes = spec.get("image_sizes") or ["1080x1080"]
+    # V4.88：图片任务矩阵以「素材标准库」为先；旧目录仅在本库未登记该平台时兜底，
+    # 且每项仍会标注标准库核验级别，不把内部目录冒充官方硬规则。
+    lib_targets = spec_image_targets(platform)
+    lib_sizes = sorted({s for t in lib_targets for s in (t.get("sizes") or ())})
+    spec_sizes = lib_sizes or spec.get("image_sizes") or ["1080x1080"]
 
     # F04：唯一一份解析结果。删除此前的 STYLE_TO_BG / COLOR_TO_PALETTE 重复映射，
     # 编辑过的预设文本、调色板与版式都从这里进入文案与画面。
@@ -872,13 +893,23 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 # 小横幅没有可用的主体区，不假称已叠加商品图
                 brief["capability_note"] = (capability_note +
                                             " 本版位为小横幅，无可用主体区，未叠加商品图。")
-            # V4.42 / F06：宽高作为一个比例整体选供应商已声明的尺寸；
-            # 同时把「主体放在安全区、给文字留白」的构图目标写进文生图提示词。
+            # V4.42 / F06 + V4.88：宽高作为一个比例整体选供应商已声明的尺寸；
+            # 纯图片写满版构图目标，叠加模式仍保留「主体保护 + 文字留白」旧策略。
             cap_key = getattr(img, "capability_key", "template") if img is not None else "template"
             cap_params = (img_cfg.params if img_cfg else None) or {}
             gen_plan = plan_generation_size(cap_key, w, h, cap_params)
-            bg_prompt = (_media_image_prompt(analysis, platform, config, brief, db)
-                         + "\nComposition goal: " + composition_goal(w, h, layout))
+            lib_match = spec_image_target_for_size(
+                platform, size, ad_product=slot.get("ad_product") or "",
+                asset_role=slot.get("asset_role") or "")
+            contract = build_prompt_contract(
+                media_type="image", analysis=analysis, brief=brief,
+                profile_key=profile.get("key") or "", placement=slot,
+                overlay_mode=overlay_mode)
+            bg_prompt = (_media_image_prompt(analysis, platform, config, brief, db,
+                                             overlay_mode=overlay_mode, placement=slot,
+                                             contract=contract)
+                         + "\nComposition goal: " + composition_goal(
+                             w, h, layout, overlay_mode=overlay_mode))
             phash = prompt_hash(bg_prompt)
 
             meta = {
@@ -895,6 +926,18 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 "creative_config_id": config["config_id"],
                 "request_size": gen_plan["request_size"],
                 "target_size": [w, h],
+                # V4.88：提示词契约随资产落库；标准库未登记时明确标注，不伪造核验级别。
+                "prompt_contract_id": contract["prompt_id"],
+                "prompt_contract": contract,
+                "spec_library": {
+                    "library_version": lib_match.get("library_version") if lib_match else None,
+                    "verification": (lib_match or {}).get("verification") or "C",
+                    "verification_label": (lib_match or {}).get("verification_label")
+                    or "标准库未登记 / 待确认",
+                    "source_url": (lib_match or {}).get("source_url"),
+                    "note": (lib_match or {}).get("note")
+                    or "该尺寸来自旧展示目录，素材标准库未登记，不按官方硬规则处理。",
+                },
                 "size_capability": {
                     "provider": gen_plan["provider"],
                     "needs_outpaint": gen_plan["needs_outpaint"],

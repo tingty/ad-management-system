@@ -149,9 +149,18 @@ def plan_generation_size(provider_key: str, target_w: int, target_h: int,
     }
 
 
-def composition_goal(target_w: int, target_h: int, layout: str = "hero") -> str:
-    """给文生图提示词的构图目标：主体位置 + 文字留白，避免主体被压到裁切线上。"""
+def composition_goal(target_w: int, target_h: int, layout: str = "hero",
+                     overlay_mode: str = "text_button") -> str:
+    """给文生图提示词的构图目标。
+
+    V4.88：纯图片模式按文档要求改为满版真实场景，不再要求文字留白；叠加模式保持
+    原有主体保护 + 文案区策略，不改变现有界面选项或排版行为。
+    """
     w, h = max(1, int(target_w)), max(1, int(target_h))
+    if str(overlay_mode or "") == "pure":
+        return ("Full-bleed composition: extend useful real environment to all four edges; "
+                "keep the complete main subject and key action inside the actual placement safe area; "
+                "no empty copy zone, no reserved blank area, no solid or blurred padding.")
     r = _ratio(w, h)
     if r >= EXTREME_RATIO or r <= 1.0 / EXTREME_RATIO:
         return ("Extreme aspect ratio: keep the full main subject inside a compact central "
