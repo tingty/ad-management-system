@@ -434,15 +434,16 @@ _CW_ANALYZE_SYS = (
 
 _CW_ROUTES_SYS = (
     "你是资深的出海效果广告创意策略师。基于产品分析结论、项目简报与目标媒体平台，"
-    "规划 3 条差异化的创意概念路线（概念级，不逐平台拆分）。只返回 JSON："
+    "规划【N】条差异化的创意概念路线（概念级，不逐平台拆分；【N】由 user_prompt 中的 count 给定，1–10）。只返回 JSON："
     "{\"title\": \"本次创意路线主题\","
     " \"routes\": ["
     "   {\"key\": \"A\", \"name\": \"路线名\", \"description\": \"路线说明（切入方式与表达）\", \"tags\": [\"标签1\",\"标签2\"], \"angle\": \"切入角度\"},"
     "   {\"key\": \"B\", ...},"
-    "   {\"key\": \"C\", ...}"
+    "   ..."
     " ]}"
-    "要求：routes 恰为 3 条；key 依次为 A/B/C；每条路线要有清晰差异（如转化导向 / 生活方式 / 场景叙事）；"
-    "tags 2-3 个；不要编造数据。"
+    "要求：routes 条数恰好等于 count；key 从 A 开始按字母顺序依次为 A/B/C/…/J；"
+    "每条路线要有清晰差异（覆盖转化导向 / 生活方式 / 场景叙事 / 痛点对比 / 功能证明 / 情绪共鸣等不同角度），"
+    "不得复用同一角度换词；tags 2-3 个；不要编造数据。"
 )
 
 # V4.66 创意工作台·视频素材创作区：对话式分镜策划
@@ -715,13 +716,21 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
 @router.post("/cw/routes", response_model=CWRoutesResult)
 async def api_cw_routes(req: CWRoutesRequest, db: Session = Depends(get_db),
                         user: User = Depends(require_roles(*CAN_EDIT))):
-    """创意工作台·创意路线：产品分析 + 简报 + 平台 → 大模型规划 3 条创意概念路线；写回创意方案。"""
+    """创意工作台·创意路线：产品分析 + 简报 + 平台 → 大模型规划 N 条创意概念路线；写回创意方案。
+
+    V4.96：count 1–10，默认 3 保持旧调用兼容；创意工作台前端显式传 10。
+    """
     plan_id = req.plan_id
     platforms = [str(p).strip() for p in (req.platforms or []) if str(p).strip()]
     analysis = req.analysis or {}
     brief = req.brief or {}
+    try:
+        count = max(1, min(10, int(req.count or 3)))
+    except (TypeError, ValueError):
+        count = 3
     llm, info = get_llm_with_info(db, "analysis")
-    user_prompt = json.dumps({"analysis": analysis, "brief": brief, "platforms": platforms}, ensure_ascii=False)
+    user_prompt = json.dumps({"analysis": analysis, "brief": brief, "platforms": platforms,
+                              "count": count}, ensure_ascii=False)
     try:
         resp = await llm.chat(_CW_ROUTES_SYS, user_prompt)
         parsed = parse_json(resp) or {}
@@ -729,7 +738,7 @@ async def api_cw_routes(req: CWRoutesRequest, db: Session = Depends(get_db),
     except Exception:
         parsed, info = {}, finalize_invocation(info, llm, False)
     routes = []
-    for r in (parsed.get("routes") or [])[:3]:
+    for r in (parsed.get("routes") or [])[:count]:
         if isinstance(r, dict):
             routes.append({
                 "key": str(r.get("key") or "").strip(),
@@ -739,20 +748,26 @@ async def api_cw_routes(req: CWRoutesRequest, db: Session = Depends(get_db),
                 "angle": str(r.get("angle") or "").strip(),
                 "selected": True,
             })
-    keys = ["A", "B", "C"]
+    keys = [chr(65 + i) for i in range(10)]
     for i, r in enumerate(routes):
         if not r["key"]:
-            r["key"] = keys[i] if i < 3 else chr(65 + i)
-    # Mock / 解析失败兜底
+            r["key"] = keys[i] if i < len(keys) else chr(65 + i)
+    # Mock / 解析失败兜底：10 条差异化角度，按 count 截取（不伪造产品事实）
     if not routes:
-        routes = [
-            {"key": "A", "name": "痛点对比实验", "description": "用强烈视觉对比演示使用前后差异，前三秒制造悬念。",
-             "tags": ["转化导向", "产品演示"], "angle": "前后对比", "selected": True},
-            {"key": "B", "name": "专注力超能力", "description": "将产品塑造成工作与生活中的效率装备。",
-             "tags": ["生活方式", "情绪价值"], "angle": "效率叙事", "selected": True},
-            {"key": "C", "name": "续航自由出发", "description": "通过连续场景证明续航，强化产品信任。",
-             "tags": ["场景叙事", "功能利益"], "angle": "场景证明", "selected": True},
+        fallback = [
+            ("痛点对比实验", "用强烈视觉对比演示使用前后差异，前三秒制造悬念。", ["转化导向", "产品演示"], "前后对比"),
+            ("专注力超能力", "将产品塑造成工作与生活中的效率装备。", ["生活方式", "情绪价值"], "效率叙事"),
+            ("续航自由出发", "通过连续场景证明续航，强化产品信任。", ["场景叙事", "功能利益"], "场景证明"),
+            ("晨间日常切片", "以清晨日常切入，展示产品自然融入生活节奏。", ["生活方式", "日常场景"], "日常陪伴"),
+            ("细节微距特写", "用近景与材质细节传达做工与质感，建立品质感。", ["质感", "产品特写"], "质感证明"),
+            ("用户口碑现场", "以真实使用场景中的口碑表达传递可信度，不引用未确认数据。", ["信任背书", "口碑"], "社会认同"),
+            ("开箱第一视角", "以第一视角开箱呈现产品外观与核心功能。", ["开箱", "第一视角"], "沉浸体验"),
+            ("功能可视化", "把核心功能做成可视化演示，让卖点一眼看懂。", ["功能利益", "信息可视"], "功能演示"),
+            ("户外挑战验证", "在户外与出行场景中验证产品的可靠性与便携性。", ["场景叙事", "挑战验证"], "极限验证"),
+            ("价值锚定对照", "以使用场景与长期价值做对照，突出物有所值，不编造价格数字。", ["价值导向", "转化导向"], "价值锚定"),
         ]
+        routes = [{"key": keys[i], "name": n, "description": d, "tags": t, "angle": a, "selected": True}
+                  for i, (n, d, t, a) in enumerate(fallback[:count])]
     result = {"title": str(parsed.get("title") or "创意路线规划").strip(),
               "routes": routes, "model_info": info, "source": info.get("source", "local")}
     if plan_id:

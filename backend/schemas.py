@@ -370,11 +370,15 @@ class CWAnalysisResult(BaseModel):
 
 
 class CWRoutesRequest(BaseModel):
-    """创意工作台·创意路线请求：产品分析 + 所选平台 + 项目简报 → 大模型规划 3 条创意概念路线。"""
+    """创意工作台·创意路线请求：产品分析 + 所选平台 + 项目简报 → 大模型规划创意概念路线。
+
+    V4.96：新增 count（1–10，默认 3 保持既有调用兼容）；创意工作台前端显式传 10。
+    """
     plan_id: Optional[int] = None
     analysis: dict = {}
     platforms: List[str] = []
     brief: dict = {}
+    count: int = 3
 
 
 # ----------------------------- V4.61 / B4：创意工作台「素材沉淀库」 -----------------------------
@@ -407,7 +411,7 @@ class CwLibraryCreate(BaseModel):
 
 class CWRoute(BaseModel):
     """单条创意路线（概念级，非逐平台）。"""
-    key: str = ""                    # A / B / C
+    key: str = ""                    # A–J（V4.96 起最多 10 条）
     name: str = ""
     description: str = ""
     tags: List[str] = []
@@ -416,7 +420,7 @@ class CWRoute(BaseModel):
 
 
 class CWRoutesResult(BaseModel):
-    """3 条创意路线结果。"""
+    """创意路线结果（V4.96：条数由请求 count 决定，最多 10 条）。"""
     model_config = {"protected_namespaces": ()}
     id: Optional[int] = None
     title: str = ""

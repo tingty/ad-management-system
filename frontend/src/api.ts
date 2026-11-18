@@ -1080,7 +1080,7 @@ export const api = {
   // V4.59 / B1：支持 demo_mode（演示模式开关，仅开启时返回样例数据并标注 source=demo）
   cwAnalyze: (payload: { url?: string; text?: string; platforms: string[]; demo_mode?: boolean }) =>
     req<any>('/api/cw/analyze', { method: 'POST', body: JSON.stringify(payload) }),
-  cwRoutes: (payload: { plan_id?: number; analysis: any; platforms: string[]; brief: any }) =>
+  cwRoutes: (payload: { plan_id?: number; analysis: any; platforms: string[]; brief: any; count?: number }) =>
     req<any>('/api/cw/routes', { method: 'POST', body: JSON.stringify(payload) }),
   // V4.61 / B4：创意工作台「素材沉淀库」（参考图 / 产品 / 品牌）增查删
   cwLibrary: (params: { kind?: string; limit?: number; offset?: number } = {}) =>

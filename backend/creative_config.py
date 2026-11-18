@@ -16,6 +16,7 @@ import json
 import re
 
 from presets import build_directives, DIRECTION_TO_TEMPLATE
+from image_prompt_rule import build_image_prompt_rule
 from industry_profiles import scene_policy as resolve_scene_policy
 from claims import EvidenceSnapshot
 
@@ -96,6 +97,16 @@ def resolve_creative_config(style_opts: dict | None, lang: str = "en",
     if isinstance(so.get("styles"), list) and so["styles"]:
         design["styles"] = [_clean(x) for x in so["styles"] if _clean(x)][:3]
 
+    # V4.96：创意工作台把「所选路线 + 补充指令」作为结构化的 creative_plan 传入，
+    # 由本层统一生成规则并计入 config 快照；任何调用点不得自行拼这份规则。
+    creative_plan = so.get("creative_plan")
+    prompt_rule = build_image_prompt_rule(
+        routes=(creative_plan or {}).get("routes") if isinstance(creative_plan, dict) else None,
+        supplement=(creative_plan or {}).get("supplement") if isinstance(creative_plan, dict) else "",
+        platform=(creative_plan or {}).get("platform") if isinstance(creative_plan, dict) else "",
+        overlay_mode=(creative_plan or {}).get("overlay_mode") if isinstance(creative_plan, dict) else "pure",
+    )
+
     template = _clean(d.get("template"))
     layout_hint = TEMPLATE_TO_LAYOUT.get(template, "")
     layout = _clean(so.get("layout"))
@@ -126,6 +137,7 @@ def resolve_creative_config(style_opts: dict | None, lang: str = "en",
         "custom_fields": custom,
         "strategy": strategy,
         "visual": visual,
+        "prompt_rule": prompt_rule,
     }
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()

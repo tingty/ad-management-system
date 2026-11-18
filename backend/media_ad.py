@@ -48,6 +48,7 @@ from media_platforms import get_media_platform, SPEC_VERSION
 from media_spec_library import (image_targets as spec_image_targets,
                                 image_target_for_size as spec_image_target_for_size)
 from prompt_contract import build_prompt_contract, render_image_contract_block
+from image_prompt_rule import render_image_prompt_rule
 from image_content_guard import inspect_image_content
 from batch_workspace import BatchWorkspace
 # V4.42 / F06：供应商尺寸能力目录、按比例构图与主体保护
@@ -690,6 +691,11 @@ def _media_image_prompt(analysis: dict, platform: str, config: dict,
     if preset_text:
         # F04：direction_text / style_text / color_text / design_prompt 原样进供应商请求
         blocks.append("[ResolvedCreativeConfig / F04] " + preset_text)
+    # V4.96：所选创意规划 + 用户补充指令的唯一规则块；放在契约之前，
+    # 让 V4.88 零文字契约作为最后一道兜底，避免规则里的措辞冲淡契约。
+    rule_text = render_image_prompt_rule(cfg.get("prompt_rule"))
+    if rule_text:
+        blocks.append(rule_text)
     if brief:
         # F03：先确定概念再写画面；同一 concept_key 跨尺寸保持承诺一致
         blocks.append(brief_prompt_block(brief))
@@ -933,6 +939,12 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 # V4.88：提示词契约随资产落库；标准库未登记时明确标注，不伪造核验级别。
                 "prompt_contract_id": contract["prompt_id"],
                 "prompt_contract": contract,
+                # V4.96：统一提示词规则快照（所选路线 + 补充指令），rule_hash 可比对规则变更
+                "prompt_rule": {
+                    "rule_hash": ((config.get("prompt_rule") or {}).get("rule_hash") or ""),
+                    "route_keys": list((config.get("prompt_rule") or {}).get("route_keys") or []),
+                    "version": str((config.get("prompt_rule") or {}).get("version") or ""),
+                },
                 "spec_library": {
                     "library_version": lib_match.get("library_version") if lib_match else None,
                     "verification": (lib_match or {}).get("verification") or "C",

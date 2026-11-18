@@ -250,6 +250,8 @@ export default function CreativeWorkbench() {
   const [landing, setLanding] = useState<any>(null) // 生成后端所需的 LandingAnalysis
   const [planId, setPlanId] = useState<number | null>(null)
   const [routes, setRoutes] = useState<Route[]>([])
+  // V4.96：图片专用补充创意指令（原绑定 vs.options.prompt_hint 属视频状态，图片链路读不到）
+  const [imageSupplement, setImageSupplement] = useState('')
   const [analysisValid, setAnalysisValid] = useState(false)  // V4.70 自检 5.1：分析框架完整性
 
   const [assets, setAssets] = useState<any[]>([])
@@ -518,8 +520,10 @@ export default function CreativeWorkbench() {
       setProgressPct(46); setProgressText('47% · 正在提取核心利益点')
       // V4.58 / B2：移除二次模型调用（landingAnalysis）。cwAnalyze 已返回统一分析来源 `analysis`，
       // 路线规划与素材生成均以此为唯一依据，避免「两次模型理解」且 landing 失败被静默 catch 成空。
-      const routeRes = await api.cwRoutes({ plan_id: cwRes?.id, analysis: cwRes?.analysis || {}, platforms: selected, brief: cwRes?.brief || {} }).catch(() => ({ routes: cwRes?.routes || [] }))
-      setRoutes((routeRes?.routes || cwRes?.routes || []).map((r: any) => ({ ...r, selected: r.selected !== false })))
+      // V4.96：创意工作台显式请求 10 条路线；接口默认仍为 3，保持其他调用兼容。
+      const routeRes = await api.cwRoutes({ plan_id: cwRes?.id, analysis: cwRes?.analysis || {}, platforms: selected, brief: cwRes?.brief || {}, count: 10 }).catch(() => ({ routes: cwRes?.routes || [] }))
+      // V4.96：默认不勾选，由用户按需求选择（与「每条路线各出一组」策略呼应）
+      setRoutes((routeRes?.routes || cwRes?.routes || []).map((r: any) => ({ ...r, selected: false })))
       setProgressPct(100); setProgressText('分析完成')
       // V4.70 自检 5.1：分析框架不完整时不进入第二步，提示重新分析
       if (!isFrameOk(cwRes)) {
@@ -642,10 +646,22 @@ export default function CreativeWorkbench() {
           }
           setProgressText(`正在为 ${p} · ${route?.name || '默认'} 生成推广图片…`)
           const slots = sizes.map(size => ({ size, placement: p }))
+          // V4.96：不再把路线拆散塞进 creative_direction / content_style，
+          // 改为把「当前主干路线 + 其余勾选路线 + 图片补充指令」交给后端统一生成唯一规则。
           const style_opts: any = {
-            creative_direction: `${route?.name || ''}（${route?.angle || ''}）`.replace(/[（）\s]+$/, ''),
-            content_style: `${route?.description || ''}；${((route?.tags) || []).join('、')}`.replace(/^[；\s]+|[；\s]+$/g, ''),
+            creative_direction: '',
+            content_style: '',
             color_scheme: '',
+            creative_plan: {
+              // 当前路线置首 = 本组主干，其余勾选路线作为修饰（每条路线各出一组）
+              routes: ([route, ...activeRoutes.filter(r => r !== route)].filter(Boolean) as any[]).map(r => ({
+                key: r.key, name: r.name, angle: r.angle,
+                description: r.description, tags: r.tags || [],
+              })),
+              supplement: imageSupplement || '',
+              platform: p,
+              overlay_mode: overlayMode,
+            },
           }
           if (refPath) style_opts.reference_image = refPath
           // V4.70：品牌 Logo 注入生成链路（勾选时）
@@ -1202,7 +1218,14 @@ export default function CreativeWorkbench() {
                       <h3 className="cwb-sub">图片创意规划（{routes.length} 条路线）</h3>
                       <span className="cwb-tag-reco">基于网站分析</span>
                     </div>
-                    <p className="cwb-reco-note">已按 {selectedPlatform || '所选媒体'} 的素材规格自动适配，勾选要生成的路线</p>
+                    <div className="cwb-route-toolbar">
+                      <p className="cwb-reco-note">已按 {selectedPlatform || '所选媒体'} 的素材规格自动适配，每条勾选路线各出一组图</p>
+                      <div className="cwb-route-actions">
+                        <span className="cwb-route-count">已选 {routes.filter(r => r.selected).length} / {routes.length}</span>
+                        <button type="button" className="cwb-link-btn" onClick={() => setRoutes(rs => rs.map(r => ({ ...r, selected: true })))}>全选</button>
+                        <button type="button" className="cwb-link-btn" onClick={() => setRoutes(rs => rs.map(r => ({ ...r, selected: false })))}>清空</button>
+                      </div>
+                    </div>
                     <div className="cwb-routes">
                       {routes.map((r, i) => (
                         <div className={`cwb-route ${r.selected ? 'on' : ''}`} key={i} onClick={() => updateRoute(i, 'selected', !r.selected)}>
@@ -1211,6 +1234,7 @@ export default function CreativeWorkbench() {
                             <b>{r.name || '未命名路线'}</b>
                             <span className={`cwb-check ${r.selected ? 'on' : ''}`} />
                           </div>
+                          {r.angle && <p className="cwb-route-angle">切入角度：{r.angle}</p>}
                           <p>{r.description}</p>
                           <div className="cwb-route-tags">
                             {(r.tags || []).map((t: string, j: number) => <span key={j} className="cwb-rtag">{t}</span>)}
@@ -1220,9 +1244,11 @@ export default function CreativeWorkbench() {
                     </div>
                     <div className="cwb-supplement">
                       <label className="cwb-field-label">补充创意指令（可选）</label>
-                      <textarea className="cwb-supplement-input" placeholder="例如：强调续航卖点、采用生活方式叙事、突出价格优势…"
-                        value={vs.options.prompt_hint || ''}
-                        onChange={e => setVs(s => ({ ...s, options: { ...s.options, prompt_hint: e.target.value } }))} />
+                      <textarea className="cwb-supplement-input" maxLength={500}
+                        placeholder="例如：强调续航卖点、采用生活方式叙事、突出价格优势…（仅调整构图 / 光线 / 色调 / 场景 / 镜头语言等视觉表达，不会绘制到画面中）"
+                        value={imageSupplement}
+                        onChange={e => setImageSupplement(e.target.value)} />
+                      <p className="cwb-supplement-hint">仅作用于图片视觉表达，与所选路线合并为统一提示词规则；不生成画面文字，不编造商品事实与数字。</p>
                     </div>
                   </div>
                 )}
@@ -1241,6 +1267,9 @@ export default function CreativeWorkbench() {
                       ? `分镜中有 ${vs.plan.claim_audit?.violations?.length || 0} 处文案未通过证据校验，请回到分镜规划修改后再生成（当前提交会被拦截，不产生费用）。`
                       : vs.plan?.asset_gate?.note}
                   </div>
+                )}
+                {hasImage && routes.some(r => r.selected) && (
+                  <p className="cwb-gen-note">本次将创建 {selected.length * routes.filter(r => r.selected).length} 个图片任务（{selected.length} 个平台 × {routes.filter(r => r.selected).length} 条路线）。</p>
                 )}
                 <div className="cwb-confirm">
                   <button className="cwb-gen-btn" onClick={batchGenerate}
