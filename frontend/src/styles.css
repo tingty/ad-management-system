@@ -1634,6 +1634,21 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cwb-copy-spec-badge.ok { color: #15803d; background: #e8f5ee; border: 1px solid #bbf7d0; }
 .cwb-copy-spec-badge.warn { color: #b45309; background: #fff7ed; border: 1px solid #fed7aa; }
 .cwb-copy-issue { font-size: 11.5px; color: #b45309; background: #fff7ed; border-radius: 6px; padding: 4px 8px; margin: 0 0 6px; }
+
+/* V4.95 文案卡片展示（对齐媒体后台文案面板：字段标题 + 信息图标 + 独立描边输入框） */
+.cwb-copy-cards { display: flex; flex-direction: column; gap: 26px; margin-top: 6px; }
+.cwb-copy-card-label { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
+.cwb-copy-card-label b { font-size: 17px; font-weight: 700; color: var(--text, #1f2937); }
+.cwb-copy-info { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: #334155; color: #fff; font-size: 12px; font-weight: 700; line-height: 1; cursor: help; flex: none; }
+.cwb-copy-card-count { margin-left: auto; font-size: 12px; color: var(--muted, #64748b); background: var(--card, #fff); border: 1px solid var(--border, #e5e7eb); padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
+.cwb-copy-card-count.over { color: #dc2626; border-color: #fecaca; font-weight: 600; }
+.cwb-copy-card-box { border: 1px solid var(--border, #d1d5db); border-radius: 10px; background: var(--card, #fff); padding: 15px 18px; min-height: 58px; box-sizing: border-box; }
+.cwb-copy-card-box:hover { border-color: #94a3b8; }
+.cwb-copy-card-box.over { border-color: #f87171; background: rgba(220, 38, 38, .04); }
+.cwb-copy-card-val { font-size: 16px; line-height: 1.55; color: var(--text, #1f2937); word-break: break-word; white-space: pre-wrap; }
+.cwb-copy-card-val + .cwb-copy-card-val { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border, #e5e7eb); }
+.cwb-copy-card-box.over .cwb-copy-card-val { color: #b91c1c; }
+
 .cwb-copy-workspace .cwb-copy-platform { padding: 12px 0; }
 .cwb-copy-workspace .cwb-copy-k { flex-basis: 150px; }
 

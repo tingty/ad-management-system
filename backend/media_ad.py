@@ -79,9 +79,11 @@ def _supplier_semaphore() -> asyncio.Semaphore:
 # ----------------------------- 文案字段结构（含 TikTok） -----------------------------
 # 与 creative.COPY_SCHEMA 保持一致，并补齐 specs_data 缺失的 TikTok。
 MEDIA_COPY_SCHEMA = {
+    # V4.95：展示标题对齐 Meta 广告后台原文案面板（正文 / 广告标题 / 描述）；
+    # key / 字数上限 / count 保持不变，仅显示名按媒体平台术语定义。
     "Meta": [
-        {"key": "primary_text", "label": "主文案", "max": 125, "count": 1},
-        {"key": "headline", "label": "标题", "max": 40, "count": 3},
+        {"key": "primary_text", "label": "正文", "max": 125, "count": 1},
+        {"key": "headline", "label": "广告标题", "max": 40, "count": 3},
         {"key": "description", "label": "描述", "max": 30, "count": 1},
         {"key": "cta", "label": "CTA 按钮", "max": 24, "count": 1},
     ],
@@ -436,12 +438,13 @@ def _char_table(fields: dict, schema) -> list:
     rows = []
     for f in schema:
         v = fields.get(f["key"])
+        # V4.95：每行带 key，前端按字段 key 精确匹配字数（旧数据无 key 时仍按 label 匹配）。
         if isinstance(v, list):
             for i, x in enumerate(v, 1):
-                rows.append({"field": f"{f['label']} {i}", "text": str(x),
+                rows.append({"key": f["key"], "field": f"{f['label']} {i}", "text": str(x),
                              "len": len(str(x)), "max": f["max"], "over": len(str(x)) > f["max"]})
         elif v:
-            rows.append({"field": f["label"], "text": str(v),
+            rows.append({"key": f["key"], "field": f["label"], "text": str(v),
                          "len": len(str(v)), "max": f["max"], "over": len(str(v)) > f["max"]})
     return rows
 

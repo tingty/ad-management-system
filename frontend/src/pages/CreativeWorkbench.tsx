@@ -47,6 +47,51 @@ function statusClass(s: string) {
   if (['running', 'submitting', 'queued', 'generating'].includes(s)) return 'warn'
   return 'off'
 }
+
+/* V4.95：文案展示对齐媒体后台文案面板（截图样式）。
+   字段标题按媒体平台的 schema 定义（如 Meta：正文 / 广告标题 / 描述 / CTA 按钮），
+   每个字段一个独立描边输入框；字数统计按字段 key 精确匹配，兼容旧数据按 label 匹配。 */
+function CopyFieldCards({ c }: { c: any }) {
+  const schema: any[] = c.schema || []
+  const fields = c.fields || {}
+  const charRows: any[] = c.char_table || []
+  const labelMap: Record<string, string> = {}
+  const maxMap: Record<string, number> = {}
+  for (const s of schema) { labelMap[s.key] = s.label; if (s.max) maxMap[s.key] = Number(s.max) }
+  // 按 schema 顺序展示，保证 Meta 依次是 正文 → 广告标题 → 描述 → CTA
+  const keys = schema.map(s => s.key).filter(k => fields[k] != null && String(fields[k]).trim() !== '')
+  for (const k of Object.keys(fields)) {
+    if (!keys.includes(k) && fields[k] != null && String(fields[k]).trim() !== '') keys.push(k)
+  }
+  return (
+    <div className="cwb-copy-cards">
+      {keys.map(k => {
+        const v = fields[k]
+        const vals = Array.isArray(v) ? v.filter(Boolean).map(String) : [String(v)]
+        const rows = charRows.filter(r => r.key === k || (!r.key && r.field === (labelMap[k] || k)))
+        const len = rows.length ? Math.max(...rows.map(r => Number(r.len) || 0)) : 0
+        const max = rows.length ? (Number(rows[0].max) || maxMap[k] || 0) : (maxMap[k] || 0)
+        const over = rows.some(r => r.over) || (max > 0 && len > max)
+        const label = labelMap[k] || k
+        const hint = max > 0
+          ? `${label}：最多 ${max} 字符，当前 ${len} 字符（按 ${c.ad_product || '媒体平台'} 文案规则）`
+          : `${label}：按 ${c.ad_product || '媒体平台'} 文案规则生成`
+        return (
+          <div className="cwb-copy-card" key={k}>
+            <div className="cwb-copy-card-label">
+              <b>{label}</b>
+              <span className="cwb-copy-info" title={hint} aria-label={hint}>ⓘ</span>
+              {max > 0 && <span className={`cwb-copy-card-count ${over ? 'over' : ''}`}>{len}/{max}</span>}
+            </div>
+            <div className={`cwb-copy-card-box ${over ? 'over' : ''}`}>
+              {vals.map((s, i) => <div className="cwb-copy-card-val" key={i}>{s}</div>)}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 // 媒体平台兜底清单：当接口未返回（或返回结构异常）时，保证投放平台选择器始终可见
 // 规范平台名统一为 Meta（Facebook / fb / instagram / ig 为兼容别名），避免 Meta/Facebook 不一致
 const DEFAULT_PLATFORMS = ['Meta', 'Google', 'Unity', 'Adsterra']
@@ -1255,10 +1300,6 @@ export default function CreativeWorkbench() {
                 )}
                 {Object.entries(copiesByPlatform).map(([p, c]) => {
                   const specOk = c.validation?.valid !== false && c.validation?.status !== 'invalid'
-                  const charMap: Record<string, { len: number; max: number; over: boolean }> = {}
-                  for (const row of (c.char_table || [])) charMap[row.field] = { len: row.len, max: row.max, over: row.over }
-                  const schemaLabel: Record<string, string> = {}
-                  for (const s of (c.schema || [])) schemaLabel[s.key] = s.label
                   return (
                     <div className="cwb-copy-platform" key={p}>
                       <div className="cwb-copy-pl">
@@ -1278,17 +1319,8 @@ export default function CreativeWorkbench() {
                       {(c.validation?.issues || []).filter((i: any) => i.level === 'error' || i.level === 'warning').slice(0, 3).map((i: any, ii: number) => (
                         <div className="cwb-copy-issue" key={ii}>{i.message}</div>
                       ))}
-                      <div className="cwb-copy-fields">
-                        {Object.entries(c.fields || {}).filter(([, v]) => v != null && v !== '').map(([k, v]) => {
-                          const cm = charMap[k]
-                          return (
-                            <div className="cwb-copy-field" key={k}>
-                              <span className="cwb-copy-k">{schemaLabel[k] || k}{cm ? ` · ${cm.len}/${cm.max}` : ''}</span>
-                              <span className={`cwb-copy-v ${cm?.over ? 'over' : ''}`}>{Array.isArray(v) ? (v as any[]).filter(Boolean).join(' / ') : String(v)}</span>
-                            </div>
-                          )
-                        })}
-                      </div>
+                      {/* V4.95：按媒体平台字段定义 + 截图样式展示 */}
+                      <CopyFieldCards c={c} />
                     </div>
                   )
                 })}
@@ -1325,14 +1357,8 @@ export default function CreativeWorkbench() {
                           )}
                           <button className="cwb-link-btn sm" onClick={() => downloadCopy(p)}>下载 {p}</button>
                         </div>
-                        <div className="cwb-copy-fields">
-                          {Object.entries(c.fields || {}).filter(([, v]) => v != null && v !== '').map(([k, v]) => (
-                            <div className="cwb-copy-field" key={k}>
-                              <span className="cwb-copy-k">{k}</span>
-                              <span className="cwb-copy-v">{Array.isArray(v) ? (v as any[]).filter(Boolean).join(' / ') : String(v)}</span>
-                            </div>
-                          ))}
-                        </div>
+                        {/* V4.95：与文案工作区一致，按平台字段定义 + 截图样式展示 */}
+                        <CopyFieldCards c={c} />
                       </div>
                     ))}
                   </div>
