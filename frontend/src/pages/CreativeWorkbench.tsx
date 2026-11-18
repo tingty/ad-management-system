@@ -174,8 +174,26 @@ export default function CreativeWorkbench() {
   // V4.61 / B4：品牌名（注入文案生成）
   const [selectedBrand, setSelectedBrand] = useState('')
 
-  // V4.70：素材类型（图片 / 视频 / 图片和视频），控制 Step2 规划与 Step3 工作区显隐与生成范围
-  const [materialType, setMaterialType] = useState<'image' | 'video' | 'both'>('both')
+  // V4.92：素材类型多选（文案 / 图片 / 视频），可任意组合；控制 Step2 规划与 Step3 工作区显隐与生成范围。
+  // 默认沿用原 both 行为（图片 + 视频），文案需用户主动勾选后才会生成。
+  type MaterialKind = 'copy' | 'image' | 'video'
+  const [materialTypes, setMaterialTypes] = useState<MaterialKind[]>(['image', 'video'])
+  const [mtOpen, setMtOpen] = useState(false)   // 多选下拉展开状态
+  const hasCopy = materialTypes.includes('copy')
+  const hasImage = materialTypes.includes('image')
+  const hasVideo = materialTypes.includes('video')
+  function toggleMaterial(k: MaterialKind) {
+    setMaterialTypes(prev => {
+      if (prev.includes(k)) {
+        // 至少保留一种素材类型，避免空提交
+        if (prev.length === 1) return prev
+        return prev.filter(x => x !== k)
+      }
+      const order: MaterialKind[] = ['copy', 'image', 'video']
+      return order.filter(x => prev.includes(x) || x === k)
+    })
+  }
+  const materialLabel: Record<MaterialKind, string> = { copy: '文案', image: '图片', video: '视频' }
   // V4.70：品牌 Logo 注入生成链路开关（勾选→作为 brand_logo 传入图片/视频生成）
   const [injectLogo, setInjectLogo] = useState(false)
 
@@ -343,7 +361,16 @@ export default function CreativeWorkbench() {
     const vidCount = (vs.videos || []).length
 
     const stages: CwTaskStage[] = []
-    if (materialType !== 'video') {
+    // V4.92：文案阶段（同步模型调用，随任务开始即视为完成）
+    if (hasCopy) {
+      const copyCount = Object.keys(copiesByPlatform).length
+      stages.push({
+        key: 'copy',
+        label: copyCount > 0 ? `创意文案（${copyCount} 个平台）` : '创意文案',
+        status: copyCount > 0 ? 'done' : (view === 'generating' ? 'running' : 'pending'),
+      })
+    }
+    if (hasImage) {
       const st: CwStageStatus = imgTotal === 0
         ? 'running'
         : (imgDone + imgFailed >= imgTotal ? (imgDone > 0 ? 'done' : 'failed') : 'running')
@@ -354,7 +381,7 @@ export default function CreativeWorkbench() {
         note: imgFailed ? `${imgFailed} 个任务失败` : '',
       })
     }
-    if (materialType !== 'image') {
+    if (hasVideo) {
       stages.push({
         key: 'video',
         label: vidCount > 0 ? `视频成片（${vidCount} 个）` : '视频成片',
@@ -367,7 +394,8 @@ export default function CreativeWorkbench() {
       statusText: progressText || '正在生成素材…',
       product: String((cw as any)?.title || (cw as any)?.analysis?.product || '').slice(0, 48),
       platforms: selected.slice(0, 3),
-      kind: materialType,
+      kind: (hasCopy ? (hasImage || hasVideo ? 'mixed' : 'copy')
+        : (hasImage && hasVideo ? 'both' : (hasVideo ? 'video' : 'image'))) as 'image' | 'video' | 'copy' | 'both' | 'mixed',
       stages,
       imageDone: imgDone,
       imageTotal: imgTotal,
@@ -383,17 +411,19 @@ export default function CreativeWorkbench() {
     if (getCwTask().status !== 'running') return
     const vidBatch = submittedBatch ? tasks.items.find(b => b.batch_id === submittedBatch) : null
     const vidActive = !!vidBatch && ['queued', 'running'].includes(vidBatch.status)
-    if (materialType !== 'image' && vidActive) {
+    if (hasVideo && vidActive) {
       cwTaskUpdate({ ...payload, statusText: '图片已出，视频在后台继续' })
       return
     }
-    const ok = imgDone > 0 || vidCount > 0
+    // V4.92：文案也是有效产出；只要任一已选类型有结果即视为完成。
+    const copyCount = Object.keys(copiesByPlatform).length
+    const ok = imgDone > 0 || vidCount > 0 || (hasCopy && copyCount > 0)
     cwTaskEnd(ok ? 'done' : 'failed', {
       ...payload,
-      statusText: ok ? '创作完成' : '本次未生成素材',
-      error: ok ? '' : (error || '本次生成未返回素材，请调整媒体或重试'),
+      statusText: ok ? '创作完成' : '本次未生成内容',
+      error: ok ? '' : (error || '本次生成未返回内容，请调整媒体或重试'),
     })
-  }, [view, progressPct, progressText, jobs, materialType, vs.generating, vs.videos, assets.length, selected, cw, error, submittedBatch, tasks.items])
+  }, [view, progressPct, progressText, jobs, materialTypes, hasCopy, hasImage, hasVideo, copiesByPlatform, vs.generating, vs.videos, assets.length, selected, cw, error, submittedBatch, tasks.items])
 
   function showToast(m: string) {
     setToast(m); window.setTimeout(() => setToast(t => (t === m ? null : t)), 3500)
@@ -464,14 +494,21 @@ export default function CreativeWorkbench() {
     return selected.length * 2
   }
 
-  async function generateImages(hid: number | null, batchId = ''): Promise<{ okImages: number; anyFailed: boolean; errs: string[] }> {
-    const errs: string[] = []
-    // V4.60 / B3：归一化为合法 LandingAnalysis（channels 转成 [{platform,reason}]），否则文案 / 出图端点会 422。
+  /** V4.92：归一化分析 + 注入品牌，供文案 / 图片 / 视频共用同一事实来源 */
+  function currentAnalysis() {
     const analysis = normalizeAnalysis(cw?.analysis)
-    // V4.61 / B4：若用户指定品牌，注入分析，使文案生成沿用该品牌（避免模型随意起名）
     if (selectedBrand && selectedBrand.trim()) analysis.brand = selectedBrand.trim()
-    // V4.60 / B3：先为每个平台生成广告文案（修复「文案为空」），并把参考图归一成 /files/ 本地路径。
-    const targets = selected
+    return analysis
+  }
+
+  /**
+   * V4.92：为所有选中平台生成广告文案（依据大模型 + 证据门）。
+   * 抽成纯数据 helper：文案现在是独立素材类型，不再因「纯图片」叠加模式被跳过。
+   * 返回 copiesByPlat（工作区展示）/ variantsByPlat（图片叠加用）/ copyFailures。
+   */
+  async function buildCopies(analysis: any, targets: string[]): Promise<{
+    copiesByPlat: Record<string, any>; variantsByPlat: Record<string, any[]>; copyFailures: Record<string, string>
+  }> {
     const copiesByPlat: Record<string, any> = {}
     const variantsByPlat: Record<string, any[]> = {}
     const copyFailures: Record<string, string> = {}
@@ -482,12 +519,13 @@ export default function CreativeWorkbench() {
     const pickFirstField = (...fields: any[]): string => { for (const fld of fields) { const v = firstNonEmpty(fld); if (v) return v } return '' }
     const copyIsInvalid = (cr: any): boolean => !!(cr?.validation && cr.validation.status === 'invalid')
     for (const p of targets) {
-      if (overlayMode === 'pure') { variantsByPlat[p] = []; continue }
       try {
         setProgressText(`正在为 ${p} 生成广告文案…`)
         const cr: any = await api.mediaCopy({ analysis, platform: p, lang: 'en' }).catch(() => null)
         if (cr && cr.fields && !copyIsInvalid(cr)) {
-          copiesByPlat[p] = { fields: cr.fields, schema: cr.schema, brand: cr.brand, model_info: cr.model_info, validation: cr.validation }
+          // V4.92：完整保留平台文案规格与校验结果——schema（字段/字数上限）、
+          // char_table（逐字段实测字数 vs 上限）、validation（是否符合平台规则）、ad_product（RSA/UAC 等细分）。
+          copiesByPlat[p] = { fields: cr.fields, schema: cr.schema, char_table: cr.char_table, ad_product: cr.ad_product, brand: cr.brand, model_info: cr.model_info, validation: cr.validation }
           const f = cr.fields
           variantsByPlat[p] = [{ headline: firstNonEmpty(f.headline ?? f.title), sub: pickFirstField(f.description, f.body, f.primary_text), cta: firstNonEmpty(f.cta), brand: firstNonEmpty(cr.brand), label: p }]
         } else {
@@ -495,6 +533,28 @@ export default function CreativeWorkbench() {
         }
       } catch { copyFailures[p] = '文案生成发生异常' }
     }
+    return { copiesByPlat, variantsByPlat, copyFailures }
+  }
+
+  /** V4.92：独立文案生成流程——「确认并批量生成」后按用户选择执行，结果写入文案工作区。 */
+  async function generateCopy(analysis: any): Promise<{ okCount: number; errs: string[]; data: any }> {
+    const data = await buildCopies(analysis, selected)
+    setCopiesByPlatform(data.copiesByPlat)
+    const brandSet = new Set<string>()
+    if (selectedBrand && selectedBrand.trim()) brandSet.add(selectedBrand.trim())
+    for (const p of Object.keys(data.copiesByPlat)) { const b = data.copiesByPlat[p]?.brand; if (b && String(b).trim()) brandSet.add(String(b).trim()) }
+    for (const b of brandSet) { api.addCwLibrary({ kind: 'brand', title: b, meta: { platforms: Object.keys(data.copiesByPlat) } }).catch(() => {}) }
+    const okCount = Object.keys(data.copiesByPlat).length
+    const errs = Object.entries(data.copyFailures).map(([p, m]) => `${p}：${m}`)
+    return { okCount, errs, data }
+  }
+
+  async function generateImages(hid: number | null, batchId = '', prebuilt?: Awaited<ReturnType<typeof buildCopies>>): Promise<{ okImages: number; anyFailed: boolean; errs: string[] }> {
+    const errs: string[] = []
+    // V4.60 / B3：归一化为合法 LandingAnalysis（channels 转成 [{platform,reason}]），否则文案 / 出图端点会 422。
+    const analysis = currentAnalysis()
+    // V4.92：文案数据优先复用「确认并批量生成」阶段已生成的结果，避免重复调用大模型。
+    const { copiesByPlat, variantsByPlat, copyFailures } = prebuilt || await buildCopies(analysis, selected)
     setCopiesByPlatform(copiesByPlat)
     const brandSet = new Set<string>()
     if (selectedBrand && selectedBrand.trim()) brandSet.add(selectedBrand.trim())
@@ -511,6 +571,7 @@ export default function CreativeWorkbench() {
     const collected: any[] = []
     const finalStates: string[] = []
     const capturedErrors: string[] = []
+    const targets = selected   // V4.92：重构文案 helper 后补回，图片任务矩阵仍按选中平台生成
     const totalJobs = targets.length * Math.max(1, activeRoutes.length)
     let done = 0
     try {
@@ -658,7 +719,7 @@ export default function CreativeWorkbench() {
 
   /** VideoStudio 的「生成 / 微调」统一走上面的持久任务提交；界面与按钮位置不变。 */
   async function submitVideoFromStudio(payload: { plan: any; options: any; refinement?: string }): Promise<boolean> {
-    if (materialType === 'image') return false
+    if (!hasVideo) return false
     if (imgBusy) {
       setError('图片任务正在生成，请等图片完成后再提交视频')
       return false
@@ -679,22 +740,25 @@ export default function CreativeWorkbench() {
   }
 
   async function batchGenerate() {
-    const doImg = materialType !== 'video'
-    const doVid = materialType !== 'image'
+    // V4.92：素材类型多选——文案 / 图片 / 视频可任意组合，按用户选择生成对应内容。
+    const doCopy = hasCopy
+    const doImg = hasImage
+    const doVid = hasVideo
+    if (!doCopy && !doImg && !doVid) { setError('请至少选择一种素材类型（文案 / 图片 / 视频）'); return }
     if (doImg && !routes.some(r => r.selected)) { setError('请至少选择一条图片创意路线'); return }
     if (doVid && (!vs.plan || !vs.plan.shots?.length)) { setError('请先在第二步完成视频分镜规划'); return }
-    setError(''); setView('generating'); setAssets([]); setJobs([]); setChecked({}); setProgressPct(0); setProgressText('正在创建素材任务…')
+    setError(''); setView('generating'); setAssets([]); setJobs([]); setChecked({}); setCopiesByPlatform({}); setProgressPct(0); setProgressText('正在创建素材任务…')
     cwTaskReset()   // V4.77：新一轮生成，任务常驻浮窗重新出现（此前手动关闭的抑制解除）
     let hid: number | null = null
     try { const h: any = await api.createCreationHistory({ analysis: cw?.analysis || {}, platform: selected[0] || '', lang: 'en' }).catch(() => null); hid = h?.id ?? null; setHistoryId(hid) } catch { /* 历史可选 */ }
     if (planId) await api.updateCreativePlan(planId, { status: 'generating', history_id: hid ?? undefined }).catch(() => {})
-    // V4.81：先建批次头，图片与视频子任务挂在同一次「创作」下（A10：图片先完成即可预览下载）
+    // V4.81 + V4.92：先建批次头，文案 / 图片 / 视频子任务挂在同一次「创作」下
     let batchId = ''
-    if (doImg || doVid) {
+    {
       const bh: any = await api.createCreativeTask({
         product_name: String((cw as any)?.title || (cw as any)?.analysis?.product || '').slice(0, 120),
         source_url: String((cw as any)?.snapshot?.final_url || input || ''),
-        material_types: [...(doImg ? ['image'] : []), ...(doVid ? ['video'] : [])],
+        material_types: [...(doCopy ? ['copy'] : []), ...(doImg ? ['image'] : []), ...(doVid ? ['video'] : [])],
         platforms: selected,
         draft_id: draftId,
       }).catch(() => null)
@@ -704,36 +768,49 @@ export default function CreativeWorkbench() {
         saveCwSession({ draftId, pendingBatch: pendingBatch || batchId, submittedBatch: batchId })
       }
     }
-    setProgressPct(10)
-    const imgRes = doImg ? await generateImages(hid, batchId) : { okImages: 0, anyFailed: false, errs: [] }
+    const analysis = currentAnalysis()
+    // V4.92：文案先行（用户勾选时）——依据大模型 + 证据门生成，写入文案工作区；
+    // 生成结果复用给图片叠加，避免同一批重复调用文案模型。
+    let copyData: Awaited<ReturnType<typeof buildCopies>> | undefined
+    let copyOk = 0
+    const copyErrs: string[] = []
+    if (doCopy) {
+      setProgressPct(8)
+      const cr = await generateCopy(analysis)
+      copyOk = cr.okCount; copyErrs.push(...cr.errs); copyData = cr.data
+      setProgressPct(doImg ? 25 : 60)
+    }
+    const imgRes = doImg ? await generateImages(hid, batchId, copyData) : { okImages: 0, anyFailed: false, errs: [] }
     setProgressPct(70)
     const vid = doVid ? await generateVideo(hid, batchId) : { ok: true, fail: null }
     const vidOk = doVid && !!vid.ok        // 提交成功 ≠ 出片成功：成片与否只认服务端任务结果
-    // V4.79 / G01：纯图片模式下 `vidOk` 曾恒为 true，图片全失败也会判定「创作完成，视频已生成」。
-    // 现在成功 = 真产出：要图片有图、要视频有成片。
-    const totalOk = imgRes.okImages > 0 || vidOk
+    // V4.92：成功 = 任一已选类型有真实产出（文案成条 / 图片有图 / 视频有成片）。
+    const totalOk = copyOk > 0 || imgRes.okImages > 0 || vidOk
     const vidQueued = doVid && !!vid.submitted
     setProgressPct(100)
-    setProgressText(vidQueued ? '图片已出，视频在后台继续' : (totalOk ? '创作完成' : '未出片'))
+    setProgressText(vidQueued ? '图片已出，视频在后台继续' : (totalOk ? '创作完成' : '未生成内容'))
     if (totalOk) {
+      const parts: string[] = []
+      if (copyOk > 0) parts.push(`文案 ${copyOk} 组`)
+      if (imgRes.okImages > 0) parts.push(`图片 ${imgRes.okImages} 张`)
       showToast(vidQueued
-        ? `任务已加入后台，可继续创作：图片 ${imgRes.okImages} 张已完成，视频在「任务」里继续生成`
-        : `创作完成：图片 ${imgRes.okImages} 张`)
+        ? `已加入后台：${parts.join('、') || '内容已生成'}，视频在「任务」里继续生成`
+        : `创作完成：${parts.join('、')}`)
       if (planId) await api.updateCreativePlan(planId, { status: 'done', asset_count: imgRes.okImages, history_id: hid ?? undefined }).catch(() => {})
       setView('result')
-    } else if (vidQueued && !imgRes.okImages) {
+    } else if (vidQueued && copyOk === 0 && imgRes.okImages === 0) {
       // 只有视频且已转入后台：不是失败，是「还没出片」，交给任务抽屉呈现真实阶段
       setError('')
       setView('result')
     } else {
-      const msgs = [...imgRes.errs]
+      const msgs = [...copyErrs, ...imgRes.errs]
       if (doVid && !vidOk && !vidQueued) {
         const f = vid.fail
         msgs.push(f ? `出片失败（${f.code}）：${f.message}`
           : '视频未提交成功（未配置视频模型，可改出分镜脚本）')
         if (f?.action) msgs.push('建议：' + f.action)
       }
-      setError(msgs.join('；') || '本次生成未返回素材，请调整媒体或重试')
+      setError(msgs.join('；') || '本次生成未返回内容，请调整媒体或重试')
       setView('result')
     }
   }
@@ -780,6 +857,29 @@ export default function CreativeWorkbench() {
   function downloadAllCopy() {
     downloadBlob('ad_copy_all.json', JSON.stringify(copiesByPlatform, null, 2), 'application/json')
   }
+  // V4.92：文案一键复制（优先剪贴板 API，失败回退隐藏 textarea，兼容非安全上下文）
+  function copyText(text: string, okMsg = '已复制到剪贴板') {
+    const fallback = () => {
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'
+        document.body.appendChild(ta); ta.select(); document.execCommand('copy')
+        document.body.removeChild(ta); showToast(okMsg)
+      } catch { showToast('复制失败，请手动选择文本复制') }
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => showToast(okMsg)).catch(fallback)
+    } else fallback()
+  }
+  function copyCopyPlatform(p: string) {
+    const c = copiesByPlatform[p]; if (!c) return
+    copyText(copyToText(p, c), `${p} 文案已复制`)
+  }
+  function copyAllCopy() {
+    const blocks = Object.entries(copiesByPlatform).map(([p, c]) => copyToText(p, c))
+    if (!blocks.length) return
+    copyText(blocks.join('\n\n' + '='.repeat(40) + '\n\n'), '全部文案已复制')
+  }
   function toggleSelectAll() {
     if (selectedCount > 0) setChecked({})
     else setChecked(Object.fromEntries(assets.map(a => [a.file, true])))
@@ -790,8 +890,8 @@ export default function CreativeWorkbench() {
     setHistoryId(null); setError(''); setProgressPct(0); setChecked({}); setDemoMode(false)
     // V4.60 / B3 + B4：清空文案缓存、参考图与品牌选择
     setCopiesByPlatform({}); setReferenceImage(''); setReferenceName(''); setSelectedBrand('')
-    // V4.70：清空素材类型 / 视频状态 / 品牌 Logo
-    setMaterialType('both'); setInjectLogo(false)
+    // V4.92：清空素材类型（回到默认图片+视频）/ 视频状态 / 品牌 Logo
+    setMaterialTypes(['image', 'video']); setMtOpen(false); setInjectLogo(false)
     setVs({ messages: [], plan: null, videos: [], options: {
       mode: referenceImage ? 'image_to_video' : 'text_to_video',
       voiceover: 'narration', duration: 15, aspect: '9:16', lang: 'zh', prompt_hint: '' },
@@ -909,20 +1009,35 @@ export default function CreativeWorkbench() {
                   </select>
                 </div>
               </div>
-              {/* 素材类型：控制 Step2 规划与 Step3 工作区范围（图片 / 视频 / 图片和视频） */}
+              {/* V4.92 素材类型：多选下拉（文案 / 图片 / 视频），可任意组合，逐一勾选 */}
               <div className="cwb-form-row">
-                <label className="cwb-field-label" htmlFor="cwb-mt">素材类型</label>
-                <div className="cwb-select-wrap">
-                  <select id="cwb-mt" className="cwb-select" value={materialType}
-                    onChange={e => setMaterialType(e.target.value as 'image' | 'video' | 'both')}>
-                    <option value="image">图片</option>
-                    <option value="video">视频</option>
-                    <option value="both">图片和视频</option>
-                  </select>
+                <label className="cwb-field-label" id="cwb-mt-label">素材类型</label>
+                <div className="cwb-mt">
+                  <button type="button" id="cwb-mt" className="cwb-mt-trigger" aria-haspopup="listbox"
+                    aria-expanded={mtOpen} aria-labelledby="cwb-mt-label" onClick={() => setMtOpen(o => !o)}>
+                    <span className="cwb-mt-values">
+                      {materialTypes.length ? materialTypes.map(k => (
+                        <span className="cwb-mt-chip" key={k}>{materialLabel[k]}</span>
+                      )) : <span className="cwb-mt-ph">请选择素材类型</span>}
+                    </span>
+                    <span className="cwb-mt-caret">{mtOpen ? '▴' : '▾'}</span>
+                  </button>
+                  {mtOpen && (
+                    <div className="cwb-mt-menu" role="listbox" aria-multiselectable="true">
+                      {(['copy', 'image', 'video'] as MaterialKind[]).map(k => (
+                        <label className={`cwb-mt-option ${materialTypes.includes(k) ? 'on' : ''}`} key={k}>
+                          <input type="checkbox" checked={materialTypes.includes(k)} onChange={() => toggleMaterial(k)} />
+                          <span className="cwb-mt-box">{materialTypes.includes(k) ? '✓' : ''}</span>
+                          <span>{materialLabel[k]}</span>
+                        </label>
+                      ))}
+                      <div className="cwb-mt-hint">可多选；按所选择生成对应内容</div>
+                    </div>
+                  )}
                 </div>
               </div>
-              {/* 素材图片选择：下拉单选（默认 纯图片），开始分析即按此要求出图（仅图片 / 图片和视频时展示） */}
-              <div className="cwb-form-row" style={{ display: materialType === 'video' ? 'none' : undefined }}>
+              {/* 素材图片选择：下拉单选（默认 纯图片），开始分析即按此要求出图（仅勾选图片时展示） */}
+              <div className="cwb-form-row" style={{ display: hasImage ? undefined : 'none' }}>
                 <label className="cwb-field-label" htmlFor="cwb-ov">素材图片选择</label>
                 <div className="cwb-ov-col">
                   <div className="cwb-select-wrap">
@@ -1023,7 +1138,16 @@ export default function CreativeWorkbench() {
           <section className="cwb-section">
             {cw && view !== 'analyzing' && (
               <>
-                {materialType !== 'video' && (
+                {hasCopy && (
+                  <div className="cwb-plan-block cwb-plan-copy">
+                    <div className="cwb-sub-row">
+                      <h3 className="cwb-sub">创意文案规划</h3>
+                      <span className="cwb-tag-reco">依据大模型 + 网站分析</span>
+                    </div>
+                    <p className="cwb-reco-note">确认后将为所选平台（{selected.join('、') || '—'}）逐一生成广告文案，生成后可在「文案工作区」查阅与一键复制。文案中的数字与承诺均经过证据校验。</p>
+                  </div>
+                )}
+                {hasImage && (
                   <div className="cwb-plan-block">
                     <div className="cwb-sub-row">
                       <h3 className="cwb-sub">图片创意规划（{routes.length} 条路线）</h3>
@@ -1054,7 +1178,7 @@ export default function CreativeWorkbench() {
                   </div>
                 )}
 
-                {materialType !== 'image' && (
+                {hasVideo && (
                   <div className="cwb-plan-block">
                     <VideoStudio mode="plan" analysis={cw?.analysis} platform={selectedPlatform}
                       referenceImage={referenceImage} brandLogo={brandLogo} injectLogo={injectLogo}
@@ -1062,7 +1186,7 @@ export default function CreativeWorkbench() {
                   </div>
                 )}
 
-                {materialType !== 'image' && (vs.plan?.generation_blocked || vs.plan?.asset_gate?.status === 'asset_missing') && (
+                {hasVideo && (vs.plan?.generation_blocked || vs.plan?.asset_gate?.status === 'asset_missing') && (
                   <div className="cwb-plan-warn">
                     {vs.plan?.generation_blocked
                       ? `分镜中有 ${vs.plan.claim_audit?.violations?.length || 0} 处文案未通过证据校验，请回到分镜规划修改后再生成（当前提交会被拦截，不产生费用）。`
@@ -1071,8 +1195,10 @@ export default function CreativeWorkbench() {
                 )}
                 <div className="cwb-confirm">
                   <button className="cwb-gen-btn" onClick={batchGenerate}
-                    disabled={!((materialType !== 'image' || routes.some(r => r.selected)) && (materialType !== 'video' || (vs.plan && vs.plan.shots?.length && !vs.plan.generation_blocked && vs.plan.asset_gate?.status !== 'asset_missing')))}>
-                    确认并批量生成
+                    disabled={materialTypes.length === 0
+                      || (hasImage && !routes.some(r => r.selected))
+                      || (hasVideo && !(vs.plan && vs.plan.shots?.length && !vs.plan.generation_blocked && vs.plan.asset_gate?.status !== 'asset_missing'))}>
+                    确认并批量生成{materialTypes.length ? `（${materialTypes.map(k => materialLabel[k]).join(' + ')}）` : ''}
                   </button>
                 </div>
               </>
@@ -1092,7 +1218,7 @@ export default function CreativeWorkbench() {
               <div className="cwb-results-title">
                 <h3 className="cwb-sub">批量生成工作区</h3>
               </div>
-              {assets.length > 0 && materialType !== 'video' && (
+              {assets.length > 0 && hasImage && (
                 <div className="cwb-result-actions">
                   <button className="cwb-link-btn" onClick={toggleSelectAll}>
                     {selectedCount > 0 ? '取消全选' : '全选'}
@@ -1104,8 +1230,72 @@ export default function CreativeWorkbench() {
               )}
             </div>
 
+            {/* V4.92 创意文案工作区：独立、可查阅、可一键复制（文案作为一等素材类型） */}
+            {hasCopy && (
+              <div className="cwb-work-area cwb-copy-workspace">
+                <div className="cwb-work-area-head">
+                  <h4 className="cwb-area-title">✍️ 创意文案工作区</h4>
+                  {view === 'generating' && <span className="cwb-area-status">{progressText || '文案生成中…'}</span>}
+                  {view === 'result' && Object.keys(copiesByPlatform).length > 0 && (
+                    <span className="cwb-area-status ok">已生成 {Object.keys(copiesByPlatform).length} 个平台</span>
+                  )}
+                  {Object.keys(copiesByPlatform).length > 0 && (
+                    <div className="cwb-copy-actions">
+                      <button className="cwb-link-btn sm" onClick={copyAllCopy}>复制全部</button>
+                      <button className="cwb-link-btn sm" onClick={downloadAllCopy}>下载 JSON</button>
+                    </div>
+                  )}
+                </div>
+                {view === 'generating' && Object.keys(copiesByPlatform).length === 0 && (
+                  <div className="cwb-results-empty">正在依据网站分析生成广告文案，请稍候…</div>
+                )}
+                {Object.entries(copiesByPlatform).map(([p, c]) => {
+                  const specOk = c.validation?.valid !== false && c.validation?.status !== 'invalid'
+                  const charMap: Record<string, { len: number; max: number; over: boolean }> = {}
+                  for (const row of (c.char_table || [])) charMap[row.field] = { len: row.len, max: row.max, over: row.over }
+                  const schemaLabel: Record<string, string> = {}
+                  for (const s of (c.schema || [])) schemaLabel[s.key] = s.label
+                  return (
+                    <div className="cwb-copy-platform" key={p}>
+                      <div className="cwb-copy-pl">
+                        <b>{p}</b>
+                        {c.ad_product && <span className="cwb-copy-spec-tag">规格：{c.ad_product}</span>}
+                        <span className={`cwb-copy-spec-badge ${specOk ? 'ok' : 'warn'}`}>
+                          {specOk ? '✓ 符合平台文案规则' : '⚠ 未完全符合平台规则'}
+                        </span>
+                        {c.model_info?.provider && (
+                          <span className="cwb-copy-model">{c.model_info.provider}/{c.model_info.model}</span>
+                        )}
+                        <div className="cwb-copy-actions">
+                          <button className="cwb-link-btn sm" onClick={() => copyCopyPlatform(p)}>复制</button>
+                          <button className="cwb-link-btn sm" onClick={() => downloadCopy(p)}>下载</button>
+                        </div>
+                      </div>
+                      {(c.validation?.issues || []).filter((i: any) => i.level === 'error' || i.level === 'warning').slice(0, 3).map((i: any, ii: number) => (
+                        <div className="cwb-copy-issue" key={ii}>{i.message}</div>
+                      ))}
+                      <div className="cwb-copy-fields">
+                        {Object.entries(c.fields || {}).filter(([, v]) => v != null && v !== '').map(([k, v]) => {
+                          const cm = charMap[k]
+                          return (
+                            <div className="cwb-copy-field" key={k}>
+                              <span className="cwb-copy-k">{schemaLabel[k] || k}{cm ? ` · ${cm.len}/${cm.max}` : ''}</span>
+                              <span className={`cwb-copy-v ${cm?.over ? 'over' : ''}`}>{Array.isArray(v) ? (v as any[]).filter(Boolean).join(' / ') : String(v)}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
+                {view === 'result' && Object.keys(copiesByPlatform).length === 0 && (
+                  <div className="err" style={{ marginTop: 8 }}>文案未生成成功，请检查模型配置或重新生成。</div>
+                )}
+              </div>
+            )}
+
             {/* 图片工作区：基于网站分析 + 媒体平台规格生成，保持原有素材展示样式 */}
-            {materialType !== 'video' && (
+            {hasImage && (
               <div className="cwb-work-area">
                 <div className="cwb-work-area-head">
                   <h4 className="cwb-area-title">🖼️ 图片素材工作区</h4>
@@ -1116,11 +1306,11 @@ export default function CreativeWorkbench() {
                   <div className="cwb-bar"><div className="cwb-bar-fill" style={{ width: `${progressPct}%` }} /></div>
                 )}
 
-                {Object.keys(copiesByPlatform).length > 0 && (
+                {!hasCopy && Object.keys(copiesByPlatform).length > 0 && (
                   <div className="cwb-copy-section">
                     <div className="cwb-sub-row">
-                      <h3 className="cwb-sub">广告文案</h3>
-                      <button className="cwb-link-btn" onClick={downloadAllCopy}>下载全部文案（JSON）</button>
+                      <h3 className="cwb-sub">广告文案（图片叠加用）</h3>
+                      <button className="cwb-link-btn" onClick={copyAllCopy}>复制全部</button>
                     </div>
                     {Object.entries(copiesByPlatform).map(([p, c]) => (
                       <div className="cwb-copy-platform" key={p}>
@@ -1195,7 +1385,7 @@ export default function CreativeWorkbench() {
             )}
 
             {/* 视频工作区：基于网站分析 + 媒体平台规则 + 视频参数生成，并支持生成后微调 */}
-            {materialType !== 'image' && (
+            {hasVideo && (
               <div className="cwb-work-area">
                 <VideoStudio mode="work" analysis={cw?.analysis} platform={selectedPlatform}
                   referenceImage={referenceImage} brandLogo={brandLogo} injectLogo={injectLogo}
@@ -1203,7 +1393,7 @@ export default function CreativeWorkbench() {
               </div>
             )}
 
-            {view === 'result' && (assets.length > 0 || vs.videos.length > 0) && (
+            {view === 'result' && (assets.length > 0 || vs.videos.length > 0 || (hasCopy && Object.keys(copiesByPlatform).length > 0)) && (
               <div className="cwb-confirm">
                 <button className="cwb-link-btn" onClick={resetAll}>新的创作</button>
                 <button className="cwb-gen-btn sm" onClick={downloadAll}>导出交付包</button>

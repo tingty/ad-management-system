@@ -19,7 +19,7 @@ const FILTERS: { key: TaskFilter; label: string }[] = [
   { key: 'needs', label: '需处理' },
 ]
 
-const KIND_LABEL: Record<string, string> = { video: '视频', images: '图片', image: '图片' }
+const KIND_LABEL: Record<string, string> = { video: '视频', images: '图片', image: '图片', copy: '文案' }
 
 function elapsedText(iso?: string, finished?: string): string {
   if (!iso) return ''

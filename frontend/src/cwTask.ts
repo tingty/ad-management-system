@@ -33,7 +33,8 @@ export interface CwTaskSnapshot {
   statusText: string
   product: string
   platforms: string[]
-  kind: 'image' | 'video' | 'both' | ''
+  /** V4.92：素材类型组合；both=图片+视频，mixed=含文案的混合，其余为单类型 */
+  kind: 'image' | 'video' | 'copy' | 'both' | 'mixed' | ''
   stages: CwTaskStage[]
   imageDone: number
   imageTotal: number
