@@ -48,6 +48,7 @@ from media_platforms import get_media_platform, SPEC_VERSION
 from media_spec_library import (image_targets as spec_image_targets,
                                 image_target_for_size as spec_image_target_for_size)
 from prompt_contract import build_prompt_contract, render_image_contract_block
+from image_content_guard import inspect_image_content
 from batch_workspace import BatchWorkspace
 # V4.42 / F06：供应商尺寸能力目录、按比例构图与主体保护
 from image_capabilities import (plan_generation_size, composition_goal,
@@ -1054,6 +1055,21 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                     retries += 1
                     await asyncio.sleep(0)
 
+            # V4.91：内容体检门。纯色 / 无画面图（无论来自 AI 供应商还是本地渐变兜底）
+            # 都不作为合格素材交付，标记 needs_attention 并写明原因。
+            # 注意：已计费的模型调用绝不因体检重发；体检只对已渲染的文件做只读判断。
+            content_check = await asyncio.to_thread(inspect_image_content, t["out"])
+            if not content_check.get("ok"):
+                return {"__skipped__": {
+                    **common, "status": "needs_attention",
+                    "reason": content_check.get("reason") or "检测到纯色 / 无画面图片，未交付",
+                    "content_check": content_check,
+                    "ai_background": ai_ok,
+                    "fallback": not ai_ok,
+                    "request_id": request_id,
+                    "retries": retries,
+                }}
+
             return {"__image__": {
                 "url": t["out"], "file": t["fn"], "size": t["size"],
                 "w": t["w"], "h": t["h"], "placement": t["placement"],
@@ -1110,6 +1126,9 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         fallback_count = len(images) - ai_count
         failed_count = sum(1 for x in skipped if x.get("status") == "failed")
         revision_count = sum(1 for x in skipped if x.get("status") == "needs_revision")
+        # V4.91：内容体检拦截的纯色 / 无画面图单独计数，区别于渲染失败与文案超预算。
+        blank_count = sum(1 for x in skipped
+                          if (x.get("content_check") or {}).get("verdict") == "blank")
         status = "ok" if not skipped else ("partial_success" if images else "failed")
         image_model.update({
             "fallback": fallback_count > 0 or not images,
@@ -1120,6 +1139,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             "template_fallback_count": fallback_count,
             "failed_count": failed_count,
             "needs_revision_count": revision_count,
+            "blank_rejected_count": blank_count,
             "batch_id": batch_id,
         })
 
@@ -1135,6 +1155,8 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             note_bits.append(f"{failed_count} 个任务失败，未计入合格素材；可仅重试失败项")
         if revision_count:
             note_bits.append(f"{revision_count} 个版位因图内文案超预算被阻止生成（needs_revision），未输出省略号残图")
+        if blank_count:
+            note_bits.append(f"{blank_count} 张因检测为纯色 / 无画面被拦截（needs_attention），未计入合格素材；请检查文生图是否正常返回实景底图")
         if status == "failed":
             note_bits.append("整批无可用素材，请检查文案与版位设置后重试")
         outpaint_count = sum(1 for x in images
