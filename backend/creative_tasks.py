@@ -28,8 +28,10 @@ from database import SessionLocal
 from models import GenerationJob, CreativeBatch, CreativeAsset, utcnow
 from job_service import IdempotencyConflict, payload_hash_of
 from providers import (
-    VideoPipelineError, save_video_media, video_provider_of_config,
+    VideoPipelineError, save_video_media, video_provider_of_config, _active_config,
 )
+# V4.94 阶段三：成片抽帧 + 真实视觉复核门（无结果 / 不可用时明确标记，不冒充已复核）
+from video_vision_audit import audit_video_vision
 # V4.84：交付时用生成前冻结的 spec_ref 复核平台规格（与即时出片链路共用同一份标准库）
 from media_spec_library import validate_video_delivery as spec_validate_delivery
 
@@ -231,6 +233,7 @@ def job_to_task(job: GenerationJob) -> dict:
     if task_status in TERMINAL:
         stage_label = ("时长未达标" if job.error_code == "DURATION_MISMATCH"
                        else "规格未达标" if job.error_code == "SPEC_MISMATCH"
+                       else "画面文字未通过" if job.error_code == "TEXT_VISION_MISMATCH"
                        else {"succeeded": "已完成", "needs_attention": "待核实",
                              "failed": "失败", "canceled": "已停止"}.get(task_status, task_status))
     elif is_video:
@@ -267,6 +270,10 @@ def job_to_task(job: GenerationJob) -> dict:
         "duration_tolerance_sec": result.get("duration_tolerance_sec") or 0,
         "spec_check": result.get("spec_check") or {},
         "spec_ref": result.get("spec_ref") or {},
+        # V4.94 阶段二：播放器据此处逐字叠加品牌名 / CTA，不改动原片。
+        "text_overlay": result.get("text_overlay") or {},
+        # V4.94 阶段三：成片画面文字复核结论（ok / violation / unavailable / skipped）
+        "vision_audit": result.get("vision_audit") or {},
         "note": result.get("note") or "",
         "attempts": int(job.attempts or 0),
         "retry_of": job.retry_of or "",
@@ -672,16 +679,29 @@ async def _drive(db: Session, job: GenerationJob) -> None:
         spec_check = spec_validate_delivery(spec_ref, saved.get("duration_sec") or 0,
                                             saved.get("output_aspect") or "") if spec_ref else {}
         spec_hard_fail = verdict["ok"] and spec_check.get("status") == "hard_fail"
-        asset = _archive(db, job, saved, snap, verdict)
+        # V4.94 阶段三：成片抽帧视觉复核。只有真实识别出画面文字才判违规；
+        # 视觉工具不可用只标 unavailable，不冒充"已复核通过"，也不误伤成片。
+        vision = await _vision_audit_of(db, snap, saved)
+        vision_fail = vision.get("status") == "violation"
+        asset = _archive(db, job, saved, snap, {**verdict, "vision_fail": vision_fail})
         job.asset_ids = [asset.asset_id]
         # V4.83 / C04+C05：终态与资产、校验结论在同一事务里写入。
         # 时长合格 → succeeded + completed；不合格 → needs_attention + DURATION_MISMATCH，
         # 原片与下载入口保留（不篡改媒体、不慢放冒充），但绝不标成功、不计入合格成功数。
         job.stage = "completed"
         job.finished_at = _now()
-        job.status = "succeeded" if (verdict["ok"] and not spec_hard_fail) else "needs_attention"
-        if verdict["ok"] and not spec_hard_fail:
+        job.status = ("succeeded" if (verdict["ok"] and not spec_hard_fail and not vision_fail)
+                      else "needs_attention")
+        if job.status == "succeeded":
             job.error_code = job.error_stage = job.error_message = job.error_action = ""
+        elif vision_fail:
+            bad = "；".join(
+                f"{v.get('text')}:{v.get('type')}" for v in (vision.get("violations") or [])[:3])
+            job.error_code = "TEXT_VISION_MISMATCH"
+            job.error_stage = "validating"
+            job.error_message = (vision.get("note") or "成片画面文字复核未通过") + "（" + bad + "）"
+            job.error_action = ("原片已保留可预览下载；请检查品牌名 / 英文单词拼写后点「重新生成」"
+                                "（会产生新费用）。品牌字样建议由播放层叠加，不要写进画面。")
         elif not verdict["ok"]:
             job.error_code = "DURATION_MISMATCH"
             job.error_stage = "validating"
@@ -709,12 +729,51 @@ async def _drive(db: Session, job: GenerationJob) -> None:
             "duration_tolerance_sec": DURATION_TOLERANCE_SEC,
             "spec_check": spec_check,
             "spec_ref": spec_ref,
-            "note": (verdict["note"] + (" " + spec_check["note"] if spec_check.get("note") else "")).strip(),
+            # V4.94 阶段二：播放层叠加配置随成片交付；原片保持零文字。
+            "text_overlay": (snap.get("meta") or {}).get("text_overlay") or {},
+            # V4.94 阶段三：视觉复核结论随成片落库；unavailable 如实标注未复核。
+            "vision_audit": vision,
+            "note": (verdict["note"] + (" " + spec_check["note"] if spec_check.get("note") else "")
+                     + (" " + (vision.get("note") or "") if vision.get("note") else "")).strip(),
         }
         job.evidence_json = saved.get("evidence") or evidence
         job.updated_at = _now()
         _recount(db, _batch_of(db, job), commit=True)
         return
+
+
+def _vision_model_cfg(db: Session) -> Optional[dict]:
+    """取真实视觉模型配置：绝不传 Mock / Fallback 的结果进审查门。"""
+    cfg = _active_config(db, "analysis")
+    if not cfg:
+        return None
+    return {
+        "provider": getattr(cfg, "provider", "") or "",
+        "api_key": getattr(cfg, "api_key", "") or "",
+        "base_url": getattr(cfg, "base_url", "") or "",
+        "model": getattr(cfg, "model", "") or "",
+    }
+
+
+async def _vision_audit_of(db: Session, snap: dict, saved: dict) -> dict:
+    """按任务冻结的配置做成片视觉复核；工具不可用只标 unavailable，不误判成片。"""
+    meta = snap.get("meta") or {}
+    cfg = meta.get("vision_audit") or {}
+    if not isinstance(cfg, dict) or cfg.get("enabled", True) is False:
+        return {"status": "skipped", "reason": "任务配置已关闭视觉复核",
+                "texts": [], "violations": [], "frames_checked": 0}
+    try:
+        return await audit_video_vision(
+            str(saved.get("file_path") or ""),
+            meta.get("brand_lexicon") or {},
+            str(meta.get("text_policy") or "none"),
+            _vision_model_cfg(db),
+            saved.get("duration_sec") or 0,
+            int(cfg.get("frames") or 3),
+        )
+    except Exception as e:
+        return {"status": "unavailable", "reason": f"视觉复核异常：{type(e).__name__}: {str(e)[:120]}",
+                "texts": [], "violations": [], "frames_checked": 0}
 
 
 def _duration_verdict(snap: dict, saved: dict) -> dict:
@@ -753,7 +812,8 @@ def _archive(db: Session, job: GenerationJob, saved: dict, snap: dict,
     v = verdict or {}
     # V4.83：不合格原片仍归档（可预览下载、可追溯），但状态明确标 noncompliant，
     # 交付包与合格计数据此区分，不静默混入可投放成品。
-    asset_status = "ok" if v.get("ok", True) else "noncompliant"
+    # V4.94：画面文字复核违规的片子同样不冒充合格成品（原片仍可下载核对）。
+    asset_status = "ok" if (v.get("ok", True) and not v.get("vision_fail")) else "noncompliant"
     asset = CreativeAsset(
         asset_id=_uid("asset_"), job_id=job.job_id, history_id=None,
         owner_id=job.owner_id, file=file, size="video",

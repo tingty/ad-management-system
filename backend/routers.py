@@ -52,6 +52,7 @@ from video_text_guard import (audit_video_text, repair_video_text,
                               render_video_text_guard_block)
 # V4.93：品牌 / 文案黄金词典——上屏文字的唯一事实源，杜绝品牌名 / 单词错拼
 from brand_lexicon import build_lexicon, enforce_onscreen, render_lexicon_block
+from brand_lexicon import build_text_overlay  # V4.94 阶段二：播放层叠加配置
 
 # V4.81 / P2-P3：出片任务持久化（唯一任务事实在库，进程重启不丢）与创作批次列表
 import creative_tasks
@@ -849,6 +850,8 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
     # V4.90 + V4.93：文本形态预检；批准清单收紧为黄金词典，facts 整句不再自动上屏。
     plan, text_guard, text_repaired = repair_video_text(plan, analysis, req.options or {}, lexicon)
     plan["brand_lexicon"] = lexicon
+    # V4.94 阶段二：播放层叠加配置——品牌字样由 DOM 渲染，不交给视频模型画字。
+    plan["text_overlay"] = build_text_overlay(lexicon, plan, req.options)
     if text_repaired:
         # 文字修复可能改动字幕 / VO 的数字与限定，证据审计必须基于修复后的 plan 重跑。
         claim_audit = audit_video_plan(plan, analysis)
@@ -1120,6 +1123,8 @@ def _cw_video_job_out(job) -> CWVideoJobOut:
         stage_label = "已完成"
     elif job.error_code == "DURATION_MISMATCH":
         stage_label = "时长未达标"
+    elif job.error_code == "TEXT_VISION_MISMATCH":
+        stage_label = "画面文字未通过"
     elif job.status in ("needs_attention", "failed", "canceled"):
         stage_label = {"needs_attention": "待核实", "failed": "失败",
                        "canceled": "已停止"}.get(job.status, job.status)
@@ -1303,6 +1308,13 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         seg_lines.append(seg)
     duration = int(plan.get("duration_sec") or options.get("duration") or 15)
 
+    # V4.94 阶段三：视觉复核开关随任务冻结；默认开启，options.vision_audit=false 可关闭。
+    _va = options.get("vision_audit")
+    vision_audit_cfg = (
+        {"enabled": bool(_va.get("enabled", True)), "frames": int(_va.get("frames") or 3)}
+        if isinstance(_va, dict) else {"enabled": _va is not False, "frames": 3}
+    )
+
     # V4.84：从标准库解析本平台的视频规格目标（比例/尺寸/时长区间/伴随素材/核验状态）。
     # 生成前冻结进请求，交付时 creative_tasks 用同一份 spec 复核，两处结论始终一致。
     spec_ref = spec_video_target(platform, output_aspect, duration,
@@ -1366,6 +1378,10 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         "text_repair_count": text_repaired,
         # V4.93：黄金词典快照——本次出片使用的品牌名 / 产品名 / CTA 唯一事实源。
         "brand_lexicon": lexicon,
+        # V4.94 阶段二：播放层叠加配置随任务冻结，交付结果据此在播放器上叠加品牌字样。
+        "text_overlay": build_text_overlay(lexicon, plan, options),
+        # V4.94 阶段三：成片视觉复核配置；真实模型不可用时如实标 unavailable。
+        "vision_audit": vision_audit_cfg,
     }
     # 图生视频：把参考图作为 image 带入（Kling / 通用模型据端点决定是否消费）
     if str(plan.get("mode") or options.get("mode") or "") == "image_to_video" and req.reference_image:

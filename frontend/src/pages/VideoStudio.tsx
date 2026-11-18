@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react'
 import { api } from '../api'
+import VideoTextOverlay from '../VideoTextOverlay'
 
 /* V4.70 创意工作台 · 视频素材模块（受控组件，状态由父级 CreativeWorkbench 托管，便于 Step2 规划 → Step3 工作区共享分镜方案）
  * mode="plan"：第二步「规划创意」中的视频策划对话框（逐镜规划 / 多轮微调），不触发生成；
@@ -515,7 +516,11 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
           <div className="vs-video-grid">
             {videos.map((v, i) => (
               <div className="vs-video" key={i}>
-                <video src={fileUrl(v.url)} controls preload="metadata" />
+                <div className="vs-video-frame">
+                  <video src={fileUrl(v.url)} controls preload="metadata" />
+                  {/* V4.94：品牌字样由播放层逐字叠加，原片零文字且下载不带字 */}
+                  <VideoTextOverlay spec={v.text_overlay} />
+                </div>
                 <div className="vs-video-cap">
                   {v.caption || `片段 ${i + 1}`}
                   {v.duration_sec ? (
@@ -527,6 +532,12 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
                   {v.delivery_status && v.delivery_status !== 'compliant'
                     ? <span className="vs-video-bad">{v.delivery_status === 'noncompliant' ? '未达要求' : '时长未验证'}</span>
                     : null}
+                  {/* V4.94：成片画面文字复核结论；不可用就如实标未复核，不冒充通过 */}
+                  {v.vision_audit?.status === 'violation'
+                    ? <span className="vs-video-bad">画面文字未通过</span>
+                    : v.vision_audit?.status === 'unavailable'
+                      ? <span className="vs-video-warn">未做画面文字复核</span>
+                      : null}
                 </div>
                 <a className="vs-video-dl" href={fileUrl(v.url)} download target="_blank" rel="noreferrer">下载视频</a>
               </div>

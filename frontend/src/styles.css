@@ -1931,10 +1931,21 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .vs-video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .vs-video { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
 .vs-video video { width: 100%; border-radius: 7px; background: #000; max-height: 320px; }
+/* V4.94：播放层叠加（DOM 精确渲染品牌字样；原片零文字、下载不带字） */
+.vs-video-frame { position: relative; }
+.vs-overlay-layer { position: absolute; inset: 0; pointer-events: none; }
+.vs-overlay-text { position: absolute; color: #fff; font-weight: 700; line-height: 1.2; text-shadow: 0 1px 4px rgba(0, 0, 0, .85); max-width: 88%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vs-overlay-pos-top-left { top: 8%; left: 6%; }
+.vs-overlay-pos-bottom-center { bottom: 18%; left: 50%; transform: translateX(-50%); }
+.vs-overlay-role-cta { background: rgba(0, 0, 0, .48); border-radius: 999px; padding: 3px 10px; }
+.vs-overlay-toggle { position: absolute; top: 5px; right: 5px; z-index: 2; border: none; border-radius: 6px; padding: 2px 7px; font-size: 11px; color: #fff; background: rgba(0, 0, 0, .55); cursor: pointer; font-family: inherit; }
+.vs-overlay-toggle:hover { background: rgba(0, 0, 0, .75); }
 .vs-video-cap { font-size: 12px; color: var(--text); margin: 6px 2px 2px; }
 .vs-video-dur { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: var(--primary); background: #eef2f7; }
 /* V4.83：不合格原片标记（沿用失败色，只是文本标签，不改变视频卡布局） */
 .vs-video-bad { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: #b42318; background: #fdecec; }
+/* V4.94：视觉复核工具不可用时的诚实标注，不冒充"已通过" */
+.vs-video-warn { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: #b54708; background: #fff4e5; }
 .vs-video-dl { display: inline-block; font-size: 12px; color: var(--primary2); text-decoration: none; margin: 0 2px 4px; }
 .vs-video-dl:hover { text-decoration: underline; }
 

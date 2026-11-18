@@ -166,6 +166,37 @@ def enforce_onscreen(texts, lexicon: dict | None) -> dict:
     }
 
 
+def build_text_overlay(lexicon: dict | None, plan: dict | None = None,
+                       options: dict | None = None) -> dict:
+    """V4.94 阶段二：播放层文字叠加配置。
+
+    阶段一已把出片固化为零文字——视频模型不画字，品牌名是像素画不对的，
+    所以品牌字样改由播放层的 DOM 逐字渲染。这里生成"叠什么、放哪里"的
+    配置，文字只允许来自黄金词典的已确认项（brand / cta），绝不读 plan 的
+    自声明或 facts / 卖点整句。前端拿到配置后叠加在视频播放器上。
+
+    注意：这是**播放层**配置，不修改视频文件本身；下载的原片仍然无字。
+    """
+    lex = lexicon if isinstance(lexicon, dict) else {}
+    items: list[dict] = []
+    brand = _clean(lex.get("brand"))
+    cta = _clean(lex.get("cta"))
+    if brand:
+        items.append({"text": brand, "role": "brand", "position": "top-left"})
+    if cta:
+        items.append({"text": cta, "role": "cta", "position": "bottom-center"})
+    return {
+        "enabled": bool(items),
+        "source": "brand_lexicon",
+        "text_policy": "none",
+        "items": items,
+        "note": (
+            "画面本身零文字；品牌名 / CTA 由播放层逐字叠加，文字只来自已确认黄金词典，"
+            "不交给视频模型绘制，从根上避开错拼、缺字与乱码。"
+        ) if items else "无已确认品牌名 / CTA，播放层不叠加任何文字。",
+    }
+
+
 def render_lexicon_block(lexicon: dict | None) -> str:
     """把黄金词典编译进出片提示词，阻断模型自由写品牌名 / 单词。"""
     lex = lexicon if isinstance(lexicon, dict) else {}

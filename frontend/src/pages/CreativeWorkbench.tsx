@@ -328,6 +328,10 @@ export default function CreativeWorkbench() {
           duration_sec: a.duration_sec ?? s.duration_sec ?? 0,
           duration_source: a.duration_source || s.duration_source || '',
           delivery_status: s.delivery_status || '', file: fileOf(a),
+          // V4.94：播放层叠加配置随任务下发，画面本身保持零文字
+          text_overlay: s.text_overlay || {},
+          // V4.94：成片视觉复核结论（violation / unavailable 如实展示）
+          vision_audit: s.vision_audit || {},
         })))
         const failed = current.filter(s => !!s.error_code)
         const fail = failed.length ? {
