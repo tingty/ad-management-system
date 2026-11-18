@@ -87,18 +87,21 @@ def _text_policy(plan: dict | None, options: dict | None) -> str:
     return "approved_only" if str(raw).strip().lower() in _APPROVED_POLICY_WORDS else "none"
 
 
-def _approved_texts(plan: dict | None, analysis: dict | None,
-                    options: dict | None) -> list[str]:
+def _repair_corpus(plan: dict | None, analysis: dict | None,
+                   options: dict | None) -> list[str]:
+    """仅用于截断补全的"文本语料"，不是上屏批准清单。
+
+    V4.90 把 facts / sellingPoints 整句当成批准文案，V4.93 起这些句子只能用来
+    把"真实任务..."补成完整句，绝不代表模型可以把整句画到画面上。
+    """
     p = plan if isinstance(plan, dict) else {}
     o = options if isinstance(options, dict) else {}
     a = _unwrap(analysis)
     b = a.get("brief") if isinstance(a.get("brief"), dict) else {}
     raw_sources = [
-        p.get("approved_texts"), p.get("text_allowlist"),
-        o.get("approved_texts"), a.get("approved_texts"),
         a.get("facts"), a.get("advantages"), a.get("sellingPoints"),
         b.get("sellingPoints"), b.get("core_promise"), b.get("promise"),
-        a.get("product"), (analysis or {}).get("title") if isinstance(analysis, dict) else "",
+        p.get("approved_texts"), o.get("approved_texts"), a.get("approved_texts"),
     ]
     out: list[str] = []
     for source in raw_sources:
@@ -110,6 +113,40 @@ def _approved_texts(plan: dict | None, analysis: dict | None,
             s = _normalize(value)
             if s and s not in out and len(s) <= 100:
                 out.append(s)
+    return out
+
+
+def _approved_texts(plan: dict | None, analysis: dict | None,
+                    options: dict | None, lexicon: dict | None = None) -> list[str]:
+    """上屏批准清单（V4.93 收紧）：只认黄金词典 / 显式上屏词，不再从 facts 兜底。
+
+    未传 lexicon 时退回 plan/options 显式声明的批准清单，保持 V4.90 调用兼容；
+    传入 lexicon 时以词典 entries 为唯一允许上屏文字，facts 整句不再自动获批。
+    """
+    p = plan if isinstance(plan, dict) else {}
+    o = options if isinstance(options, dict) else {}
+    out: list[str] = []
+
+    def add_all(source):
+        if isinstance(source, (list, tuple, set)):
+            values = list(source)
+        else:
+            values = [source]
+        for value in values:
+            s = _normalize(value)
+            if s and s not in out and len(s) <= 100:
+                out.append(s)
+
+    if isinstance(lexicon, dict):
+        # V4.93：黄金词典是唯一权威来源。绝不采纳 plan/options 里的 approved_texts 声明——
+        # 那是被校验对象，若允许自我批准，错拼品牌名（Novax）会被真正的词典放过。
+        add_all(lexicon.get("entries"))
+    else:
+        # 兼容旧调用：无词典时用显式声明（不含 facts 整句）。
+        add_all(p.get("approved_texts"))
+        add_all(p.get("text_allowlist"))
+        add_all(o.get("approved_texts"))
+        add_all((analysis or {}).get("approved_texts") if isinstance(analysis, dict) else None)
     return out
 
 
@@ -223,7 +260,8 @@ def _length_score(text: str) -> int:
     return cjk * 2 + other
 
 
-def _check_candidate(candidate: dict, policy: str, approved: list[str]) -> list[dict]:
+def _check_candidate(candidate: dict, policy: str, approved: list[str],
+                     corpus: list[str] | None = None) -> list[dict]:
     text = _normalize(candidate["text"])
     if not text:
         return []
@@ -243,7 +281,7 @@ def _check_candidate(candidate: dict, policy: str, approved: list[str]) -> list[
     if truncated:
         base = re.sub(r"(?:\.\.\.|…|[、，,:：\-—_])$", "", text).strip()
         suggested = ""
-        for item in approved:
+        for item in (approved + (corpus or [])):
             if len(base) >= 2 and base in item and len(item) <= 100:
                 suggested = item
                 break
@@ -285,17 +323,22 @@ def _check_candidate(candidate: dict, policy: str, approved: list[str]) -> list[
 
 
 def audit_video_text(plan: dict | None, analysis: dict | None = None,
-                     options: dict | None = None) -> dict:
+                     options: dict | None = None,
+                     lexicon: dict | None = None) -> dict:
     """审查视频中所有可能进入画面的文字；返回结构化报告，不修改输入。"""
     p = plan if isinstance(plan, dict) else {}
     o = options if isinstance(options, dict) else {}
     policy = _text_policy(p, o)
-    approved = _approved_texts(p, analysis, o)
+    approved = _approved_texts(p, analysis, o, lexicon)
+    corpus = _repair_corpus(p, analysis, o)
     candidates = _collect_candidates(p, o)
     violations: list[dict] = []
 
+    # V4.93：黄金词典校验——品牌名 / 单词错拼（大小写在内的近似字）必须在提交前暴露。
+    # 只对"打算上屏"的文字生效：默认 none 策略画面本应无字，任何上屏候选都要经得起词典核对。
+    lex_entries = [str(x) for x in ((lexicon or {}).get("entries") or []) if str(x).strip()] if isinstance(lexicon, dict) else []
     for c in candidates:
-        for issue in _check_candidate(c, policy, approved):
+        for issue in _check_candidate(c, policy, approved, corpus):
             violations.append({
                 "field": c["field"],
                 "kind": c["kind"],
@@ -304,6 +347,20 @@ def audit_video_text(plan: dict | None, analysis: dict | None = None,
                 "effect": bool(c.get("effect")),
                 **issue,
             })
+        # 词典近似错拼：只针对 onscreen，避免把 VO / 策划草稿的口语误判为错字。
+        if lex_entries and c.get("kind") == "onscreen":
+            from brand_lexicon import enforce_onscreen as _enforce
+            chk = _enforce([c["text"]], lexicon)
+            for v in chk.get("violations") or []:
+                if v.get("risk") in ("case_miss", "near_miss"):
+                    violations.append({
+                        "field": c["field"], "kind": c["kind"],
+                        "text": v["text"][:200], "quote": c.get("quote", ""),
+                        "effect": bool(c.get("effect")),
+                        "type": "brand_spelling_mismatch", "severity": "block",
+                        "reason": f"上屏文字疑似品牌名 / 单词错拼，应为「{v['near_lexicon']}」",
+                        "suggested": v["near_lexicon"], "repairable": True,
+                    })
 
     blocking = [v for v in violations if v.get("severity") == "block"]
     warnings = [v for v in violations if v.get("severity") == "warn"]
@@ -313,6 +370,7 @@ def audit_video_text(plan: dict | None, analysis: dict | None = None,
         "text_policy": policy,
         "checked": len(candidates),
         "approved_texts": approved[:20],
+        "lexicon_enforced": bool(isinstance(lexicon, dict) and lexicon.get("entries")),
         "violations": violations,
         "blocking_count": len(blocking),
         "warning_count": len(warnings),
@@ -327,17 +385,24 @@ def audit_video_text(plan: dict | None, analysis: dict | None = None,
 
 
 def repair_video_text(plan: dict | None, analysis: dict | None = None,
-                      options: dict | None = None) -> tuple[dict, dict, int]:
+                      options: dict | None = None,
+                      lexicon: dict | None = None) -> tuple[dict, dict, int]:
     """保守修复：能确定的错误直接改；改不掉的保留原样并标记禁止提交。"""
     p = copy.deepcopy(plan or {})
-    report = audit_video_text(p, analysis, options)
+    report = audit_video_text(p, analysis, options, lexicon)
     done = 0
     handled_fields: set[str] = set()
-    for v in report.get("violations") or []:
+    # 同一字段可能同时命中多条问题（如品牌错拼 = 未批准 + 近似错拼）。
+    # 排序让"可修复"的排前，确保品牌错别字能被自动改成词典正确拼写，
+    # 而不是被同字段那条不可修复的"未批准"抢先占位后直接阻断。
+    ordered = sorted(
+        report.get("violations") or [],
+        key=lambda v: (str(v.get("field") or ""), not bool(v.get("repairable"))),
+    )
+    for v in ordered:
         field = str(v.get("field") or "")
         if field in handled_fields:
             continue
-        # 同一字段只按第一个最高优先级问题处理一次，避免多个修正互相覆盖。
         handled_fields.add(field)
         if v.get("severity") != "block" or not v.get("repairable"):
             continue
@@ -355,7 +420,7 @@ def repair_video_text(plan: dict | None, analysis: dict | None = None,
         if suggested != current and _set_field(p, field, suggested):
             done += 1
 
-    final = audit_video_text(p, analysis, options)
+    final = audit_video_text(p, analysis, options, lexicon)
     p["text_guard"] = final
     p["text_repair_count"] = done
     p["generation_blocked"] = bool(p.get("generation_blocked")) or final["status"] == "needs_revision"
