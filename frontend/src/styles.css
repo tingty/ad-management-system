@@ -2246,3 +2246,5 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cwb-route-edit { margin: 6px 0 4px; }
 .cwb-route-edit .cwb-supplement-input { min-height: 62px; font-size: 12.5px; }
 .cwb-route-edit-btn { margin-top: 2px; font-size: 11.5px; }
+/* V4.106 / 方案D：参考图角色选择（风格参考 / 商品保真） */
+.cwb-ref-role { max-width: 320px; }

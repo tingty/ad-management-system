@@ -26,6 +26,18 @@
     {"ok": bool, "reason": str, "palette_override": {...},
      "style_prompt": str, "traits": {...}}
   render_reference_style_block(analysis) -> str
+
+V4.106 / 方案D：参考图角色区分
+------------------------------
+诊断 C05：V4.97 把参考图统一改成「只学配色」，精确 SKU / 界面 / 结构保不住，软件产出与
+实体商品都会画错。本版把参考图分成两种角色，共用一个上传入口：
+
+- `style_reference`（默认，行为不变）：只学配色 / 明暗 / 质感，生成全新画面；
+- `product_reference`（保真）：要求模型**按参考图编辑**，保留型号 / 颜色 / 材质 / 结构。
+
+保真不是「提示词写狠一点」就能做到的：文生图模型没有参考像素必然重画。因此
+`reference_requirement()` 在**调用付费模型之前**做闸门判断——缺授权商品素材、供应商
+不具备参考编辑能力时一律 `needs_input`，绝不退回通用品或凭空画一个「差不多」的商品。
 """
 from __future__ import annotations
 
@@ -37,6 +49,70 @@ from PIL import Image
 # 采样尺寸：足够代表整体色调，又不拖慢批量出图
 _SAMPLE = 96
 _MAX_COLORS = 6
+
+#: V4.106：参考图角色
+ROLE_STYLE = "style_reference"
+ROLE_PRODUCT = "product_reference"
+ROLES = (ROLE_STYLE, ROLE_PRODUCT)
+ROLE_LABELS = {ROLE_STYLE: "风格参考（只学配色 / 质感）",
+               ROLE_PRODUCT: "商品参考（保真：型号 / 颜色 / 材质 / 结构）"}
+
+
+def normalize_role(value: str | None) -> str:
+    """把前端 / 历史草稿里的角色写法归一到两个标准值；未知值按风格参考（安全默认）。"""
+    v = str(value or "").strip().lower()
+    if v in ("product_reference", "product", "product_ref", "商品保真", "产品保真"):
+        return ROLE_PRODUCT
+    return ROLE_STYLE
+
+
+def reference_requirement(role: str | None, has_reference: bool,
+                          supports_reference_edit: bool,
+                          authorized: bool = False) -> dict:
+    """参考图角色闸门：返回 {status, code, role, note, required_action}。
+
+    - 风格参考：始终放行（fail-open，与 V4.97 一致）；
+    - 商品参考：必须同时满足「有参考图 + 有投放授权 + 供应商支持参考编辑」，
+      任一不满足即 needs_input，在调用模型前阻断，不产生费用也不生成替代品。
+    """
+    role_n = normalize_role(role)
+    if role_n != ROLE_PRODUCT:
+        return {"status": "ok", "code": "style_only", "role": role_n,
+                "note": "风格参考：只学习配色与画面质感，生成全新画面。",
+                "required_action": ""}
+    if not has_reference:
+        return {"status": "needs_input", "code": "product_asset_missing", "role": role_n,
+                "note": "商品保真需要一张真实的商品图（实拍或官方图）作为参考，当前没有可用参考图。",
+                "required_action": "上传商品参考图，或把参考图角色改回「风格参考」"}
+    if not authorized:
+        return {"status": "needs_input", "code": "asset_not_authorized", "role": role_n,
+                "note": "商品保真必须使用创作者提供且获得投放授权的商品素材，当前未确认授权。",
+                "required_action": "勾选「我确认拥有该商品素材的投放授权」，或改用风格参考"}
+    if not supports_reference_edit:
+        return {"status": "needs_input", "code": "model_not_capable", "role": role_n,
+                "note": "当前图片模型不具备参考图编辑能力，无法保住商品型号 / 颜色 / 材质 / 结构；"
+                        "系统不会用通用商品替代，也不会凭空画一个「差不多」的商品。",
+                "required_action": "在模型配置中选用支持参考编辑的模型（params.reference_edit=true），"
+                                   "或把参考图角色改回「风格参考」"}
+    return {"status": "ok", "code": "product_reference", "role": role_n,
+            "note": "商品参考：按参考图编辑，保留商品型号 / 颜色 / 材质 / 结构，只改背景、光线与场景。",
+            "required_action": ""}
+
+
+def render_product_fidelity_block(traits: dict | None = None) -> str:
+    """商品保真的提示词块（仅在支持参考编辑的模型上使用）。"""
+    bits = [("[ProductFidelity / reference-edit] Use the provided product reference image as the "
+             "authoritative product: keep its exact model, silhouette, proportions, color, material, "
+             "surface finish, structure and packaging layout unchanged."),
+            ("Only change background, lighting, camera angle and surrounding scene to fit the ad. "
+             "Never restyle the product, never substitute a similar item, never invent variants, "
+             "accessories or specs that are not visible in the reference."),
+            ("Do not draw text, price, ratings, badges, logos or UI overlays on the product image.")]
+    t = traits or {}
+    if t.get("accent"):
+        bits.append("Background may echo the brand accent %s; the product itself must keep its "
+                    "original colors." % t["accent"])
+    return " ".join(bits)
 
 
 def _hex(rgb: tuple) -> str:

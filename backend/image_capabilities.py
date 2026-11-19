@@ -32,6 +32,8 @@ PROVIDER_CAPABILITIES: dict[str, dict] = {
         "supports_reference": False,
         "supports_inpaint": False,
         "supports_transparent": False,
+        # V4.106 / 方案D：参考图「保真编辑」能力（商品参考图必须走这条，不能靠文生图猜）
+        "supports_reference_edit": False,
         "max_concurrency": 2,
         "note": "默认仅方形尺寸有代码内实测说明；其余比例需以官方文档 / 受控测试补齐后配置",
     },
@@ -42,6 +44,9 @@ PROVIDER_CAPABILITIES: dict[str, dict] = {
         "supports_reference": False,
         "supports_inpaint": False,
         "supports_transparent": False,
+        # V4.106 / 方案D：OpenAI 兼容 /images/edits 支持「按参考图编辑」，但需部署方确认
+        # 该模型真的具备编辑能力（同一 base_url 下的模型差异很大），故默认 False，可显式打开。
+        "supports_reference_edit": False,
         "max_concurrency": 2,
         "note": "三种尺寸来自现有适配器 _nearest_size；未附官方核验日期",
     },
@@ -52,6 +57,7 @@ PROVIDER_CAPABILITIES: dict[str, dict] = {
         "supports_reference": False,
         "supports_inpaint": False,
         "supports_transparent": False,
+        "supports_reference_edit": False,
         "max_concurrency": 2,
         "note": "按目标尺寸直传；供应商是否支持由部署方核验",
     },
@@ -62,6 +68,7 @@ PROVIDER_CAPABILITIES: dict[str, dict] = {
         "supports_reference": False,
         "supports_inpaint": False,
         "supports_transparent": True,
+        "supports_reference_edit": False,
         "max_concurrency": 0,
         "note": "不调用外部供应商，按目标尺寸本地绘制",
     },
@@ -101,6 +108,10 @@ def capability_of(provider_key: str, params: dict | None = None) -> dict:
     """返回某供应商的实际能力声明；`params.size_candidates` 可覆盖默认候选。"""
     base = dict(PROVIDER_CAPABILITIES.get(provider_key)
                 or PROVIDER_CAPABILITIES["generic_image"])
+    # V4.106 / 方案D：参考图编辑能力可由部署方显式声明（params.reference_edit=true/false），
+    # 未声明时沿用目录默认值，绝不因为「供应商名字像」就假定支持。
+    if isinstance(params, dict) and "reference_edit" in params:
+        base["supports_reference_edit"] = bool(params.get("reference_edit"))
     custom = _parse_candidates((params or {}).get("size_candidates"))
     if custom:
         base["size_candidates"] = custom

@@ -29,11 +29,13 @@ class TestInputLayoutV499(unittest.TestCase):
         block = _reference_block(TSX.read_text(encoding="utf-8"))
         self.assertIn('<div className="cwb-ov-col">', block)
         self.assertIn('<div className="cwb-ref-row cwb-ref-row2">', block)
-        self.assertIn('<span className="cwb-field-hint">仅学习配色与画面质感', block)
+        # V4.106：参考图角色加入后，提示文案按角色切换；仍要求提示在控件列内
+        self.assertIn('className="cwb-field-hint"', block)
+        self.assertIn('仅学习配色与画面质感', block)
         self.assertLess(block.index('<div className="cwb-ov-col">'),
                         block.index('<div className="cwb-ref-row cwb-ref-row2">'))
         self.assertLess(block.index('<div className="cwb-ref-row cwb-ref-row2">'),
-                        block.index('<span className="cwb-field-hint">仅学习配色与画面质感'))
+                        block.index('仅学习配色与画面质感'))
 
     def test_02_no_third_grid_child(self):
         # 旧写法：ref-row 与 hint 是表单网格的两个并列子元素，hint 掉进标签列

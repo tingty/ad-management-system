@@ -247,6 +247,9 @@ export default function CreativeWorkbench() {
   const [demoMode, setDemoMode] = useState(false)   // V4.59 / B1：演示模式开关（默认关闭）
   const [copiesByPlatform, setCopiesByPlatform] = useState<Record<string, any>>({})  // V4.60 / B3：各平台生成的广告文案
   const [referenceImage, setReferenceImage] = useState('')   // V4.60 / B3：商品/品牌参考图（/files/<name> 或 URL）
+  // V4.106 / 方案D：参考图角色（风格参考 / 商品保真）+ 投放授权确认
+  const [refRole, setRefRole] = useState<'style_reference' | 'product_reference'>('style_reference')
+  const [refAuthorized, setRefAuthorized] = useState(false)
   const [referenceName, setReferenceName] = useState('')     // 参考图展示名
   const [refUploading, setRefUploading] = useState(false)   // 参考图上传/下载中
   // V4.61 / B4：品牌名（注入文案生成）
@@ -799,7 +802,7 @@ export default function CreativeWorkbench() {
       if (raw.startsWith('http')) { setRefUploading(true); try { const fr: any = await api.fetchAssetUrl(raw); refPath = fr?.url || '' } catch { refPath = '' } setRefUploading(false) }
       else refPath = raw
     }
-    if (refPath) { api.addCwLibrary({ kind: 'reference', title: referenceName || '参考图', file: refPath, meta: { from: 'creative_workbench' } }).catch(() => {}) }
+    if (refPath) { api.addCwLibrary({ kind: 'reference', title: referenceName || '参考图', file: refPath, meta: { from: 'creative_workbench', role: refRole, authorized: refRole === 'product_reference' ? refAuthorized : false } }).catch(() => {}) }
     const activeRoutes = routes.filter(r => r.selected)
     const collected: any[] = []
     const finalStates: string[] = []
@@ -862,7 +865,12 @@ export default function CreativeWorkbench() {
               brief: confirmedBrief(),
             },
           }
-          if (refPath) style_opts.reference_image = refPath
+          if (refPath) {
+            style_opts.reference_image = refPath
+            // V4.106 / 方案D：角色与授权随请求下发；商品保真由后端在调用前做能力闸门
+            style_opts.reference_role = refRole
+            style_opts.reference_authorized = refRole === 'product_reference' ? refAuthorized : false
+          }
           // V4.70：品牌 Logo 注入生成链路（勾选时）
           if (injectLogo && brandLogo) style_opts.brand_logo = brandLogo
           const payload = {
@@ -1337,7 +1345,23 @@ export default function CreativeWorkbench() {
                       onChange={e => { setReferenceImage(e.target.value.trim()); setReferenceName('') }}
                       placeholder="或粘贴图片 URL（自动下载）" disabled={refUploading} />
                   </div>
-                  <span className="cwb-field-hint">仅学习配色与画面质感，AI 生成全新画面；原图主体 / 文字 / Logo 不会出现在素材中</span>
+                  {/* V4.106 / 方案D：参考图角色。风格参考只学配色；商品参考要求按参考图保真编辑 */}
+                  <div className="cwb-intent-row">
+                    <select className="cwb-select cwb-ref-role" value={refRole}
+                      onChange={e => setRefRole(e.target.value as 'style_reference' | 'product_reference')}>
+                      <option value="style_reference">风格参考（只学配色 / 质感）</option>
+                      <option value="product_reference">商品参考（保真：型号 / 颜色 / 材质 / 结构）</option>
+                    </select>
+                    {refRole === 'product_reference' && (
+                      <label className="cwb-demo-toggle" title="商品保真必须使用创作者提供且获得投放授权的商品素材">
+                        <input type="checkbox" checked={refAuthorized} onChange={e => setRefAuthorized(e.target.checked)} />
+                        <span>我确认拥有该商品素材的投放授权</span>
+                      </label>
+                    )}
+                  </div>
+                  <span className="cwb-field-hint">{refRole === 'product_reference'
+                    ? '商品参考：按参考图编辑，保留商品型号 / 颜色 / 材质 / 结构，只改背景与场景；需模型支持参考编辑，否则生成前会被拦截并提示补齐'
+                    : '仅学习配色与画面质感，AI 生成全新画面；原图主体 / 文字 / Logo 不会出现在素材中'}</span>
                 </div>
               </div>
               {/* 品牌：输入框 + 右侧 Logo 上传按钮；上传后 Logo 预览显示在品牌标题下方 */}

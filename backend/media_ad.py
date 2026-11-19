@@ -54,7 +54,9 @@ from image_prompt_rule import render_image_prompt_rule
 from image_content_guard import inspect_image_content
 import app_settings  # V4.104 / 方案E：系统级质检开关（默认开、可关）
 import creative_intent as cw_intent  # V4.105 / 方案C：结构化创作意图（三类素材共用）
-from reference_image import analyze_reference_style, render_reference_style_block
+from reference_image import (analyze_reference_style, render_reference_style_block,
+                            normalize_role, reference_requirement,
+                            render_product_fidelity_block)
 from batch_workspace import BatchWorkspace
 # V4.42 / F06：供应商尺寸能力目录、按比例构图与主体保护
 from image_capabilities import (plan_generation_size, composition_goal,
@@ -884,9 +886,49 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         candidate = os.path.join(UPLOAD_DIR, os.path.basename(ref_rel[len("/files/"):]))
         if os.path.isfile(candidate):
             reference_path = candidate
+    # V4.106 / 方案D：参考图角色区分。风格参考（默认）行为与 V4.97 一致；商品参考要求
+    # 「有商品图 + 有投放授权 + 供应商具备参考编辑能力」三者同时成立，否则在调用前阻断，
+    # 绝不退回通用品或用文生图重画一个「差不多」的商品。
+    ref_role = normalize_role(style_opts.get("reference_role"))
+    ref_authorized = bool(style_opts.get("reference_authorized"))
+    # 未配置图片模型 / 测试替身没有 capabilities() 时，按能力目录 + capability_key 取声明：
+    # 默认不具备参考编辑能力，商品保真会明确阻断，而不是悄悄退成本地模板画的替代品。
+    from image_capabilities import capability_of as _capability_of
+    _cap = _capability_of(getattr(img, "capability_key", "generic_image"),
+                          (img_cfg.params if img_cfg else None) or {})
+    ref_gate = reference_requirement(ref_role, bool(reference_path),
+                                     bool(_cap.get("supports_reference_edit")), ref_authorized)
+    if ref_gate["status"] != "ok":
+        return {
+            "platform": platform,
+            "images": [],
+            "count": 0,
+            "status": "needs_input",
+            "strict_text": False,
+            "note": "商品保真未就绪，已在调用付费模型前阻断：" + ref_gate["note"],
+            "issues": [{"level": "error", "status": "needs_input", "size": "", "placement": "",
+                        "concept_id": "", "ad_product": "", "message": ref_gate["required_action"]}],
+            "skipped": [], "task_results": [],
+            "batch_id": batch_id, "spec_version": SPEC_VERSION,
+            "reference_gate": ref_gate,
+            "image_model": {"provider": (img_cfg.provider if img_cfg else "template"),
+                            "model": ((img_cfg.model if img_cfg else "") or ""),
+                            "role": "image", "fallback": True, "source": "blocked"},
+        }
     ref_style = analyze_reference_style(reference_path)
     style_block = render_reference_style_block(ref_style)
-    if ref_style.get("ok"):
+    if ref_role == "product_reference":
+        # 商品保真：用参考编辑提示词块替代「只学配色」的描述；参考图像素会作为编辑底图
+        style_block = render_product_fidelity_block(ref_style.get("traits") or {})
+        reference_mode = "product_reference"
+        capability_note = ("商品参考：按参考图编辑，保留型号 / 颜色 / 材质 / 结构，"
+                           "只改背景、光线与场景；不重绘商品、不替换成同类目商品。")
+        if ref_style.get("ok"):
+            override = {k: v for k, v in (ref_style.get("palette_override") or {}).items()
+                        if k in palette}
+            # 商品保真只借品牌色调作背景，不改商品本色
+            palette.update({k: v for k, v in override.items() if k in ("bg1", "bg2", "accent")})
+    elif ref_style.get("ok"):
         # 只覆盖既有键，避免把提取失败的结构写进 palette 影响渲染
         override = {k: v for k, v in (ref_style.get("palette_override") or {}).items()
                     if k in palette}
@@ -1093,7 +1135,10 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                     async with sem:      # F11：供应商并发 / 速率限制
                         # V4.97：参考图风格已注入提示词与配色，不再把原图传给供应商，
                         # 也不再本地贴图；供应商只按提示词生成全新画面。
-                        call = img.generate(t["bg_prompt"], t["w"], t["h"], rel)
+                        call = img.generate(t["bg_prompt"], t["w"], t["h"], rel,
+                                            reference=(reference_path
+                                                       if reference_mode == "product_reference"
+                                                       else None))
                         bg = await asyncio.wait_for(call, timeout=IMAGE_TASK_TIMEOUT_SECONDS)
                     if bg and os.path.isfile(bg):
                         bg_path, ai_ok = bg, True
