@@ -1116,11 +1116,11 @@ export default function CreativeWorkbench() {
                   <span className="cwb-field-hint">{overlayMode === 'pure' ? '纯图片：无字、无按钮、无 Logo，满版真实场景且无预留空白' : overlayMode === 'text' ? '图片+文字：保留文案区并叠加文字' : '图片+文字+按钮：保留文案区并叠加文字与按钮'}</span>
                 </div>
               </div>
-              {/* 参考图（upload / URL） */}
+              {/* 参考图（upload / URL）：仅用于学习风格与配色，不直接使用原图 */}
               <div className="cwb-form-row">
                 <label className="cwb-field-label">参考图</label>
                 <div className="cwb-ref-row cwb-ref-row2">
-                  <label className="cwb-ref-upload" title="上传商品/品牌图，注入出图链路参考真实外观">
+                  <label className="cwb-ref-upload" title="上传风格参考图：AI 只学习配色与画面质感，生成全新推广图，不会直接使用或合成原图">
                     <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onRefFile} disabled={refUploading} />
                     <span>{refUploading ? '处理中…' : (referenceImage ? '更换图片' : '上传图片')}</span>
                   </label>
@@ -1130,6 +1130,7 @@ export default function CreativeWorkbench() {
                     onChange={e => { setReferenceImage(e.target.value.trim()); setReferenceName('') }}
                     placeholder="或粘贴图片 URL（自动下载）" disabled={refUploading} />
                 </div>
+                <span className="cwb-field-hint">仅学习配色与画面质感，AI 生成全新画面；原图主体 / 文字 / Logo 不会出现在素材中</span>
               </div>
               {/* 品牌：输入框 + 右侧 Logo 上传按钮；上传后 Logo 预览显示在品牌标题下方 */}
               <div className="cwb-form-row">

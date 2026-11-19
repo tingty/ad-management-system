@@ -23,7 +23,6 @@
 """
 import os
 import asyncio
-import inspect
 import json
 import time
 import uuid
@@ -50,6 +49,7 @@ from media_spec_library import (image_targets as spec_image_targets,
 from prompt_contract import build_prompt_contract, render_image_contract_block
 from image_prompt_rule import render_image_prompt_rule
 from image_content_guard import inspect_image_content
+from reference_image import analyze_reference_style, render_reference_style_block
 from batch_workspace import BatchWorkspace
 # V4.42 / F06：供应商尺寸能力目录、按比例构图与主体保护
 from image_capabilities import (plan_generation_size, composition_goal,
@@ -631,7 +631,7 @@ def build_overlay_text(headline: str, sub: str, cta: str, w: int, h: int,
 def _media_image_prompt(analysis: dict, platform: str, config: dict,
                         brief: dict | None = None, db=None, *,
                         overlay_mode: str = "pure", placement: dict | None = None,
-                        contract: dict | None = None) -> str:
+                        contract: dict | None = None, style_block: str = "") -> str:
     """V4.41 / F03 + F04：按「概念 → 视觉简报 → 提示词」顺序逐任务构建背景提示词。
 
     与 V4.40 的根本差别：本函数**收标题 / 证据 / 概念 / 版式**，且只在文案组合
@@ -696,6 +696,10 @@ def _media_image_prompt(analysis: dict, platform: str, config: dict,
     rule_text = render_image_prompt_rule(cfg.get("prompt_rule"))
     if rule_text:
         blocks.append(rule_text)
+    # V4.97：参考图「仅学习配色/明暗/质感」的提示词块；与规则块同层，
+    # 都放在 V4.88 零文字契约之前，契约继续做最后兜底。
+    if style_block and style_block.strip():
+        blocks.append(style_block.strip())
     if brief:
         # F03：先确定概念再写画面；同一 concept_key 跨尺寸保持承诺一致
         blocks.append(brief_prompt_block(brief))
@@ -825,28 +829,33 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
     img = get_image(db)
     img_cfg = _active_config(db, "image")
 
-    # F03：商品参考图 / 真实 UI。供应商声明支持参考编辑时把原图传给它；
-    # 否则退回本地合成，并在归档明确写出能力限制，不假装做了 AI 参考编辑。
+    # V4.97：参考图只用于「学习」——提取配色/明暗/冷暖覆盖到本批调色板，并把学习
+    # 结论注入文生图提示词，让模型生成一张**全新的**推广图。绝不把用户上传的原图
+    # 原样贴进成品（旧 local_composite 会把参考图 paste 到主体区，与本用途相反）。
+    # 视频侧 image_to_video 用参考图作首帧是另一条链路，不受此处改动影响。
     ref_rel = str(style_opts.get("reference_image") or "").strip()
-    product_path = None
+    reference_path = None
     if ref_rel.startswith("/files/"):
         candidate = os.path.join(UPLOAD_DIR, os.path.basename(ref_rel[len("/files/"):]))
         if os.path.isfile(candidate):
-            product_path = candidate
-    try:
-        sig = inspect.signature(img.generate) if img is not None else None
-        provider_supports_ref = bool(sig and "reference_image" in sig.parameters)
-    except (TypeError, ValueError):
-        provider_supports_ref = False
-    if product_path and provider_supports_ref:
-        reference_mode, capability_note = "provider_reference", ""
-    elif product_path:
-        reference_mode = "local_composite"
-        capability_note = ("当前文生图供应商未声明参考编辑能力，已把用户提供的真实商品图"
-                           "本地合成到主体区；这不是 AI 参考编辑，商品细节不再生成。")
+            reference_path = candidate
+    ref_style = analyze_reference_style(reference_path)
+    style_block = render_reference_style_block(ref_style)
+    if ref_style.get("ok"):
+        # 只覆盖既有键，避免把提取失败的结构写进 palette 影响渲染
+        override = {k: v for k, v in (ref_style.get("palette_override") or {}).items()
+                    if k in palette}
+        palette.update(override)
+        reference_mode = "style_reference"
+        capability_note = ("参考图仅用于学习配色与画面质感，AI 据此生成全新推广画面；"
+                           "原图主体、文字、Logo 与像素未直接使用或合成。")
+    elif reference_path:
+        reference_mode = "style_reference"
+        capability_note = ("已提供参考图但风格学习失败，按文案与行业视觉约束生成全新画面；"
+                           "未直接使用或合成原图。")
     else:
         reference_mode = "none"
-        capability_note = ("未提供商品参考图；画面只使用落地页事实与行业视觉约束，"
+        capability_note = ("未提供参考图；画面只使用落地页事实与行业视觉约束，"
                            "不得虚构商品外观、标签、规格与评价。")
 
     provider_name = (img_cfg.provider if img_cfg else "template")
@@ -899,10 +908,6 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                                        ad_product=slot.get("ad_product") or "")
             brief["reference_mode"] = reference_mode
             brief["capability_note"] = capability_note
-            if reference_mode == "local_composite" and layout == "banner":
-                # 小横幅没有可用的主体区，不假称已叠加商品图
-                brief["capability_note"] = (capability_note +
-                                            " 本版位为小横幅，无可用主体区，未叠加商品图。")
             # V4.42 / F06 + V4.88：宽高作为一个比例整体选供应商已声明的尺寸；
             # 纯图片写满版构图目标，叠加模式仍保留「主体保护 + 文字留白」旧策略。
             cap_key = getattr(img, "capability_key", "template") if img is not None else "template"
@@ -917,7 +922,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 overlay_mode=overlay_mode)
             bg_prompt = (_media_image_prompt(analysis, platform, config, brief, db,
                                              overlay_mode=overlay_mode, placement=slot,
-                                             contract=contract)
+                                             contract=contract, style_block=style_block)
                          + "\nComposition goal: " + composition_goal(
                              w, h, layout, overlay_mode=overlay_mode))
             phash = prompt_hash(bg_prompt)
@@ -934,6 +939,14 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 "layout": layout,
                 "prompt_hash": phash,
                 "creative_config_id": config["config_id"],
+                # V4.97：参考图仅作风格学习；记录学习结论与「未合成原图」承诺，可追溯
+                "reference_style": {
+                    "mode": reference_mode,
+                    "learned": bool(ref_style.get("ok")),
+                    "traits": dict(ref_style.get("traits") or {}),
+                    "reason": str(ref_style.get("reason") or ""),
+                    "original_composited": False,
+                },
                 "request_size": gen_plan["request_size"],
                 "target_size": [w, h],
                 # V4.88：提示词契约随资产落库；标准库未登记时明确标注，不伪造核验级别。
@@ -1013,12 +1026,9 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 rel = workspace.temp_name("mabg")
                 try:
                     async with sem:      # F11：供应商并发 / 速率限制
-                        gen = img.generate
-                        if reference_mode == "provider_reference" and product_path:
-                            call = gen(t["bg_prompt"], t["w"], t["h"], rel,
-                                       reference_image=product_path)
-                        else:
-                            call = gen(t["bg_prompt"], t["w"], t["h"], rel)
+                        # V4.97：参考图风格已注入提示词与配色，不再把原图传给供应商，
+                        # 也不再本地贴图；供应商只按提示词生成全新画面。
+                        call = img.generate(t["bg_prompt"], t["w"], t["h"], rel)
                         bg = await asyncio.wait_for(call, timeout=IMAGE_TASK_TIMEOUT_SECONDS)
                     if bg and os.path.isfile(bg):
                         bg_path, ai_ok = bg, True
@@ -1049,7 +1059,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                         t["headline"], t["sub"], t["cta"], (brand or "")[:40],
                         bg_path or None, t["logo_path"] or None, None, strict_text,
                         t["palette"], t["layout"],
-                        product_path if reference_mode == "local_composite" else None,
+                        None,  # V4.97：永不把参考图贴进成品；风格只经提示词与配色学习
                         t["dim_ratio"], False, None, trace, overlay_mode)
                     break
                 except TextOverflowError as e:
