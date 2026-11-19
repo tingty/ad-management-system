@@ -54,9 +54,6 @@ from image_prompt_rule import render_image_prompt_rule
 from image_content_guard import inspect_image_content
 import app_settings  # V4.104 / 方案E：系统级质检开关（默认开、可关）
 import creative_intent as cw_intent  # V4.105 / 方案C：结构化创作意图（三类素材共用）
-from reference_image import (analyze_reference_style, render_reference_style_block,
-                            normalize_role, reference_requirement,
-                            render_product_fidelity_block)
 from batch_workspace import BatchWorkspace
 # V4.42 / F06：供应商尺寸能力目录、按比例构图与主体保护
 from image_capabilities import (plan_generation_size, composition_goal,
@@ -656,7 +653,7 @@ def build_overlay_text(headline: str, sub: str, cta: str, w: int, h: int,
 def _media_image_prompt(analysis: dict, platform: str, config: dict,
                         brief: dict | None = None, db=None, *,
                         overlay_mode: str = "pure", placement: dict | None = None,
-                        contract: dict | None = None, style_block: str = "") -> str:
+                        contract: dict | None = None) -> str:
     """V4.41 / F03 + F04：按「概念 → 视觉简报 → 提示词」顺序逐任务构建背景提示词。
 
     与 V4.40 的根本差别：本函数**收标题 / 证据 / 概念 / 版式**，且只在文案组合
@@ -721,10 +718,6 @@ def _media_image_prompt(analysis: dict, platform: str, config: dict,
     rule_text = render_image_prompt_rule(cfg.get("prompt_rule"))
     if rule_text:
         blocks.append(rule_text)
-    # V4.97：参考图「仅学习配色/明暗/质感」的提示词块；与规则块同层，
-    # 都放在 V4.88 零文字契约之前，契约继续做最后兜底。
-    if style_block and style_block.strip():
-        blocks.append(style_block.strip())
     if brief:
         # F03：先确定概念再写画面；同一 concept_key 跨尺寸保持承诺一致
         # V4.102 / C04：纯图模式传入 overlay_mode，避免 brief 里的旧版式 composition
@@ -876,74 +869,12 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
     img = get_image(db)
     img_cfg = _active_config(db, "image")
 
-    # V4.97：参考图只用于「学习」——提取配色/明暗/冷暖覆盖到本批调色板，并把学习
-    # 结论注入文生图提示词，让模型生成一张**全新的**推广图。绝不把用户上传的原图
-    # 原样贴进成品（旧 local_composite 会把参考图 paste 到主体区，与本用途相反）。
-    # 视频侧 image_to_video 用参考图作首帧是另一条链路，不受此处改动影响。
-    ref_rel = str(style_opts.get("reference_image") or "").strip()
-    reference_path = None
-    if ref_rel.startswith("/files/"):
-        candidate = os.path.join(UPLOAD_DIR, os.path.basename(ref_rel[len("/files/"):]))
-        if os.path.isfile(candidate):
-            reference_path = candidate
-    # V4.106 / 方案D：参考图角色区分。风格参考（默认）行为与 V4.97 一致；商品参考要求
-    # 「有商品图 + 有投放授权 + 供应商具备参考编辑能力」三者同时成立，否则在调用前阻断，
-    # 绝不退回通用品或用文生图重画一个「差不多」的商品。
-    ref_role = normalize_role(style_opts.get("reference_role"))
-    ref_authorized = bool(style_opts.get("reference_authorized"))
-    # 未配置图片模型 / 测试替身没有 capabilities() 时，按能力目录 + capability_key 取声明：
-    # 默认不具备参考编辑能力，商品保真会明确阻断，而不是悄悄退成本地模板画的替代品。
-    from image_capabilities import capability_of as _capability_of
-    _cap = _capability_of(getattr(img, "capability_key", "generic_image"),
-                          (img_cfg.params if img_cfg else None) or {})
-    ref_gate = reference_requirement(ref_role, bool(reference_path),
-                                     bool(_cap.get("supports_reference_edit")), ref_authorized)
-    if ref_gate["status"] != "ok":
-        return {
-            "platform": platform,
-            "images": [],
-            "count": 0,
-            "status": "needs_input",
-            "strict_text": False,
-            "note": "商品保真未就绪，已在调用付费模型前阻断：" + ref_gate["note"],
-            "issues": [{"level": "error", "status": "needs_input", "size": "", "placement": "",
-                        "concept_id": "", "ad_product": "", "message": ref_gate["required_action"]}],
-            "skipped": [], "task_results": [],
-            "batch_id": batch_id, "spec_version": SPEC_VERSION,
-            "reference_gate": ref_gate,
-            "image_model": {"provider": (img_cfg.provider if img_cfg else "template"),
-                            "model": ((img_cfg.model if img_cfg else "") or ""),
-                            "role": "image", "fallback": True, "source": "blocked"},
-        }
-    ref_style = analyze_reference_style(reference_path)
-    style_block = render_reference_style_block(ref_style)
-    if ref_role == "product_reference":
-        # 商品保真：用参考编辑提示词块替代「只学配色」的描述；参考图像素会作为编辑底图
-        style_block = render_product_fidelity_block(ref_style.get("traits") or {})
-        reference_mode = "product_reference"
-        capability_note = ("商品参考：按参考图编辑，保留型号 / 颜色 / 材质 / 结构，"
-                           "只改背景、光线与场景；不重绘商品、不替换成同类目商品。")
-        if ref_style.get("ok"):
-            override = {k: v for k, v in (ref_style.get("palette_override") or {}).items()
-                        if k in palette}
-            # 商品保真只借品牌色调作背景，不改商品本色
-            palette.update({k: v for k, v in override.items() if k in ("bg1", "bg2", "accent")})
-    elif ref_style.get("ok"):
-        # 只覆盖既有键，避免把提取失败的结构写进 palette 影响渲染
-        override = {k: v for k, v in (ref_style.get("palette_override") or {}).items()
-                    if k in palette}
-        palette.update(override)
-        reference_mode = "style_reference"
-        capability_note = ("参考图仅用于学习配色与画面质感，AI 据此生成全新推广画面；"
-                           "原图主体、文字、Logo 与像素未直接使用或合成。")
-    elif reference_path:
-        reference_mode = "style_reference"
-        capability_note = ("已提供参考图但风格学习失败，按文案与行业视觉约束生成全新画面；"
-                           "未直接使用或合成原图。")
-    else:
-        reference_mode = "none"
-        capability_note = ("未提供参考图；画面只使用落地页事实与行业视觉约束，"
-                           "不得虚构商品外观、标签、规格与评价。")
+    # V4.110：输入区「参考图」组件已删除，图片侧不再接收参考图。
+    # 参考图只保留在视频「图生视频」链路（首帧驱动），与本函数无关。
+    # 图片一律按「没有参考图」生成：只用落地页事实 + 行业视觉约束，不虚构商品外观。
+    reference_mode = "none"
+    capability_note = ("未提供参考图；画面只使用落地页事实与行业视觉约束，"
+                       "不得虚构商品外观、标签、规格与评价。")
 
     provider_name = (img_cfg.provider if img_cfg else "template")
     model_name = ((img_cfg.model if img_cfg else "") or "Pillow 品牌渐变模板")
@@ -1015,7 +946,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 overlay_mode=overlay_mode)
             bg_prompt = (_media_image_prompt(analysis, platform, config, brief, db,
                                              overlay_mode=overlay_mode, placement=slot,
-                                             contract=contract, style_block=style_block)
+                                             contract=contract)
                          + "\nComposition goal: " + composition_goal(
                              w, h, layout, overlay_mode=overlay_mode))
             phash = prompt_hash(bg_prompt)
@@ -1032,14 +963,6 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 "layout": layout,
                 "prompt_hash": phash,
                 "creative_config_id": config["config_id"],
-                # V4.97：参考图仅作风格学习；记录学习结论与「未合成原图」承诺，可追溯
-                "reference_style": {
-                    "mode": reference_mode,
-                    "learned": bool(ref_style.get("ok")),
-                    "traits": dict(ref_style.get("traits") or {}),
-                    "reason": str(ref_style.get("reason") or ""),
-                    "original_composited": False,
-                },
                 "request_size": gen_plan["request_size"],
                 "target_size": [w, h],
                 # V4.88：提示词契约随资产落库；标准库未登记时明确标注，不伪造核验级别。
@@ -1133,12 +1056,7 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 rel = workspace.temp_name("mabg")
                 try:
                     async with sem:      # F11：供应商并发 / 速率限制
-                        # V4.97：参考图风格已注入提示词与配色，不再把原图传给供应商，
-                        # 也不再本地贴图；供应商只按提示词生成全新画面。
-                        call = img.generate(t["bg_prompt"], t["w"], t["h"], rel,
-                                            reference=(reference_path
-                                                       if reference_mode == "product_reference"
-                                                       else None))
+                        call = img.generate(t["bg_prompt"], t["w"], t["h"], rel)
                         bg = await asyncio.wait_for(call, timeout=IMAGE_TASK_TIMEOUT_SECONDS)
                     if bg and os.path.isfile(bg):
                         bg_path, ai_ok = bg, True
@@ -1305,8 +1223,6 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         if variants:
             note_bits.append(f"共 {len(variants)} 组创意文案，按任务矩阵指定的概念叠加，同一概念的标题与证据保持一致")
         note_bits.append(f"每张图按概念生成独立视觉简报，配置 {config['config_id']}（{CREATIVE_CONFIG_VERSION}）已随图归档")
-        if reference_mode != "none":
-            note_bits.append(f"商品参考图模式 {reference_mode}：{capability_note}")
         if image_model["mixed"]:
             note_bits.append("同批存在模板回退，已逐张标注，不按整批 AI 成功计")
         if failed_count:

@@ -232,7 +232,8 @@ function isFrameOk(a: any): boolean {
 /**
  * 创意工作台 · V4.65 布局优化（仅界面排版，不涉及功能 / 处理流程 / 输出结果）
  * ① 顶部：标题 + 一句话介绍，不堆叠其他内容；
- * ② 输入模块：统一表单行（产品链接 / 投放平台[下拉单选] / 参考图 / 品牌[文字或导入Logo]），非必要子模块收进「更多选项」；
+ * ② 输入模块：统一表单行（产品链接 / 投放平台[下拉单选] / 素材类型 / 创作要求），
+ *    V4.110 起删除「素材图片选择 / 参考图 / 品牌」三块无使用场景的组件；
  * ③ 工作流处理模块：解析产品 → 规划创意 → 批量生成 三步可视化（done/cur/pending），进度条展示当前进度与待处理内容，结果汇总于此；
  * ④ 分析结果（产品摘要 / 行业·人群·动机·价格带 / 来源徽标）统一收进右侧「项目简报」面板；
  * ⑤ 创意路线交互选择保留在正文；⑥ 素材创作输出结果保持既有样式不变（可批量下载 / 单独放大灯箱）。
@@ -246,14 +247,9 @@ export default function CreativeWorkbench() {
   const [error, setError] = useState('')
   const [demoMode, setDemoMode] = useState(false)   // V4.59 / B1：演示模式开关（默认关闭）
   const [copiesByPlatform, setCopiesByPlatform] = useState<Record<string, any>>({})  // V4.60 / B3：各平台生成的广告文案
-  const [referenceImage, setReferenceImage] = useState('')   // V4.60 / B3：商品/品牌参考图（/files/<name> 或 URL）
-  // V4.106 / 方案D：参考图角色（风格参考 / 商品保真）+ 投放授权确认
-  const [refRole, setRefRole] = useState<'style_reference' | 'product_reference'>('style_reference')
-  const [refAuthorized, setRefAuthorized] = useState(false)
-  const [referenceName, setReferenceName] = useState('')     // 参考图展示名
-  const [refUploading, setRefUploading] = useState(false)   // 参考图上传/下载中
-  // V4.61 / B4：品牌名（注入文案生成）
-  const [selectedBrand, setSelectedBrand] = useState('')
+  // V4.110：输入区不再有「素材图片选择 / 参考图 / 品牌」三块组件。
+  // 参考图只在视频「图生视频」里需要，已迁到视频规划区上传，这里仅保存父级提交时要用的路径。
+  const [videoRef, setVideoRef] = useState('')
 
   // V4.92：素材类型多选（文案 / 图片 / 视频），可任意组合；控制 Step2 规划与 Step3 工作区显隐与生成范围。
   // 默认沿用原 both 行为（图片 + 视频），文案需用户主动勾选后才会生成。
@@ -292,8 +288,6 @@ export default function CreativeWorkbench() {
     })
   }
   const materialLabel: Record<MaterialKind, string> = { copy: '文案', image: '图片', video: '视频' }
-  // V4.70：品牌 Logo 注入生成链路开关（勾选→作为 brand_logo 传入图片/视频生成）
-  const [injectLogo, setInjectLogo] = useState(false)
 
   const [view, setView] = useState<'input' | 'analyzing' | 'plan' | 'generating' | 'result'>('input')
   const [progressPct, setProgressPct] = useState(0)   // 图片工作区聚合进度
@@ -358,16 +352,10 @@ export default function CreativeWorkbench() {
   // V4.56 新增：右侧「项目简报」面板（仅展示分析结果 / 可收缩）
   const [briefOpen, setBriefOpen] = useState(true)
 
-  const [brandLogo, setBrandLogo] = useState('')           // 品牌 Logo 文件（UI 预览 + 可注入生成）
-  const [brandLogoName, setBrandLogoName] = useState('')
-  const [brandUploading, setBrandUploading] = useState(false)
-  // V4.62：素材图叠加模式。默认「纯图片」：生成素材时不含文字 / 按钮 / logo。
-  const [overlayMode, setOverlayMode] = useState<'pure' | 'text' | 'text_button'>('pure')
-
   // V4.70：视频状态切片（由 VideoStudio 受控托管，Step2 规划 / Step3 工作区共享分镜方案）
   const [vs, setVs] = useState<VideoState>({
     messages: [], plan: null, videos: [], options: {
-      mode: referenceImage ? 'image_to_video' : 'text_to_video',
+      mode: videoRef ? 'image_to_video' : 'text_to_video',
       voiceover: 'narration', duration: 15, aspect: '9:16', lang: 'zh', prompt_hint: '',
     },
     note: '', modelInfo: null, videoModel: null, outputAspect: '', planning: false, generating: false, error: '', refineInput: '',
@@ -667,11 +655,9 @@ export default function CreativeWorkbench() {
     return selected.length * 2
   }
 
-  /** V4.92：归一化分析 + 注入品牌，供文案 / 图片 / 视频共用同一事实来源 */
+  /** V4.92：归一化分析，供文案 / 图片 / 视频共用同一事实来源（V4.110：不再叠加手填品牌） */
   function currentAnalysis() {
-    const analysis = normalizeAnalysis(cw?.analysis)
-    if (selectedBrand && selectedBrand.trim()) analysis.brand = selectedBrand.trim()
-    return analysis
+    return normalizeAnalysis(cw?.analysis)
   }
 
   /** V4.101：只有用户点过「确认使用」的 brief 才允许进入三类生成链路。 */
@@ -799,7 +785,6 @@ export default function CreativeWorkbench() {
     const data = await buildCopies(analysis, selected)
     setCopiesByPlatform(data.copiesByPlat)
     const brandSet = new Set<string>()
-    if (selectedBrand && selectedBrand.trim()) brandSet.add(selectedBrand.trim())
     for (const p of Object.keys(data.copiesByPlat)) { const b = data.copiesByPlat[p]?.brand; if (b && String(b).trim()) brandSet.add(String(b).trim()) }
     for (const b of brandSet) { api.addCwLibrary({ kind: 'brand', title: b, meta: { platforms: Object.keys(data.copiesByPlat) } }).catch(() => {}) }
     const okCount = Object.keys(data.copiesByPlat).length
@@ -827,16 +812,8 @@ export default function CreativeWorkbench() {
     const { copiesByPlat, variantsByPlat, copyFailures } = prebuilt || await buildCopies(analysis, selected)
     setCopiesByPlatform(copiesByPlat)
     const brandSet = new Set<string>()
-    if (selectedBrand && selectedBrand.trim()) brandSet.add(selectedBrand.trim())
     for (const p of Object.keys(copiesByPlat)) { const b = copiesByPlat[p]?.brand; if (b && String(b).trim()) brandSet.add(String(b).trim()) }
     for (const b of brandSet) { api.addCwLibrary({ kind: 'brand', title: b, meta: { platforms: Object.keys(copiesByPlat) } }).catch(() => {}) }
-    let refPath = ''
-    if (referenceImage && referenceImage.trim()) {
-      const raw = referenceImage.trim()
-      if (raw.startsWith('http')) { setRefUploading(true); try { const fr: any = await api.fetchAssetUrl(raw); refPath = fr?.url || '' } catch { refPath = '' } setRefUploading(false) }
-      else refPath = raw
-    }
-    if (refPath) { api.addCwLibrary({ kind: 'reference', title: referenceName || '参考图', file: refPath, meta: { from: 'creative_workbench', role: refRole, authorized: refRole === 'product_reference' ? refAuthorized : false } }).catch(() => {}) }
     const activeRoutes = routes.filter(r => r.selected)
     const collected: any[] = []
     const finalStates: string[] = []
@@ -896,26 +873,18 @@ export default function CreativeWorkbench() {
               })),
               supplement: imageSupplement || '',
               platform: p,
-              overlay_mode: overlayMode,
+              // V4.110：输入区不再暴露叠加模式，统一纯图片（无字 / 无按钮 / 无 Logo）
+              overlay_mode: 'pure',
               brief: confirmedBrief(),
             },
           }
-          if (refPath) {
-            style_opts.reference_image = refPath
-            // V4.106 / 方案D：角色与授权随请求下发；商品保真由后端在调用前做能力闸门
-            style_opts.reference_role = refRole
-            style_opts.reference_authorized = refRole === 'product_reference' ? refAuthorized : false
-          }
-          // V4.70：品牌 Logo 注入生成链路（勾选时）
-          if (injectLogo && brandLogo) style_opts.brand_logo = brandLogo
           const payload = {
             images_request: {
               analysis, platform: p, lang: 'en',
               copy_fields: {}, copy_variants: variantsByPlat[p] || [], style_opts, slots,
               spec_version: rules?.spec_version || '',
               total_pixels: sizes.reduce((n: number, s: string) => { const [w, h] = s.split('x').map(Number); return n + (w * h || 0) }, 0),
-              overlay_mode: overlayMode,
-              logo: (injectLogo && brandLogo) ? brandLogo : '',
+              overlay_mode: 'pure',
             },
             archive: hid ? { history_id: hid, platform: p, lang: 'en' } : undefined,
             batch_id: batchId || undefined,   // V4.81：并入同一次「创作」批次
@@ -990,7 +959,6 @@ export default function CreativeWorkbench() {
     const options = override?.options || vs.options
     if (!plan?.shots?.length) return { ok: false, fail: null }
     const analysis = normalizeAnalysis(cw?.analysis)
-    if (selectedBrand && selectedBrand.trim()) analysis.brand = selectedBrand.trim()
     setVs(s => ({ ...s, generating: true, error: '', videos: [], note: '', videoFail: null }))
     try {
       // V4.81 / P3：提交即返回，页面不再等 1–6 分钟；进度看顶部「任务」抽屉。
@@ -1006,8 +974,8 @@ export default function CreativeWorkbench() {
       }
       const job: any = await api.submitVideoJob({
         analysis, platform: selectedPlatform,
-        reference_image: referenceImage || '',
-        brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
+        // V4.110：参考图来自视频规划区（图生视频）；输入区已不再有参考图组件
+        reference_image: videoRef || '',
         plan, options: { ...options, prompt_hint: options.prompt_hint },
       }, {
         idempotencyKey: submitKeyRef.current.key,
@@ -1216,15 +1184,14 @@ export default function CreativeWorkbench() {
     cwTaskDismiss()   // V4.77：重置工作台同时收起常驻任务栏
     setView('input'); setCw(null); setLanding(null); setRoutes([]); setPlanId(null); setAssets([]); setJobs([])
     setHistoryId(null); setError(''); setProgressPct(0); setChecked({}); setDemoMode(false)
-    // V4.60 / B3 + B4：清空文案缓存、参考图与品牌选择
-    setCopiesByPlatform({}); setReferenceImage(''); setReferenceName(''); setSelectedBrand('')
-    // V4.92：清空素材类型（回到默认图片+视频）/ 视频状态 / 品牌 Logo
-    setMaterialTypes(['image', 'video']); setMtOpen(false); setInjectLogo(false)
+    // V4.110：清空文案缓存；参考图 / 品牌组件已移除，只需清空视频参考图
+    setCopiesByPlatform({}); setVideoRef('')
+    // V4.92：清空素材类型（回到默认图片+视频）/ 视频状态
+    setMaterialTypes(['image', 'video']); setMtOpen(false)
     setVs({ messages: [], plan: null, videos: [], options: {
-      mode: referenceImage ? 'image_to_video' : 'text_to_video',
+      mode: 'text_to_video',
       voiceover: 'narration', duration: 15, aspect: '9:16', lang: 'zh', prompt_hint: '' },
       note: '', modelInfo: null, videoModel: null, outputAspect: '', planning: false, generating: false, error: '', refineInput: '' })
-    setBrandLogo(''); setBrandLogoName('')
     // V4.101：清空用户提示词补全状态，避免新创作沿用上一版未确认/已确认方案
     setCreativeBriefInput(''); setCreativeBriefFramework('aida'); setCreativeBriefDraft(null)
     setCreativeBriefConfirmed(false); setCopyVariant(0); copyVariantRef.current = 0
@@ -1246,26 +1213,6 @@ export default function CreativeWorkbench() {
   }
   // 图片任务仍在前端等待返回：此时重置会把在跑的图片任务与界面状态断开，因此先拦住
   const imgBusy = jobs.some(j => ['submitting', 'queued', 'running'].includes(String(j.status)))
-  async function onRefFile(e: any) {
-    const file = e.target.files?.[0]; if (!file) return
-    setRefUploading(true)
-    try {
-      const r: any = await api.uploadAsset(file)
-      setReferenceImage(r?.url || ''); setReferenceName(r?.name || file.name)
-    } catch (err: any) { setError('参考图上传失败：' + (err?.message || '')) }
-    finally { setRefUploading(false); e.target.value = '' }
-  }
-  // V4.65：品牌 Logo 上传（UI 预览；勾选「注入生成链路」时作为 brand_logo 传入图片/视频生成）
-  async function onBrandLogo(e: any) {
-    const file = e.target.files?.[0]; if (!file) return
-    setBrandUploading(true)
-    try {
-      const r: any = await api.uploadAsset(file)
-      setBrandLogo(r?.url || ''); setBrandLogoName(r?.name || file.name)
-    } catch (err: any) { setError('品牌 Logo 上传失败：' + (err?.message || '')) }
-    finally { setBrandUploading(false); e.target.value = '' }
-  }
-  function clearBrandLogo() { setBrandLogo(''); setBrandLogoName('') }
   // V4.65：投放平台改为下拉单选（内部仍保持 [platform] 数组，下游生成逻辑不变）
   function onPlatformChange(e: any) { setSelected([e.target.value]) }
   const selectedPlatform = selected[0] || ''
@@ -1367,79 +1314,6 @@ export default function CreativeWorkbench() {
                     </div>
                   )}
                 </div>
-              </div>
-              {/* 素材图片选择：下拉单选（默认 纯图片），开始分析即按此要求出图（仅勾选图片时展示） */}
-              <div className="cwb-form-row" style={{ display: hasImage ? undefined : 'none' }}>
-                <label className="cwb-field-label" htmlFor="cwb-ov">素材图片选择</label>
-                <div className="cwb-ov-col">
-                  <div className="cwb-select-wrap">
-                    <select id="cwb-ov" className="cwb-select" value={overlayMode}
-                      onChange={e => setOverlayMode(e.target.value as 'pure' | 'text' | 'text_button')}>
-                      <option value="pure">纯图片</option>
-                      <option value="text">图片+文字</option>
-                      <option value="text_button">图片+文字+按钮</option>
-                    </select>
-                  </div>
-                  <span className="cwb-field-hint">{overlayMode === 'pure' ? '纯图片：无字、无按钮、无 Logo，满版真实场景且无预留空白' : overlayMode === 'text' ? '图片+文字：保留文案区并叠加文字' : '图片+文字+按钮：保留文案区并叠加文字与按钮'}</span>
-                </div>
-              </div>
-              {/* 参考图（upload / URL）：仅用于学习风格与配色，不直接使用原图 */}
-              {/* V4.99：说明文字必须放在控件列内，否则作为表单网格的第三个子元素会掉进 84px 标签列被折成窄条，撑高整行 */}
-              <div className="cwb-form-row">
-                <label className="cwb-field-label">参考图</label>
-                <div className="cwb-ov-col">
-                  <div className="cwb-ref-row cwb-ref-row2">
-                    <label className="cwb-ref-upload" title="上传风格参考图：AI 只学习配色与画面质感，生成全新推广图，不会直接使用或合成原图">
-                      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onRefFile} disabled={refUploading} />
-                      <span>{refUploading ? '处理中…' : (referenceImage ? '更换图片' : '上传图片')}</span>
-                    </label>
-                    {referenceImage && <span className="cwb-ref-name" title={referenceImage}>{referenceName || '已上传'}</span>}
-                    {referenceImage && <button className="cwb-ref-clear" onClick={() => { setReferenceImage(''); setReferenceName('') }} title="移除参考图">移除</button>}
-                    <input className="cwb-ref-url" value={referenceImage.startsWith('http') ? referenceImage : ''}
-                      onChange={e => { setReferenceImage(e.target.value.trim()); setReferenceName('') }}
-                      placeholder="或粘贴图片 URL（自动下载）" disabled={refUploading} />
-                  </div>
-                  {/* V4.106 / 方案D：参考图角色。风格参考只学配色；商品参考要求按参考图保真编辑 */}
-                  <div className="cwb-intent-row">
-                    <select className="cwb-select cwb-ref-role" value={refRole}
-                      onChange={e => setRefRole(e.target.value as 'style_reference' | 'product_reference')}>
-                      <option value="style_reference">风格参考（只学配色 / 质感）</option>
-                      <option value="product_reference">商品参考（保真：型号 / 颜色 / 材质 / 结构）</option>
-                    </select>
-                    {refRole === 'product_reference' && (
-                      <label className="cwb-demo-toggle" title="商品保真必须使用创作者提供且获得投放授权的商品素材">
-                        <input type="checkbox" checked={refAuthorized} onChange={e => setRefAuthorized(e.target.checked)} />
-                        <span>我确认拥有该商品素材的投放授权</span>
-                      </label>
-                    )}
-                  </div>
-                  <span className="cwb-field-hint">{refRole === 'product_reference'
-                    ? '商品参考：按参考图编辑，保留商品型号 / 颜色 / 材质 / 结构，只改背景与场景；需模型支持参考编辑，否则生成前会被拦截并提示补齐'
-                    : '仅学习配色与画面质感，AI 生成全新画面；原图主体 / 文字 / Logo 不会出现在素材中'}</span>
-                </div>
-              </div>
-              {/* 品牌：输入框 + 右侧 Logo 上传按钮；上传后 Logo 预览显示在品牌标题下方 */}
-              <div className="cwb-form-row">
-                <label className="cwb-field-label">品牌</label>
-                <div className="cwb-brand-row">
-                  <input className="cwb-input" value={selectedBrand}
-                    onChange={e => setSelectedBrand(e.target.value.trim())}
-                    placeholder="品牌名称（可留空让模型推断）" />
-                  <label className="cwb-ref-upload" title="导入品牌 Logo 文件">
-                    <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={onBrandLogo} disabled={brandUploading} />
-                    <span>{brandUploading ? '上传中…' : (brandLogo ? '更换Logo' : '导入Logo')}</span>
-                  </label>
-                  {brandLogo && <button className="cwb-ref-clear" onClick={clearBrandLogo}>移除</button>}
-                </div>
-                {brandLogo && (
-                  <div className="cwb-brand-logo-preview">
-                    <img src={api.mediaFileDownloadUrl(brandLogo)} alt={brandLogoName} title={brandLogoName} />
-                    <label className="cwb-inject-toggle" title="图片叠加模式会合成 Logo；视频仅作品牌主体参考，不叠加 Logo 图层">
-                      <input type="checkbox" checked={injectLogo} onChange={e => setInjectLogo(e.target.checked)} />
-                      <span>注入生成链路（图片叠加模式合成 Logo；视频仅作品牌主体参考）</span>
-                    </label>
-                  </div>
-                )}
               </div>
             </div>
             {/* V4.105 / 方案C：分析前确认一次创作要求；解析结果会随分析一起进入路线与三类素材 */}
@@ -1634,7 +1508,7 @@ export default function CreativeWorkbench() {
                 {hasVideo && (
                   <div className="cwb-plan-block">
                     <VideoStudio mode="plan" analysis={cw?.analysis} platform={selectedPlatform}
-                      referenceImage={referenceImage} brandLogo={brandLogo} injectLogo={injectLogo}
+                      referenceImage={videoRef} onReferenceChange={setVideoRef}
                       creativeBrief={confirmedBrief()} framework={creativeBriefFramework}
                       state={vs} setState={setVs} />
                   </div>
@@ -1854,7 +1728,7 @@ export default function CreativeWorkbench() {
             {hasVideo && (
               <div className="cwb-work-area">
                 <VideoStudio mode="work" analysis={cw?.analysis} platform={selectedPlatform}
-                  referenceImage={referenceImage} brandLogo={brandLogo} injectLogo={injectLogo}
+                  referenceImage={videoRef} onReferenceChange={setVideoRef}
                   state={vs} setState={setVs} onSubmitJob={submitVideoFromStudio} />
               </div>
             )}

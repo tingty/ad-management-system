@@ -154,8 +154,8 @@ class TestCW(unittest.TestCase):
         self.assertTrue(len(non_empty) > 0, "文案 fields 不应全空（P0#4：文案为空）")
         self.assertIsInstance(d.get("model_info"), dict)
 
-    def test_09_generation_job_carries_copy_and_reference(self):
-        # B3：生成任务的 images_request 必须携带 copy_variants 与 style_opts.reference_image
+    def test_09_generation_job_carries_copy(self):
+        # B3：生成任务的 images_request 必须携带 copy_variants（V4.110 起参考图组件已删除）
         a = self.client.post("/api/cw/analyze",
                              json={"url": "https://x.com/p", "platforms": ["Meta"], "demo_mode": True},
                              headers=self.auth).json()
@@ -176,7 +176,7 @@ class TestCW(unittest.TestCase):
             "images_request": {
                 "analysis": analysis, "platform": "Meta", "lang": "en",
                 "copy_fields": {}, "copy_variants": [variant],
-                "style_opts": {"creative_direction": "D01", "reference_image": "/files/ref_test.png"},
+                "style_opts": {"creative_direction": "D01"},
                 "slots": [{"size": "1080x1080", "placement": "Meta"}],
                 "spec_version": "", "total_pixels": 1080 * 1080,
             },
@@ -193,8 +193,6 @@ class TestCW(unittest.TestCase):
             req = job.request_json or {}
             ir = req.get("images_request") or {}
             self.assertEqual(len(ir.get("copy_variants") or []), 1, "images_request 必须携带 copy_variants")
-            self.assertEqual((ir.get("style_opts") or {}).get("reference_image"), "/files/ref_test.png",
-                             "参考图必须透传到 style_opts.reference_image")
         finally:
             db.close()
 

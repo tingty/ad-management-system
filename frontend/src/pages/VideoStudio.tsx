@@ -30,9 +30,9 @@ export interface VideoState {
 interface VideoStudioProps {
   analysis?: any
   platform?: string
+  /** V4.110：参考图只服务「图生视频」，由本组件上传、父级保存，输入区不再提供 */
   referenceImage?: string
-  brandLogo?: string
-  injectLogo?: boolean
+  onReferenceChange?: (v: string) => void
   mode: 'plan' | 'work'
   /** V4.101：来自上层「提示词补全并确认」的 brief，三类素材共用 */
   creativeBrief?: CreativeBrief | null
@@ -127,9 +127,22 @@ function AspectChip({ aspect }: { aspect?: string }) {
   )
 }
 
-export default function VideoStudio({ analysis, platform, referenceImage, brandLogo, injectLogo, mode, creativeBrief, framework, state, setState, onSubmitJob }: VideoStudioProps) {
+export default function VideoStudio({ analysis, platform, referenceImage, onReferenceChange, mode, creativeBrief, framework, state, setState, onSubmitJob }: VideoStudioProps) {
   const { messages, plan, videos, options, note, modelInfo, videoModel, planning, generating, error, refineInput } = state
   const chatRef = useRef<HTMLDivElement>(null)
+  // V4.110：参考图上传从输入区迁到此处——只有「图生视频」需要，留在这里不占主表单
+  const [refUploading, setRefUploading] = useState(false)
+  function setRef(v: string) { onReferenceChange?.(v) }
+  async function onRefFile(e: any) {
+    const file = e.target.files?.[0]; if (!file) return
+    setRefUploading(true)
+    try {
+      const r: any = await api.uploadAsset(file)
+      setRef(r?.url || '')
+    } catch (err: any) {
+      setState(s => ({ ...s, error: '参考图上传失败：' + (err?.message || '') }))
+    } finally { setRefUploading(false); e.target.value = '' }
+  }
   // V4.75：视频链路自检结果（只读配置，不触发出片）
   const [diag, setDiag] = useState<any>(null)
   const [diagBusy, setDiagBusy] = useState(false)
@@ -181,7 +194,6 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
         analysis: analysis || {},
         platform: platform || '',
         reference_image: referenceImage || '',
-        brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
         messages: msgs,
         current_plan: regenerate ? undefined : (plan || undefined),
         options,
@@ -236,7 +248,6 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
         analysis: analysis || {},
         platform: platform || '',
         reference_image: referenceImage || '',
-        brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
         messages: msgs,
         current_plan: plan || undefined,
         options,
@@ -279,8 +290,6 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
   function reset() {
     setState(s => ({ ...s, messages: [], plan: null, videos: [], note: '', error: '', modelInfo: null, videoModel: null, refineInput: '', videoFail: null }))
   }
-
-  const showRef = options.mode === 'image_to_video' && referenceImage
 
   // 出片模型徽标：优先用规划/出片接口回传的视频模型，其次用进面板时静默拉取的诊断结果。
   // 两者都没有（或未配置）时明确显示「未配置（回退分镜）」，不再拿文本模型顶替。
@@ -339,10 +348,21 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
               placeholder="例如：镜头更紧凑、前 3 秒用反差动作；不要写价格 / 评分等无证据数字"
               onChange={(e) => setOpt('prompt_hint', e.target.value)} />
           </label>
-          {showRef && (
-            <div className="vs-ref">
-              <img src={fileUrl(referenceImage)} alt="参考图" />
-              <span>参考图（图生视频驱动）</span>
+          {options.mode === 'image_to_video' && (
+            <div className="vs-ref-edit">
+              <span className="vs-ref-label">参考图（图生视频驱动）</span>
+              <div className="vs-ref-row">
+                <label className="cwb-ref-upload" title="上传图生视频参考图：作为首帧与主体参考">
+                  <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onRefFile} disabled={refUploading} />
+                  <span>{refUploading ? '处理中…' : (referenceImage ? '更换图片' : '上传参考图')}</span>
+                </label>
+                {referenceImage && <img className="vs-ref-thumb" src={fileUrl(referenceImage)} alt="参考图" />}
+                {referenceImage && <button type="button" className="cwb-ref-clear" onClick={() => setRef('')}>移除</button>}
+              </div>
+              <input className="cwb-ref-url"
+                value={referenceImage && referenceImage.startsWith('http') ? referenceImage : ''}
+                onChange={(e) => setRef(e.target.value.trim())}
+                placeholder="或粘贴图片 URL（自动下载）" disabled={refUploading} />
             </div>
           )}
         </div>

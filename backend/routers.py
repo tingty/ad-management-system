@@ -61,8 +61,6 @@ from creative_brief import (
 # V4.105 / 方案C：结构化创作意图（分析前确认创作要求，三类素材共用）
 import creative_intent as cw_intent
 import workshop as cw_workshop
-from reference_image import (normalize_role as reference_role,
-                            reference_requirement)
 from version import ENABLE_AUTO_CREATION_PLAN
 # V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
 from video_claims import (video_evidence_context, audit_video_plan,
@@ -169,36 +167,6 @@ def _enforce_evidence_gate(analysis: dict) -> None:
         })
 
 
-def _enforce_reference_gate(db: Session, style_opts: dict | None) -> None:
-    """V4.106 / 方案D：商品保真参考图闸门——缺商品图 / 缺授权 / 模型不具备编辑能力时阻断。
-
-    风格参考（默认）直接放行，行为与 V4.97 一致。阻断发生在入队与付费调用之前，
-    返回 422 + needs_input，前端按 required_action 引导用户补素材或改角色。
-    """
-    opts = style_opts if isinstance(style_opts, dict) else {}
-    role = reference_role(opts.get("reference_role"))
-    if role != "product_reference":
-        return
-    ref = str(opts.get("reference_image") or "").strip()
-    try:
-        from providers import get_image
-        img = get_image(db)
-        cfg = _active_config(db, "image")
-        cap = img.capabilities((cfg.params if cfg else None) or {})
-        supported = bool(cap.get("supports_reference_edit"))
-    except Exception:
-        supported = False
-    gate = reference_requirement(role, bool(ref), supported,
-                                 bool(opts.get("reference_authorized")))
-    if gate["status"] != "ok":
-        raise HTTPException(422, detail={
-            "message": "商品保真参考图未就绪，已在调用模型前阻断（needs_input）",
-            "errors": [gate["note"]],
-            "reference_gate": gate["code"],
-            "required_action": gate["required_action"],
-        })
-
-
 @router.get("/industry-profiles")
 def api_industry_profiles(_: User = Depends(require_roles(*ROLES))):
     """V4.39：行业 / 品类画像列表，供「素材创作」局部调整。
@@ -273,8 +241,6 @@ async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depend
     analysis = req.analysis.model_dump()
     # V4.103 / 方案A：真实抓取分析无证据时硬阻断，不调用付费模型。
     _enforce_evidence_gate(analysis)
-    # V4.106 / 方案D：商品保真参考图闸门（风格参考不受影响）
-    _enforce_reference_gate(db, req.style_opts)
     profile = resolve_profile(analysis, key=analysis.get("industry_profile") or "")
     try:
         checked = validate_task_matrix(req.platform, slots,
@@ -1766,9 +1732,6 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
     claim_audit = audit_video_plan(plan, analysis)
     asset_gate = video_asset_gate(plan, req.reference_image)
     if options.get("prompt_hint"): prompt_parts.append("补充要求：" + str(options["prompt_hint"]))
-    if req.brand_logo:
-        # V4.88：Logo 只作品牌主体一致性参考；无字策略下不绘制图形 Logo / 角标 / 端卡。
-        prompt_parts.append(f"品牌参考资产：{req.brand_logo}（仅用于保持品牌主体一致；不叠加图形 Logo、水印或文字端卡）")
     prompt_parts.append(render_video_contract_block(prompt_contract))
     # V4.93：黄金词典块——明确禁止模型绘制品牌名 / 英文单词，从源头杜绝错拼。
     prompt_parts.append(render_lexicon_block(lexicon))
@@ -1806,9 +1769,6 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
     if str(plan.get("mode") or options.get("mode") or "") == "image_to_video" and req.reference_image:
         meta["image"] = req.reference_image
         meta["mode"] = "image_to_video"
-    # 品牌 Logo 注入：勾选「注入生成链路」时带入，供视频模型/分镜在结尾品牌定格使用
-    if req.brand_logo:
-        meta["brand_logo"] = req.brand_logo
 
     # V4.78：出片未命中视频模型时，明确区分「压根没配」与「配了但配错成文本模型」，
     # 否则用户只会看到「调用了 deepseek」，却不知道文本模型根本不参与出片。
@@ -2118,8 +2078,6 @@ async def create_generation_job(body: dict, db: Session = Depends(get_db),
         _job_analysis = (body.get("images_request") or {}).get("analysis") or {}
         if _job_analysis:
             _enforce_evidence_gate(_job_analysis if isinstance(_job_analysis, dict) else {})
-        # V4.106 / 方案D：实际出图入口的商品保真闸门（前端走此路）
-        _enforce_reference_gate(db, (body.get("images_request") or {}).get("style_opts") or {})
     try:
         job, created = job_service.create_job(
             db, body, user, idempotency_key=str(body.get("idempotency_key") or "").strip(),
@@ -2492,7 +2450,7 @@ async def upload_asset(file: UploadFile = File(...),
 
 @router.post("/assets/fetch-url")
 async def fetch_asset_url(body: dict, user: User = Depends(require_roles(*CAN_EDIT))):
-    """B3：把参考图 URL 下载到本地 uploads，返回 /files/<name>，供 style_opts.reference_image 使用。
+    """把远程图片下载到本地 uploads，返回 /files/<name>（素材导入用）。
 
     仅支持 http(s)；校验响应 content-type 为图片、限大小（12MB），避免把非图片 / 超大资源
     当作商品参考图塞进文生图链路。下载失败 / 非图片一律 400，不静默假装成功。

@@ -1,8 +1,10 @@
-"""V4.99：创意工作台输入区排版与素材类型下拉交互。
+"""V4.99 / V4.110：创意工作台输入区排版与素材类型下拉交互。
 
-无模型 / 无网络：以静态源码断言固定两处回归——
-1) 参考图说明不再作为两列表单网格的第三个子元素掉进 84px 标签列被折成窄条；
-2) 素材类型多选下拉在点击自身之外区域 / Esc 后收起，监听随展开状态清理。
+无模型 / 无网络：以静态源码断言固定回归——
+1) 输入区已删除「素材图片选择 / 参考图 / 品牌」三块组件，不得残留；
+2) 图生视频的参考图上传迁到视频规划区，上传、缩略图、URL 输入仍在同一个控件容器内
+   （旧问题是说明行掉进 84px 标签列被折成窄条）；
+3) 素材类型多选下拉在点击自身之外区域 / Esc 后收起，监听随展开状态清理。
 """
 import sys
 import unittest
@@ -15,32 +17,32 @@ from _bootstrap import BACKEND  # noqa: E402
 
 FRONTEND = BACKEND.parent / "frontend" / "src"
 TSX = FRONTEND / "pages" / "CreativeWorkbench.tsx"
+VS = FRONTEND / "pages" / "VideoStudio.tsx"
 CSS = FRONTEND / "styles.css"
 
 
-def _reference_block(src: str) -> str:
-    start = src.index("{/* 参考图（upload / URL）")
-    end = src.index("{/* 品牌：", start)
-    return src[start:end]
-
-
 class TestInputLayoutV499(unittest.TestCase):
-    def test_01_reference_hint_inside_control_column(self):
-        block = _reference_block(TSX.read_text(encoding="utf-8"))
-        self.assertIn('<div className="cwb-ov-col">', block)
-        self.assertIn('<div className="cwb-ref-row cwb-ref-row2">', block)
-        # V4.106：参考图角色加入后，提示文案按角色切换；仍要求提示在控件列内
-        self.assertIn('className="cwb-field-hint"', block)
-        self.assertIn('仅学习配色与画面质感', block)
-        self.assertLess(block.index('<div className="cwb-ov-col">'),
-                        block.index('<div className="cwb-ref-row cwb-ref-row2">'))
-        self.assertLess(block.index('<div className="cwb-ref-row cwb-ref-row2">'),
-                        block.index('仅学习配色与画面质感'))
-
-    def test_02_no_third_grid_child(self):
-        # 旧写法：ref-row 与 hint 是表单网格的两个并列子元素，hint 掉进标签列
+    def test_01_input_form_has_no_removed_components(self):
         src = TSX.read_text(encoding="utf-8")
-        self.assertNotIn('</div>\n                <span className="cwb-field-hint">仅学习配色与画面质感', src)
+        for gone in ('<select id="cwb-ov"', 'htmlFor="cwb-ov"', '>参考图</label>', '>品牌</label>',
+                     'placeholder="品牌名称（可留空让模型推断）"', "onRefFile", "onBrandLogo"):
+            self.assertNotIn(gone, src, f"输入区不应再出现：{gone}")
+        self.assertNotIn("cwb-brand-row", src)
+        self.assertNotIn("cwb-brand-logo-preview", src)
+
+    def test_02_video_reference_upload_lives_in_video_panel(self):
+        vs = VS.read_text(encoding="utf-8")
+        self.assertIn('className="vs-ref-edit"', vs)
+        self.assertIn('className="vs-ref-row"', vs)
+        self.assertIn("onRefFile", vs)
+        # 上传 / 缩略图 / 移除 / URL 都在同一容器内，不拆成表单网格的并列子元素
+        start = vs.index('className="vs-ref-edit"')
+        end = vs.index(")}", vs.index('placeholder="或粘贴图片 URL（自动下载）"'))
+        block = vs[start:end]
+        for token in ("cwb-ref-upload", "vs-ref-thumb", "cwb-ref-clear", "cwb-ref-url"):
+            self.assertIn(token, block)
+        # 参考图只在「图生视频」下出现
+        self.assertIn("options.mode === 'image_to_video'", vs)
 
     def test_03_grid_is_two_columns(self):
         css = CSS.read_text(encoding="utf-8")

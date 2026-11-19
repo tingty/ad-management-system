@@ -1020,7 +1020,7 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
  * 而任务其实还在厂商侧跑。改成「提交即返回 + 轮询」后，代理超时与出片时长彻底解耦。
  */
 export async function cwVideoGenerateAsync(
-  payload: { analysis: any; platform: string; reference_image?: string; brand_logo?: string; plan: any; options?: any },
+  payload: { analysis: any; platform: string; reference_image?: string; plan: any; options?: any },
   onTick?: (info: { elapsed: number; stage: string; status: string }) => void,
   opts: { timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<any> {
@@ -1239,20 +1239,20 @@ export const api = {
     req<{ ok: boolean }>(`/api/cw/library/${id}`, { method: 'DELETE' }),
   // V4.66 创意工作台 · 视频素材创作区：对话式分镜策划 + 生成（直连视频模型 / 回退分镜脚本）
   cwVideoPlan: (payload: {
-    analysis: any; platform: string; reference_image?: string; brand_logo?: string;
+    analysis: any; platform: string; reference_image?: string;
     messages: { role: string; content: string }[]; current_plan?: any; options?: any;
     framework?: string; user_brief?: CreativeBrief | null; regenerate?: boolean; seed?: string;
   }) =>
     req<any>('/api/cw-video/plan', { method: 'POST', body: JSON.stringify(payload) }),
   cwVideoGenerate: (payload: {
-    analysis: any; platform: string; reference_image?: string; brand_logo?: string; plan: any; options?: any;
+    analysis: any; platform: string; reference_image?: string; plan: any; options?: any;
   }) =>
     req<any>('/api/cw-video/generate', { method: 'POST', body: JSON.stringify(payload) }),
   // V4.76 出片异步化：页面统一走这条（提交任务 + 轮询），避免反向代理 504
   cwVideoGenerateAsync,
   // V4.81 / P2：提交即返回（不轮询），进度看「任务」抽屉；同一幂等键不会产生第二次收费任务
   submitVideoJob: (payload: {
-    analysis: any; platform: string; reference_image?: string; brand_logo?: string; plan: any; options?: any;
+    analysis: any; platform: string; reference_image?: string; plan: any; options?: any;
   }, opts: { idempotencyKey?: string; draftId?: string; batchId?: string } = {}) =>
     req<any>('/api/cw-video/generate-jobs', {
       method: 'POST', body: JSON.stringify(payload),
@@ -1263,7 +1263,7 @@ export const api = {
       },
     }),
   cwVideoGenerateJob: (payload: {
-    analysis: any; platform: string; reference_image?: string; brand_logo?: string; plan: any; options?: any;
+    analysis: any; platform: string; reference_image?: string; plan: any; options?: any;
   }) => req<any>('/api/cw-video/generate-jobs', { method: 'POST', body: JSON.stringify(payload) }),
   cwVideoJob: (jobId: string) => req<any>(`/api/cw-video/generate-jobs/${jobId}`),
   // V4.81 / P3：创作任务列表（本人批次，服务端唯一事实）
@@ -1304,7 +1304,7 @@ export const api = {
     if (!res.ok) throw new Error(`上传失败 ${res.status}`)
     return res.json() as Promise<{ path: string; url: string; name: string }>
   },
-  // V4.60 / B3：把参考图 URL 下载到本地，返回 /files/<name>，用于 style_opts.reference_image
+  // 把远程图片下载到本地 uploads，返回 /files/<name>（素材导入用；图片参考图链路 V4.110 已下线）
   fetchAssetUrl: (url: string) =>
     req<{ path: string; url: string; name: string }>('/api/assets/fetch-url',
       { method: 'POST', body: JSON.stringify({ url }) }),

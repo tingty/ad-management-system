@@ -24,12 +24,11 @@ class ImageProvider:
     capability_key = "generic_image"
 
     async def generate(self, prompt: str, width: int, height: int, filename: str,
-                       copy=None, reference: str | None = None) -> str:
+                       copy=None) -> str:
         """返回保存后的文件路径。
 
-        V4.106 / 方案D：`reference` 为商品保真用的参考图本地路径。默认实现忽略它
-        （= 不具备参考编辑能力），由 media_ad 的能力闸门在调用前拦截；
-        具备编辑能力的供应商（OpenAI 兼容 /images/edits）必须真正按参考图编辑。
+        V4.110：输入区参考图组件已删除，图片侧不再有「按参考图编辑」的分支；
+        参考图只保留在视频「图生视频」链路。
         """
         raise NotImplementedError
 
@@ -296,7 +295,7 @@ class TemplateImage(ImageProvider):
     """默认出图：Pillow 合成真实 PNG（品牌渐变 + 标题/副标/CTA 排版），无需任何 API Key。"""
     capability_key = "template"
 
-    async def generate(self, prompt, width, height, filename, copy=None, reference=None):
+    async def generate(self, prompt, width, height, filename, copy=None):
         from imaging import render_ad_png
         path = os.path.join(UPLOAD_DIR, filename)
         cp = copy or {}
@@ -1488,28 +1487,6 @@ class FallbackLLM(LLMProvider):
             self.exception_type = type(e).__name__
             return await self.fallback.chat(system, user, **kw)
 
-async def _post_image_edit(base_url: str, api_key: str, model: str, prompt: str,
-                           size: str, reference: str, endpoint: str = "/images/edits"):
-    """V4.106 / 方案D：按参考图编辑（multipart /images/edits），返回原始响应 dict。
-
-    失败一律抛异常，由调用方转成 None —— 绝不静默退回文生图，否则「保真」变成
-    「凭想象画一个类似商品」，比失败更糟。
-    """
-    url = base_url.rstrip("/") + endpoint
-    headers = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    with open(reference, "rb") as fh:
-        files = {"image": (os.path.basename(reference), fh.read(), "image/png")}
-    data = {"prompt": prompt, "n": "1", "size": size, "response_format": "b64_json"}
-    if model:
-        data["model"] = model
-    async with httpx.AsyncClient(timeout=180) as c:
-        r = await c.post(url, headers=headers, data=data, files=files)
-        r.raise_for_status()
-        return r.json()
-
-
 class OpenAIImage(ImageProvider):
     """文生图（DALL·E 兼容）：POST /images/generations，解码 b64 底图保存到 path。
 
@@ -1533,21 +1510,7 @@ class OpenAIImage(ImageProvider):
             return "1024x1792"
         return "1024x1024"
 
-    async def generate(self, prompt, width, height, filename, copy=None, reference=None):
-        # V4.106 / 方案D：有参考图且声明了编辑能力 → 走 /images/edits 保真编辑
-        if reference and os.path.isfile(reference):
-            try:
-                resp = await _post_image_edit(self.base_url, self.api_key, self.model,
-                                              prompt, self._nearest_size(width, height), reference)
-                b64 = (resp.get("data") or [{}])[0].get("b64_json") if isinstance(resp, dict) else None
-                if b64:
-                    path = os.path.join(UPLOAD_DIR, filename)
-                    with open(path, "wb") as f:
-                        f.write(base64.b64decode(b64))
-                    return path
-                return None
-            except Exception:
-                return None
+    async def generate(self, prompt, width, height, filename, copy=None):
         try:
             async with httpx.AsyncClient(timeout=120) as c:
                 r = await c.post(
@@ -1604,23 +1567,8 @@ class GenericImageProvider(ImageProvider):
                 except Exception: pass
         return None
 
-    async def generate(self, prompt, width, height, filename, copy=None, reference=None):
+    async def generate(self, prompt, width, height, filename, copy=None):
         endpoint = (self.params.get("endpoint") or "/images/generations").strip()
-        # V4.106 / 方案D：声明了 reference_edit 的部署走编辑端点（默认 /images/edits）
-        if reference and os.path.isfile(reference) and                 str((self.params or {}).get("reference_edit") or "").lower() in ("1", "true", "yes", "on"):
-            try:
-                edit_ep = str((self.params or {}).get("edit_endpoint") or "/images/edits")
-                resp = await _post_image_edit(self.base_url, self.api_key, self.model, prompt,
-                                              f"{width}x{height}", reference, endpoint=edit_ep)
-                raw = self._decode(resp)
-                if not raw:
-                    return None
-                path = os.path.join(UPLOAD_DIR, filename)
-                with open(path, "wb") as f:
-                    f.write(raw)
-                return path
-            except Exception:
-                return None
         url = self.base_url + endpoint
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -1671,7 +1619,7 @@ class DashScopeMaaSImageProvider(ImageProvider):
         """兼容旧调用（单维度吸附到 1024 / 2048）。F06 后不再用两个 _snap 拼请求尺寸。"""
         return 2048 if n >= 1536 else 1024
 
-    async def generate(self, prompt, width, height, filename, copy=None, reference=None):
+    async def generate(self, prompt, width, height, filename, copy=None):
         from image_capabilities import plan_generation_size
         plan = plan_generation_size(self.capability_key, width, height, self.params)
         rw, rh = plan["request_size"]
