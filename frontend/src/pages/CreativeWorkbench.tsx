@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { api, getToken, type CreativeBrief } from '../api'
+import { api, getToken, type CreativeBrief, type CreativeIntent } from '../api'
 import VideoStudio, { VideoState } from './VideoStudio'
 import { cwTaskBegin, cwTaskDismiss, cwTaskEnd, cwTaskReset, cwTaskUpdate, getCwTask, type CwStageStatus, type CwTaskStage } from '../cwTask'
 import CreativeTasksDrawer from '../CreativeTasksDrawer'
@@ -302,6 +302,15 @@ export default function CreativeWorkbench() {
   const [routes, setRoutes] = useState<Route[]>([])
   // V4.96：图片专用补充创意指令（原绑定 vs.options.prompt_hint 属视频状态，图片链路读不到）
   const [imageSupplement, setImageSupplement] = useState('')
+  // V4.105 / 方案C：分析前先确认创作要求——一句话 + 解析后的结构化意图（受众/目标/核心价值/场景/风格/禁止项）
+  const [intentText, setIntentText] = useState('')
+  const [intent, setIntent] = useState<CreativeIntent | null>(null)
+  const [intentSummary, setIntentSummary] = useState('')
+  const [intentNotes, setIntentNotes] = useState<string[]>([])
+  const [intentConflicts, setIntentConflicts] = useState<string[]>([])
+  const [intentParsing, setIntentParsing] = useState(false)
+  // V4.105 / 方案C：路线卡就地改一句推荐描述（只改这一条）
+  const [editingRoute, setEditingRoute] = useState<{ key: string; text: string; saving?: boolean } | null>(null)
   // V4.101 / P4：三类素材共用的用户提示词补全确认流程
   const [creativeBriefInput, setCreativeBriefInput] = useState('')
   const [creativeBriefFramework, setCreativeBriefFramework] = useState('aida')
@@ -580,13 +589,22 @@ export default function CreativeWorkbench() {
     setRunning(true)                            // 分析进度在正文分析区展示
     setView('analyzing'); setProgressPct(8); setProgressText('正在解析产品页面…')
     try {
-      const cwRes: any = await api.cwAnalyze({ url: isUrl(val) ? val : '', text: isUrl(val) ? '' : val, platforms: selected, demo_mode: demoMode })
+      const cwRes: any = await api.cwAnalyze({
+        url: isUrl(val) ? val : '', text: isUrl(val) ? '' : val, platforms: selected, demo_mode: demoMode,
+        // V4.105 / 方案C：创作要求随分析一起进入路线与三类素材
+        creative_intent: intent || {}, intent_text: intentText.trim(),
+      })
       setCw(cwRes); setPlanId(cwRes?.id ?? null)
+      setIntent(cwRes?.intent || null)
+      setIntentSummary(cwRes?.intent_summary || '')
+      setIntentNotes(cwRes?.intent_notes || [])
+      setIntentConflicts(cwRes?.intent_conflicts || [])
+      if (intentText.trim() && !imageSupplement) setImageSupplement(intentText.trim())
       setProgressPct(46); setProgressText('47% · 正在提取核心利益点')
       // V4.58 / B2：移除二次模型调用（landingAnalysis）。cwAnalyze 已返回统一分析来源 `analysis`，
       // 路线规划与素材生成均以此为唯一依据，避免「两次模型理解」且 landing 失败被静默 catch 成空。
       // V4.96：创意工作台显式请求 10 条路线；接口默认仍为 3，保持其他调用兼容。
-      const routeRes = await api.cwRoutes({ plan_id: cwRes?.id, analysis: cwRes?.analysis || {}, platforms: selected, brief: cwRes?.brief || {}, count: 10 }).catch(() => ({ routes: cwRes?.routes || [] }))
+      const routeRes = await api.cwRoutes({ plan_id: cwRes?.id, analysis: cwRes?.analysis || {}, platforms: selected, brief: cwRes?.brief || {}, count: 10, creative_intent: (cwRes?.intent || intent || {}) as CreativeIntent }).catch(() => ({ routes: cwRes?.routes || [] }))
       // V4.96：默认不勾选，由用户按需求选择（与「每条路线各出一组」策略呼应）
       setRoutes((routeRes?.routes || cwRes?.routes || []).map((r: any) => ({ ...r, selected: false })))
       setProgressPct(100); setProgressText('分析完成')
@@ -654,12 +672,53 @@ export default function CreativeWorkbench() {
         analysis: cw?.analysis || {}, platforms: selected, brief: cw?.brief || {}, count: 10,
         framework: creativeBriefFramework,
         user_brief: confirmedBrief(), seed, exclude_names: excluded,
+        creative_intent: (intent || {}) as CreativeIntent,
       })
       setRoutes((res?.routes || []).map((r: any) => ({ ...r, selected: false })))
       setRerouteNote(excluded.length ? `已排除上一批选中的 ${excluded.length} 条路线，重新规划完成` : '已重新规划一批路线')
     } catch (e: any) {
       setError('换一批路线失败：' + (e?.message || '未知错误'))
     } finally { setRerouting(false) }
+  }
+
+  /**
+   * V4.105 / 方案C：分析前「确认创作要求」——先解析成结构化意图并给出变更摘要 / 冲突提示，
+   * 用户看到解析结果后再点开始分析；解析本身不调用大模型，不产生费用。
+   */
+  async function parseIntent() {
+    const text = intentText.trim()
+    if (!text) { setIntentNotes([]); setIntentConflicts([]); return }
+    setIntentParsing(true)
+    try {
+      const res = await api.cwIntentParse({ intent: intent || {}, text })
+      setIntent(res.intent || null)
+      setIntentSummary(res.summary || '')
+      setIntentNotes([...(res.changes || []), ...(res.notes || [])])
+      setIntentConflicts(res.conflicts || [])
+    } catch (e: any) {
+      setError('创作要求解析失败：' + (e?.message || '未知错误'))
+    } finally { setIntentParsing(false) }
+  }
+
+  /** V4.105 / 方案C：路线卡就地改一句推荐描述（保存后只更新这一条，不重规划整批）。 */
+  async function saveRouteEdit() {
+    if (!editingRoute || !planId) return
+    const text = editingRoute.text.trim()
+    if (!text) { setEditingRoute(null); return }
+    setEditingRoute(er => er ? { ...er, saving: true } : er)
+    try {
+      const res = await api.patchCwRoute(planId, editingRoute.key, { description: text })
+      const next = (res?.routes || []) as Route[]
+      setRoutes(rs => rs.map(r => {
+        const hit = next.find(n => String(n.key) === String(r.key))
+        return hit ? { ...r, ...hit, selected: r.selected } : r
+      }))
+      setEditingRoute(null)
+      showToast('路线描述已更新，仅影响这一条路线')
+    } catch (e: any) {
+      setEditingRoute(er => er ? { ...er, saving: false } : er)
+      setError('保存路线描述失败：' + (e?.message || '未知错误'))
+    }
   }
 
   /**
@@ -1305,6 +1364,25 @@ export default function CreativeWorkbench() {
                 )}
               </div>
             </div>
+            {/* V4.105 / 方案C：分析前确认一次创作要求；解析结果会随分析一起进入路线与三类素材 */}
+            <div className="cwb-form-row">
+              <label className="cwb-field-label">创作要求</label>
+              <div className="cwb-ov-col">
+                <textarea className="cwb-supplement-input" maxLength={300}
+                  placeholder="面向谁、重点讲什么、不要什么。例如：面向首次装修业主，不做全息，重点看清家具布局"
+                  value={intentText}
+                  onChange={e => setIntentText(e.target.value)} />
+                <div className="cwb-intent-row">
+                  <button type="button" className="cwb-link-btn" onClick={parseIntent}
+                    disabled={intentParsing || !intentText.trim()}>
+                    {intentParsing ? '解析中…' : '确认创作要求'}
+                  </button>
+                  {intentSummary && <span className="cwb-intent-chip">{intentSummary}</span>}
+                </div>
+                {intentNotes.length > 0 && <span className="cwb-field-hint">{intentNotes.join('；')}</span>}
+                {intentConflicts.length > 0 && <span className="cwb-intent-warn">{intentConflicts.join('；')}</span>}
+              </div>
+            </div>
             <div className="cwb-input-foot">
               <label className="cwb-demo-toggle" title="开启后返回样例数据（标注为演示，非真实分析）">
                 <input type="checkbox" checked={demoMode} onChange={e => setDemoMode(e.target.checked)} />
@@ -1417,6 +1495,8 @@ export default function CreativeWorkbench() {
                       </div>
                     </div>
                     {rerouteNote && <p className="cwb-reroute-note">{rerouteNote}</p>}
+                    {intentSummary && <p className="cwb-reroute-note">本次创作要求：{intentSummary}</p>}
+                    {intentConflicts.length > 0 && <p className="cwb-intent-warn">{intentConflicts.join('；')}</p>}
                     <div className="cwb-routes">
                       {routes.map((r, i) => (
                         <div className={`cwb-route ${r.selected ? 'on' : ''}`} key={i} onClick={() => updateRoute(i, 'selected', !r.selected)}>
@@ -1426,7 +1506,28 @@ export default function CreativeWorkbench() {
                             <span className={`cwb-check ${r.selected ? 'on' : ''}`} />
                           </div>
                           {r.angle && <p className="cwb-route-angle">切入角度：{r.angle}</p>}
-                          <p>{r.description}</p>
+                          {editingRoute && editingRoute.key === (r.key || String.fromCharCode(65 + i)) ? (
+                            <div className="cwb-route-edit" onClick={e => e.stopPropagation()}>
+                              <textarea className="cwb-supplement-input" maxLength={200}
+                                value={editingRoute.text}
+                                onChange={e => setEditingRoute(er => er ? { ...er, text: e.target.value } : er)} />
+                              <div className="cwb-intent-row">
+                                <button type="button" className="cwb-link-btn" onClick={saveRouteEdit}
+                                  disabled={!!editingRoute.saving || !planId}>
+                                  {editingRoute.saving ? '保存中…' : '保存这一条'}
+                                </button>
+                                <button type="button" className="cwb-link-btn" onClick={() => setEditingRoute(null)}>取消</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <p>{r.description}</p>
+                          )}
+                          {planId && !(editingRoute && editingRoute.key === (r.key || String.fromCharCode(65 + i))) && (
+                            <button type="button" className="cwb-link-btn cwb-route-edit-btn"
+                              onClick={e => { e.stopPropagation(); setEditingRoute({ key: r.key || String.fromCharCode(65 + i), text: r.description || '' }) }}>
+                              改一句
+                            </button>
+                          )}
                           {(r.framework_label || r.hook || r.visual_hook) && (
                             <div className="cwb-route-framework">
                               {r.framework_label && <span className="cwb-rtag fw">框架：{r.framework_label}</span>}

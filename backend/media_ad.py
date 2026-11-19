@@ -53,6 +53,7 @@ from prompt_contract import build_prompt_contract, render_image_contract_block
 from image_prompt_rule import render_image_prompt_rule
 from image_content_guard import inspect_image_content
 import app_settings  # V4.104 / 方案E：系统级质检开关（默认开、可关）
+import creative_intent as cw_intent  # V4.105 / 方案C：结构化创作意图（三类素材共用）
 from reference_image import analyze_reference_style, render_reference_style_block
 from batch_workspace import BatchWorkspace
 # V4.42 / F06：供应商尺寸能力目录、按比例构图与主体保护
@@ -284,6 +285,11 @@ def _analysis_context(analysis: dict, platform: str, lang: str, db=None) -> str:
                  f"文案重点: {profile['copy_focus']}")
     # V4.44 / N01：证据链与限定契约进入文案依据，不再停留在接口返回里
     lines.append(_evidence_context(analysis))
+    # V4.105 / 方案C：用户确认的创作意图（受众 / 目标 / 核心价值 / 场景 / 风格 / 禁止项）
+    # 与证据链同层进入文案依据：意图只决定「怎么说」，事实仍只来自证据。
+    _intent_block = cw_intent.prompt_block(cw_intent.from_analysis(analysis))
+    if _intent_block:
+        lines.append(_intent_block)
     facts = "\n".join(lines)
     if db is None:
         return (facts + f"\n请基于以上真实分析结论，为媒体平台【{platform}】"
@@ -722,6 +728,11 @@ def _media_image_prompt(analysis: dict, platform: str, config: dict,
         # V4.102 / C04：纯图模式传入 overlay_mode，避免 brief 里的旧版式 composition
         # 与零文字满版契约互相打架。
         blocks.append(brief_prompt_block(brief, overlay_mode=overlay_mode))
+    # V4.105 / 方案C：创作意图（受众 / 核心价值 / 场景 / 风格）与禁止项进画面描述；
+    # 放在契约之前，仍由 V4.88 零文字契约做最后兜底。
+    _intent_block = cw_intent.prompt_block(cw_intent.from_analysis(analysis))
+    if _intent_block:
+        blocks.append(_intent_block)
     # V4.88：文档提示词契约。纯图片追加无字 / 满版主模板；叠加模式只追加底线约束。
     contract = contract or build_prompt_contract(
         media_type="image", analysis=analysis, brief=brief,

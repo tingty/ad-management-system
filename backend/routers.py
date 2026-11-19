@@ -16,6 +16,7 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      CreativeAnalysisRequest, CreativeAnalysisResult,
                      CreativePlanRequest, CreativePlanResult, CreativeRoute,
                      CWAnalyzeRequest, CWAnalysisResult, CWRoutesRequest, CWRoute, CWRoutesResult,
+                     CWIntentParseRequest, CWIntentParseResult,
                      ProductSnapshot, CwLibraryOut, CwLibraryCreate,
                      CWVideoPlanRequest, CWVideoPlanResult, CWVideoGenerateRequest, CWVideoGenerateResult,
                      CWVideoAsset, CWVideoJobOut, ModelInfo)
@@ -55,6 +56,8 @@ from creative_brief import (
     framework_options, framework_of, normalize_brief,
     build_copy_brief_block, build_image_brief_block, build_video_brief_block,
 )
+# V4.105 / 方案C：结构化创作意图（分析前确认创作要求，三类素材共用）
+import creative_intent as cw_intent
 from version import ENABLE_AUTO_CREATION_PLAN
 # V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
 from video_claims import (video_evidence_context, audit_video_plan,
@@ -493,7 +496,8 @@ _CW_ANALYZE_SYS = (
 )
 
 _CW_ROUTES_SYS = (
-    "你是资深的出海效果广告创意策略师。基于产品分析结论、项目简报、目标媒体平台与可选的用户确认 brief，"
+    "你是资深的出海效果广告创意策略师。基于产品分析结论、项目简报、目标媒体平台、用户确认 brief "
+    "与 creative_intent_block（创作意图，其中禁止项是硬约束），"
     "规划【N】条差异化的创意概念路线（概念级，不逐平台拆分；【N】由 user_prompt 中的 count 给定，1–10）。只返回 JSON："
     "{\"title\": \"本次创意路线主题\","
     " \"routes\": ["
@@ -508,6 +512,7 @@ _CW_ROUTES_SYS = (
     " ]}"
     "要求：routes 条数恰好等于 count；key 从 A 开始按字母顺序依次为 A/B/C/…/J；"
     "每条路线必须绑定一种框架，且 framework / hook / proof / visual_hook / cta_role 与 name/description 一致；"
+    "每条路线都必须体现创作意图里的受众与核心价值，禁止项一条都不得触碰（不得用「换一种说法」绕过）；"
     "十条路线要覆盖不同框架与不同角度，不得复用同一角度换词；tags 2-3 个；"
     "若 user_prompt 给出 user_brief，则以其中确认的框架、钩子与叙事节奏为准；"
     "禁止编造价格、折扣、评分、用户数、倒计时与背书，证据不足时把 proof 写成「真实功能演示」。"
@@ -594,9 +599,11 @@ def _rotated_fallback_routes(seed: str, exclude_names: list[str], count: int) ->
 _CW_VIDEO_PLAN_SYS = (
     "你是资深的出海效果广告视频创意导演。用户会给你：① 产品分析结论（定位/受众/卖点/平台打法）；"
     "② 目标媒体平台；③ 参考图（可选，图生视频用）；④ 多轮对话（用户对提示词、创作构想、分镜方案的微调）；"
-    "⑤ 已有的分镜方案（微调时带入，你需要增量修订而非重写）。\n"
+    "⑤ 已有的分镜方案（微调时带入，你需要增量修订而非重写）；"
+    "⑥ creative_intent_block（创作意图，受众 / 核心价值 / 场景 / 风格 / 禁止项，禁止项是硬约束）。\n"
     "你要始终围绕「媒体平台推广、吸引流量、完成转化」的目标，确保视频：贴合产品定位、精准捕捉信息、"
-    "表达产品核心卖点与转化路径，严禁使用静态推拉运镜冒充真实动态。\n"
+    "表达产品核心卖点与转化路径，严禁使用静态推拉运镜冒充真实动态；"
+    "创作意图里的禁止项一条都不得出现（包括字幕、VO、钩子与画面文字），与其它要求冲突时以禁止项为准。\n"
     "请只返回 JSON："
     "{\"reply\": \"给用户的自然语言回复（建议 / 已做的调整 / 下一步），中文，≤120字\","
     " \"plan\": {"
@@ -774,6 +781,31 @@ def _cw_library_to_dict(row: CwLibrary) -> dict:
             "updated_at": row.updated_at.isoformat() if row.updated_at else None}
 
 
+@router.post("/cw/intent/parse", response_model=CWIntentParseResult)
+async def api_cw_intent_parse(req: CWIntentParseRequest,
+                             _: User = Depends(require_roles(*CAN_EDIT))):
+    """V4.105 / 方案C：把「确认创作要求」的一句话解析成结构化意图（纯规则、不调模型）。
+
+    - 输入：已确认意图（可空）+ 用户刚输入的一段话
+    - 输出：合并后的意图、字段级变更摘要、冲突提示、改动类型（visual / concept）
+    - 只识别受众 / 目标 / 核心价值 / 场景 / 风格 / 禁止项；未识别片段按原文保留并提示，
+      绝不静默丢弃用户的约束。
+    """
+    base = cw_intent.normalize(req.intent or {})
+    parsed = cw_intent.parse_text(req.text or "", base=base)
+    merged = cw_intent.merge(base, parsed.get("patch") or {})
+    new_intent = merged["intent"]
+    return CWIntentParseResult(
+        intent=new_intent,
+        patch=parsed.get("patch") or {},
+        changes=merged.get("changes") or [],
+        notes=list(parsed.get("notes") or []),
+        conflicts=cw_intent.conflicts(new_intent),
+        change_kind=cw_intent.classify_change(base, new_intent),
+        summary=cw_intent.summary(new_intent),
+    )
+
+
 @router.post("/cw/analyze", response_model=CWAnalysisResult)
 async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
                          user: User = Depends(require_roles(*CAN_EDIT))):
@@ -791,6 +823,30 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
     if not url and not text:
         raise HTTPException(400, "请提供产品链接或描述")
 
+    # ---- ⓪ V4.105 / 方案C：分析前先确认创作要求（结构化意图），随分析进入路线与生成 ----
+    intent_base = cw_intent.normalize(req.creative_intent or {})
+    intent_parsed = cw_intent.parse_text(req.intent_text or "", base=intent_base)
+    intent_merged = cw_intent.merge(intent_base, intent_parsed.get("patch") or {})
+    intent = intent_merged["intent"]
+    intent_block = cw_intent.prompt_block(intent)
+    intent_meta = {
+        "intent": intent,
+        "intent_notes": list(intent_parsed.get("notes") or []),
+        "intent_conflicts": cw_intent.conflicts(intent),
+        "intent_change": cw_intent.classify_change(intent_base, intent),
+        "intent_summary": cw_intent.summary(intent),
+    }
+
+    def _with_intent(result: dict) -> dict:
+        """意图同时写进统一分析（生成链路读这里）与响应顶层（前端展示）。"""
+        if intent_block:
+            if isinstance(result.get("analysis"), dict):
+                result["analysis"]["creative_intent"] = intent
+            else:
+                result["analysis"] = {"creative_intent": intent}
+        result.update(intent_meta)
+        return result
+
     # ---- ① 演示模式：显式样例，不调用模型、不伪装成真实抓取 ----
     if req.demo_mode:
         demo = demo_product()
@@ -805,7 +861,7 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
         result = _build_cw_result(title, summary, boxes, brief, rec_plat,
                                  analysis_meta=None, snapshot=snapshot, info=info, db=db,
                                  user=user, platforms=platforms)
-        return CWAnalysisResult(**result)
+        return CWAnalysisResult(**_with_intent(result))
 
     # ---- ② URL：服务端真实抓取 + 证据包驱动 ----
     if url:
@@ -834,9 +890,11 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
         evidence_text = await evidence_prompt_part_async(url, page, pack)
         user_prompt = (
             json.dumps({"url": url, "platforms": platforms}, ensure_ascii=False)
+            + ("\n\n" + intent_block if intent_block else "")
             + "\n\n" + evidence_text
             + "\n\n请严格基于上方带 [E###] 编号的页面真实内容输出产品分析 JSON；"
               "不得从 URL / 域名推断页面未出现的事实，缺资料时留空。"
+              "若给出了创作意图，brief 的推广目标 / 目标受众 / 核心卖点必须与之对齐。"
         )
         llm, info = get_llm_with_info(db, "analysis")
         try:
@@ -861,11 +919,13 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
                                  analysis_meta={"url": url, "final_url": page.get("final_url") or url},
                                  snapshot=snapshot, info=info, db=db,
                                  user=user, platforms=platforms, evidence_pack=pack)
-        return CWAnalysisResult(**result)
+        return CWAnalysisResult(**_with_intent(result))
 
     # ---- ③ 仅文本：基于用户粘贴描述分析（source=pasted） ----
     llm, info = get_llm_with_info(db, "analysis")
     user_prompt = json.dumps({"text": text, "platforms": platforms}, ensure_ascii=False)
+    if intent_block:
+        user_prompt += "\n\n" + intent_block + "\n简报需与创作意图对齐（受众 / 目标 / 核心价值）。"
     try:
         resp = await llm.chat(_CW_ANALYZE_SYS, user_prompt)
         parsed = parse_json(resp) or {}
@@ -891,7 +951,53 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
                              analysis_meta={"url": "", "final_url": ""},
                              snapshot=snapshot, info=info, db=db,
                              user=user, platforms=platforms)
-    return CWAnalysisResult(**result)
+    return CWAnalysisResult(**_with_intent(result))
+
+
+# ----------------------------- V4.105 / 方案C：路线卡就地编辑（改一句推荐描述） -----------------------------
+@router.patch("/cw/routes/{plan_id}/{key}")
+def patch_cw_route(plan_id: int, key: str, payload: dict,
+                   db: Session = Depends(get_db),
+                   user: User = Depends(require_roles(*CAN_EDIT))):
+    """就地修改一条创意路线的名称 / 推荐描述 / 切入角度（只改这一条，不动其它路线）。
+
+    - 只允许改展示与表达字段：name / description / angle / tags；
+      framework / hook / proof / visual_hook / cta_role 也允许微调，但不允许改 key。
+    - 修改后路线仍按 key 参与「每条路线独立生成」，不需要重新规划整批。
+    """
+    rec = db.query(CreativePlan).filter_by(id=plan_id).first()
+    if not rec:
+        raise HTTPException(404, "创意方案不存在")
+    if rec.owner_id and user.role != "admin" and rec.owner_id != user.id:
+        raise HTTPException(403, "无权修改他人的创意方案")
+    routes = list(rec.routes_json or [])
+    target = None
+    for r in routes:
+        if isinstance(r, dict) and str(r.get("key") or "") == str(key or ""):
+            target = r
+            break
+    if target is None:
+        raise HTTPException(404, f"路线 {key} 不存在")
+    editable = {"name", "description", "angle", "tags", "hook", "proof", "visual_hook", "cta_role"}
+    changed = []
+    for k, v in (payload or {}).items():
+        if k not in editable:
+            continue
+        if k == "tags":
+            if not isinstance(v, list):
+                continue
+            v = [str(t).strip()[:20] for t in v if str(t or "").strip()][:4]
+        else:
+            v = str(v or "").strip()[:200]
+        if target.get(k) != v:
+            target[k] = v
+            changed.append(k)
+    if changed:
+        rec.routes_json = routes
+        # 用户手动改过路线描述：方案回到 draft，避免历史视图里被当成模型原始结论
+        rec.status = "draft"
+        db.commit(); db.refresh(rec)
+    return {"id": rec.id, "key": key, "routes": routes, "changed": changed}
 
 
 @router.post("/cw/routes", response_model=CWRoutesResult)
@@ -914,10 +1020,15 @@ async def api_cw_routes(req: CWRoutesRequest, db: Session = Depends(get_db),
     user_brief = req.user_brief if isinstance(req.user_brief, dict) and req.user_brief.get("confirmed") else {}
     if user_brief and not fw_key:
         fw_key = str(user_brief.get("framework") or "")
+    # V4.105 / 方案C：创作意图与 brief 同层进入策划；只调整切入方式，不替代证据
+    intent = cw_intent.normalize(req.creative_intent or cw_intent.from_analysis(analysis))
+    intent_block = cw_intent.prompt_block(intent)
     user_prompt = json.dumps({
         "analysis": analysis, "brief": brief, "platforms": platforms,
         "count": count, "framework": fw_key,
         "user_brief": user_brief,
+        "creative_intent": intent,
+        "creative_intent_block": intent_block,
         "exclude_names": req.exclude_names or [], "seed": req.seed or "",
     }, ensure_ascii=False)
     try:
@@ -964,7 +1075,8 @@ async def api_cw_routes(req: CWRoutesRequest, db: Session = Depends(get_db),
                 "visual_hook": item["visual_hook"], "cta_role": item["cta_role"],
             })
     result = {"title": str(parsed.get("title") or "创意路线规划").strip(),
-              "routes": routes, "model_info": info, "source": info.get("source", "local")}
+              "routes": routes, "model_info": info, "source": info.get("source", "local"),
+              "intent": intent, "intent_summary": cw_intent.summary(intent)}
     if plan_id:
         r0 = db.query(CreativePlan).filter_by(id=plan_id).first()
         if r0:
@@ -1021,6 +1133,9 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
         "creative_brief_block": build_video_brief_block(user_brief, platform),
         # V4.82：证据契约与可用事实显式进 prompt；不再只靠「不要编造」这句口头约束
         "evidence_contract": video_evidence_context(analysis),
+        # V4.105 / 方案C：创作意图对分镜同样生效（禁止项优先级最高）
+        "creative_intent": cw_intent.from_analysis(analysis),
+        "creative_intent_block": cw_intent.prompt_block(cw_intent.from_analysis(analysis)),
     }
     llm, info = get_llm_with_info(db, "analysis")
     try:

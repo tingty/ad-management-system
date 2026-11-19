@@ -520,6 +520,17 @@ export interface ClaimAudit {
   note?: string
 }
 /** V4.101：用户确认后的创意表达策略快照 */
+/** V4.105 / 方案C：结构化创作意图（文案 / 图片 / 视频三类素材共用） */
+export interface CreativeIntent {
+  audience?: string[]
+  goal?: string
+  core_value?: string
+  scenario?: string
+  style?: string
+  avoid?: string[]
+  raw_text?: string
+}
+
 export interface CreativeBrief {
   raw_input?: string
   framework?: string
@@ -1132,11 +1143,23 @@ export const api = {
     req<any>(`/api/creative-plan/${id}`),
   // V4.53 创意工作台：设计对齐的产品分析 + 3 条创意路线（复用 CreativePlan 存储）
   // V4.59 / B1：支持 demo_mode（演示模式开关，仅开启时返回样例数据并标注 source=demo）
-  cwAnalyze: (payload: { url?: string; text?: string; platforms: string[]; demo_mode?: boolean }) =>
+  // V4.105 / 方案C：创作意图随分析一起提交（结构化 + 一句话），并支持分析前预览解析结果
+  cwAnalyze: (payload: { url?: string; text?: string; platforms: string[]; demo_mode?: boolean
+    creative_intent?: CreativeIntent; intent_text?: string }) =>
     req<any>('/api/cw/analyze', { method: 'POST', body: JSON.stringify(payload) }),
+  cwIntentParse: (payload: { intent?: CreativeIntent; text?: string }) =>
+    req<{ intent: CreativeIntent; patch: CreativeIntent; changes: string[]; notes: string[]
+      conflicts: string[]; change_kind: 'none' | 'visual' | 'concept'; summary: string }>(
+      '/api/cw/intent/parse', { method: 'POST', body: JSON.stringify(payload) }),
   cwRoutes: (payload: { plan_id?: number; analysis: any; platforms: string[]; brief: any; count?: number
-    framework?: string; user_brief?: CreativeBrief | null; seed?: string; exclude_names?: string[] }) =>
+    framework?: string; user_brief?: CreativeBrief | null; seed?: string; exclude_names?: string[]
+    creative_intent?: CreativeIntent }) =>
     req<any>('/api/cw/routes', { method: 'POST', body: JSON.stringify(payload) }),
+  // V4.105 / 方案C：路线卡就地改一句推荐描述（只改这一条，不必重规划整批）
+  patchCwRoute: (planId: number, key: string, payload: { name?: string; description?: string
+    angle?: string; tags?: string[]; hook?: string; proof?: string; visual_hook?: string; cta_role?: string }) =>
+    req<{ id: number; key: string; routes: any[]; changed: string[] }>(
+      `/api/cw/routes/${planId}/${key}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   // V4.61 / B4：创意工作台「素材沉淀库」（参考图 / 产品 / 品牌）增查删
   cwLibrary: (params: { kind?: string; limit?: number; offset?: number } = {}) =>
     req<any[]>('/api/cw/library' + qs(params)),

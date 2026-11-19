@@ -369,11 +369,35 @@ class CWAnalyzeRequest(BaseModel):
 
     V4.59 / B1：新增 `demo_mode` —— 仅当它显式为 True 时才返回「降噪耳机」样例数据，
     并标注 source=demo；默认关闭，避免解析失败时静默套用演示数据冒充真实分析。
+
+    V4.105 / 方案C：新增 `creative_intent`（结构化：受众 / 目标 / 核心价值 / 场景 / 风格 /
+    禁止项）与 `intent_text`（一段自然语言，按规则解析成 patch 后合并）。意图随分析一起
+    进入路线规划与三类素材生成，事实与授权参考不变。
     """
     url: str = ""
     text: str = ""
     platforms: List[str] = []
     demo_mode: bool = False
+    creative_intent: dict = {}
+    intent_text: str = ""
+
+
+class CWIntentParseRequest(BaseModel):
+    """V4.105 / 方案C：分析前的「确认创作要求」——把一句话解析成结构化意图（不调模型）。"""
+    intent: dict = {}
+    text: str = ""
+
+
+class CWIntentParseResult(BaseModel):
+    """意图解析结果：合并后的意图 + 变更摘要 + 冲突提示 + 改动类型（none/visual/concept）。"""
+    model_config = {"protected_namespaces": ()}
+    intent: dict = {}
+    patch: dict = {}
+    changes: List[str] = []
+    notes: List[str] = []
+    conflicts: List[str] = []
+    change_kind: str = "none"
+    summary: str = ""
 
 
 class CWAnalysisResult(BaseModel):
@@ -395,6 +419,12 @@ class CWAnalysisResult(BaseModel):
     snapshot: ProductSnapshot = ProductSnapshot()   # V4.59 / B1：来源快照（真实抓取/演示/手动文本）
     model_info: ModelInfo = ModelInfo()
     source: str = "local"
+    # V4.105 / 方案C：结构化创作意图（同时写入 analysis.creative_intent 供生成链路读取）
+    intent: dict = {}
+    intent_notes: List[str] = []
+    intent_conflicts: List[str] = []
+    intent_change: str = "none"
+    intent_summary: str = ""
 
 
 class CWRoutesRequest(BaseModel):
@@ -413,6 +443,8 @@ class CWRoutesRequest(BaseModel):
     user_brief: dict = {}
     seed: str = ""
     exclude_names: List[str] = []
+    # V4.105 / 方案C：已确认的结构化创作意图（受众 / 目标 / 核心价值 / 场景 / 风格 / 禁止项）
+    creative_intent: dict = {}
 
 
 # ----------------------------- V4.61 / B4：创意工作台「素材沉淀库」 -----------------------------
@@ -468,6 +500,9 @@ class CWRoutesResult(BaseModel):
     routes: List[CWRoute] = []
     model_info: ModelInfo = ModelInfo()
     source: str = "local"
+    # V4.105 / 方案C：路线规划实际使用的意图（前端回填展示，便于对照）
+    intent: dict = {}
+    intent_summary: str = ""
 
 
 # ----------------------------- V4.66 创意工作台 · 视频素材创作区 -----------------------------
