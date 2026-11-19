@@ -532,6 +532,9 @@ class CWRoute(BaseModel):
     proof: str = ""
     visual_hook: str = ""
     cta_role: str = ""
+    # V4.114：用户对本条路线的修改意见（「改一句」输入的调整要求），
+    # 会作为本路线最高优先级的视觉调整指令进入出图提示词，不覆盖原规划内容。
+    user_note: str = ""
 
 
 class CWRoutesResult(BaseModel):

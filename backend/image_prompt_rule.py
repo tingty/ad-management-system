@@ -12,6 +12,8 @@
 4. 零文字兜底：规则自带「画面不绘制任何文字」硬约束，并与 V4.88 图片零文字契约
    叠加（契约块在提示词中最后出现，作为最终兜底）。
 5. 可追溯：rule_hash 随 config_id 与资产 meta 归档，规则变更可比对。
+6. V4.114：「改一句」的用户修改意见单独成行，作为本路线最高优先级的视觉调整指令；
+   原 description 保留不动，避免一次微调覆盖整条规划；意见纳入 rule_hash 可追溯。
 """
 
 import hashlib
@@ -19,7 +21,7 @@ import re
 
 from creative_brief import build_image_brief_block
 
-RULE_VERSION = "3"
+RULE_VERSION = "4"
 MAX_ROUTES = 10
 MAX_SUPPLEMENT = 500
 
@@ -52,6 +54,8 @@ def _clean_route(raw: dict, idx: int) -> dict:
         "proof": _clean(route.get("proof"), 160),
         "visual_hook": _clean(route.get("visual_hook"), 160),
         "cta_role": _clean(route.get("cta_role"), 120),
+        # V4.114：「改一句」的修改意见，与原描述分列，单独作为最高优先级视觉调整指令
+        "user_note": _clean(route.get("user_note"), 200),
     }
 
 
@@ -86,6 +90,10 @@ def build_image_prompt_rule(*, routes=None, supplement: str = "", platform: str 
             head["hook"] or "首屏结果或反差", head["proof"] or "真实功能演示，不写数字",
             head["visual_hook"] or "主体与场景形成可观察变化",
             head["cta_role"] or "叠加位收口，不绘制文字"))
+        # V4.114：用户「改一句」输入的修改意见单独成行，明确标注优先级，
+        # 让图片模型知道这是针对本条路线的调整要求，而不是另一条候选概念。
+        if head["user_note"]:
+            lines.append("用户对本条路线的修改意见（本组最高优先级，仅调整视觉表达）：%s。" % head["user_note"])
     else:
         lines.append("独立路线：未勾选创意规划，仅按补充指令调整视觉表达。")
 
@@ -97,6 +105,7 @@ def build_image_prompt_rule(*, routes=None, supplement: str = "", platform: str 
     constraints = [
         "本组只有一条独立路线，画面主体、情绪与价值切入只由该路线决定，禁止混入其它候选路线的主体或价值主张",
         "补充指令与路线冲突时以补充指令为准，但仅限构图 / 光线 / 色调 / 场景 / 镜头语言等视觉表达",
+        "用户修改意见与本路线原始描述冲突时以修改意见为准，但同样仅限视觉表达，不得改写已确认的商品事实",
         "不得据此编造商品事实、价格、折扣、评分、用户数或效果数据，也不得改写已确认信息",
         "画面内不绘制任何文字（含品牌名、标语、按钮、字母与数字），文字由播放层 / 合成层另行处理",
     ]

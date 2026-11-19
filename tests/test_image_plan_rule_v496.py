@@ -108,7 +108,8 @@ class TestImagePlanRuleV496(unittest.TestCase):
         css = (FRONTEND / "styles.css").read_text(encoding="utf-8")
         self.assertIn("count: 10", page)
         self.assertIn("count?: number", api)
-        self.assertIn("selected: false", page)
+        # V4.114：改为单选模式，默认选中第一条（不再是「10 条全部不勾选」）
+        self.assertIn("selected: i === 0", page)
         self.assertIn("creative_plan", page)
         self.assertIn("imageSupplement", page)
         # 补充指令不得再借用视频状态

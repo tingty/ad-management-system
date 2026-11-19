@@ -1478,6 +1478,25 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cwb-check.on::after { content: '✓'; color: #fff; font-size: 11px; position: absolute; inset: 0; display: grid; place-items: center; }
 .cwb-route p { margin: 0 0 8px; font-size: 13px; color: #374151; line-height: 1.5; }
 .cwb-route-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* V4.114：单选路线卡——完整字段展示 + 修改意见区 */
+.cwb-route-picker .cwb-field-label { margin: 0; font-size: 12.5px; }
+.cwb-route-active { flex: none; font-size: 11.5px; color: #15803d; background: #e8f5ee; padding: 3px 10px; border-radius: 12px; font-weight: 600; }
+.cwb-route-detail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 16px; margin: 6px 0 12px; }
+.cwb-route-field { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; line-height: 1.55; }
+.cwb-route-field.full { grid-column: 1 / -1; }
+.cwb-route-field > span { flex: none; width: 66px; color: var(--muted, #64748b); }
+.cwb-route-field p { margin: 0; flex: 1; color: #374151; word-break: break-word; }
+.cwb-route-field .cwb-route-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
+.cwb-route-note { margin: 0 0 10px; padding: 9px 11px; border: 1px dashed var(--border, #d9e2ec); border-radius: 9px; background: #fafbfc; }
+.cwb-route-note.on { border-style: solid; border-color: #86efac; background: #f2fbf5; }
+.cwb-route-note-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.cwb-route-note-head b { font-size: 12.5px; color: #1f2937; }
+.cwb-route-note-flag { font-size: 11.5px; color: #15803d; font-weight: 600; }
+.cwb-route-note p { margin: 0; font-size: 12.5px; color: #475569; line-height: 1.6; word-break: break-word; }
+.cwb-route-edit .cwb-field-label { display: block; margin: 0 0 5px; }
+@media (max-width: 720px) { .cwb-route-detail { grid-template-columns: 1fr; } }
+
 .cwb-rtag { background: #eef2f7; color: #475569; font-size: 11.5px; padding: 3px 9px; border-radius: 12px; }
 .cwb-foot-note { font-size: 12px; color: var(--muted, #6b7280); margin: 12px 0 0; }
 .cwb-confirm { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }

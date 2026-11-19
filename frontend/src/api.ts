@@ -1233,7 +1233,8 @@ export const api = {
     req<any>('/api/cw/routes', { method: 'POST', body: JSON.stringify(payload) }),
   // V4.105 / 方案C：路线卡就地改一句推荐描述（只改这一条，不必重规划整批）
   patchCwRoute: (planId: number, key: string, payload: { name?: string; description?: string
-    angle?: string; tags?: string[]; hook?: string; proof?: string; visual_hook?: string; cta_role?: string }) =>
+    angle?: string; tags?: string[]; hook?: string; proof?: string; visual_hook?: string; cta_role?: string
+    user_note?: string }) =>
     req<{ id: number; key: string; routes: any[]; changed: string[] }>(
       `/api/cw/routes/${planId}/${key}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   // V4.61 / B4：创意工作台「素材沉淀库」（参考图 / 产品 / 品牌）增查删

@@ -18,6 +18,7 @@ type Route = {
   proof?: string
   visual_hook?: string
   cta_role?: string
+  user_note?: string   // V4.114：「改一句」输入的修改意见，作用到本条路线生成的图片
 }
 type JobState = {
   platform: string
@@ -649,8 +650,9 @@ export default function CreativeWorkbench() {
       // 路线规划与素材生成均以此为唯一依据，避免「两次模型理解」且 landing 失败被静默 catch 成空。
       // V4.96：创意工作台显式请求 10 条路线；接口默认仍为 3，保持其他调用兼容。
       const routeRes = await api.cwRoutes({ plan_id: cwRes?.id, analysis: cwRes?.analysis || {}, platforms: selected, brief: cwRes?.brief || {}, count: 10, creative_intent: (cwRes?.intent || intent || {}) as CreativeIntent }).catch(() => ({ routes: cwRes?.routes || [] }))
-      // V4.96：默认不勾选，由用户按需求选择（与「每条路线各出一组」策略呼应）
-      setRoutes((routeRes?.routes || cwRes?.routes || []).map((r: any) => ({ ...r, selected: false })))
+      // V4.114：单选模式——默认选中第一条，下拉切换时始终只有一条参与生成
+      setRoutes((routeRes?.routes || cwRes?.routes || []).map((r: any, i: number) => ({ ...r, selected: i === 0 })))
+      setRouteViewIdx(0); setEditingRoute(null)
       setProgressPct(100); setProgressText('分析完成')
       // V4.70 自检 5.1：分析框架不完整时不进入第二步，提示重新分析
       if (!isFrameOk(cwRes)) {
@@ -666,9 +668,6 @@ export default function CreativeWorkbench() {
     } finally { setRunning(false) }
   }
 
-  function updateRoute(i: number, field: keyof Route, val: any) {
-    setRoutes(rs => rs.map((r, j) => j === i ? { ...r, [field]: val } : r))
-  }
   function planImageCount() {
     if (assets.length) return assets.length
     return selected.length * 2
@@ -716,7 +715,8 @@ export default function CreativeWorkbench() {
         user_brief: confirmedBrief(), seed, exclude_names: excluded,
         creative_intent: (intent || {}) as CreativeIntent,
       })
-      setRoutes((res?.routes || []).map((r: any) => ({ ...r, selected: false })))
+      setRoutes((res?.routes || []).map((r: any, i: number) => ({ ...r, selected: i === 0 })))
+      setRouteViewIdx(0); setEditingRoute(null)
       setRerouteNote(excluded.length ? `已排除上一批选中的 ${excluded.length} 条路线，重新规划完成` : '已重新规划一批路线')
     } catch (e: any) {
       setError('换一批路线失败：' + (e?.message || '未知错误'))
@@ -742,24 +742,25 @@ export default function CreativeWorkbench() {
     } finally { setIntentParsing(false) }
   }
 
-  /** V4.105 / 方案C：路线卡就地改一句推荐描述（保存后只更新这一条，不重规划整批）。 */
+  /** V4.114：路线卡「改一句」——保存用户输入的修改意见（不覆盖原规划内容），
+   *  该意见会作为本条路线最高优先级的视觉调整指令作用到生成的图片素材中。 */
   async function saveRouteEdit() {
     if (!editingRoute || !planId) return
-    const text = editingRoute.text.trim()
-    if (!text) { setEditingRoute(null); return }
+    const note = editingRoute.text.trim()
     setEditingRoute(er => er ? { ...er, saving: true } : er)
     try {
-      const res = await api.patchCwRoute(planId, editingRoute.key, { description: text })
+      const res = await api.patchCwRoute(planId, editingRoute.key, { user_note: note })
       const next = (res?.routes || []) as Route[]
       setRoutes(rs => rs.map(r => {
         const hit = next.find(n => String(n.key) === String(r.key))
+        // 保留本地单选状态，避免后端返回的 selected 把 10 条全部点亮
         return hit ? { ...r, ...hit, selected: r.selected } : r
       }))
       setEditingRoute(null)
-      showToast('路线描述已更新，仅影响这一条路线')
+      showToast(note ? '修改意见已保存，将作用到本条路线生成的图片' : '已清空修改意见')
     } catch (e: any) {
       setEditingRoute(er => er ? { ...er, saving: false } : er)
-      setError('保存路线描述失败：' + (e?.message || '未知错误'))
+      setError('保存修改意见失败：' + (e?.message || '未知错误'))
     }
   }
 
@@ -910,6 +911,7 @@ export default function CreativeWorkbench() {
                 framework: r.framework || '', framework_label: r.framework_label || '',
                 hook: r.hook || '', proof: r.proof || '',
                 visual_hook: r.visual_hook || '', cta_role: r.cta_role || '',
+                user_note: r.user_note || '',
               })),
               supplement: imageSupplement || '',
               platform: p,
@@ -1480,14 +1482,11 @@ export default function CreativeWorkbench() {
                       <span className="cwb-tag-reco">基于网站分析</span>
                     </div>
                     <div className="cwb-route-toolbar">
-                      <p className="cwb-reco-note">已按 {selectedPlatform || '所选媒体'} 的素材规格自动适配，每条勾选路线各出一组图</p>
+                      <p className="cwb-reco-note">从 {routes.length} 条规划中选择一条用于生成，界面有且只展示当前这一条；默认已选中第一条</p>
                       <div className="cwb-route-actions">
-                        <span className="cwb-route-count">已选 {routes.filter(r => r.selected).length} / {routes.length}</span>
                         <button type="button" className="cwb-link-btn" onClick={rerouteRoutes} disabled={rerouting || !cw}>
                           {rerouting ? '重新规划中…' : '换一批路线'}
                         </button>
-                        <button type="button" className="cwb-link-btn" onClick={() => setRoutes(rs => rs.map(r => ({ ...r, selected: true })))}>全选</button>
-                        <button type="button" className="cwb-link-btn" onClick={() => setRoutes(rs => rs.map(r => ({ ...r, selected: false })))}>清空</button>
                       </div>
                     </div>
                     {rerouteNote && <p className="cwb-reroute-note">{rerouteNote}</p>}
@@ -1497,22 +1496,24 @@ export default function CreativeWorkbench() {
                       <p className="cwb-reco-note">暂无创意路线，点「换一批路线」重新规划。</p>
                     ) : (
                       <>
-                        {/* V4.112：10 条路线收进下拉，只展开当前这条，不再平铺 10 张卡片 */}
+                        {/* V4.114：单选——下拉选中的一条即唯一参与生成的路线，有且只展示这一条的全部内容 */}
                         <div className="cwb-route-picker">
-                          <select className="cwb-select cwb-route-select" value={routeIdxSafe}
+                          <label className="cwb-field-label" htmlFor="cwb-route-select">选择创意规划</label>
+                          <select id="cwb-route-select" className="cwb-select cwb-route-select" value={routeIdxSafe}
                             aria-label="选择创意路线"
-                            onChange={e => setRouteViewIdx(Number(e.target.value))}>
+                            onChange={e => {
+                              const idx = Number(e.target.value)
+                              setRouteViewIdx(idx)
+                              setEditingRoute(null)
+                              // 单选：切换后只有这一条参与生成，其余自动取消
+                              setRoutes(rs => rs.map((r, j) => ({ ...r, selected: j === idx })))
+                            }}>
                             {routes.map((r, i) => (
                               <option key={i} value={i}>
-                                {(r.key || String.fromCharCode(65 + i))} · {r.name || '未命名路线'}{r.selected ? '（已选）' : ''}
+                                {(r.key || String.fromCharCode(65 + i))} · {r.name || '未命名路线'}{i === routeIdxSafe ? '（当前）' : ''}
                               </option>
                             ))}
                           </select>
-                          <label className="cwb-route-usegen">
-                            <input type="checkbox" checked={!!curRoute?.selected}
-                              onChange={e => updateRoute(routeIdxSafe, 'selected', e.target.checked)} />
-                            用于生成
-                          </label>
                           <span className="cwb-route-count">第 {routeIdxSafe + 1} / {routes.length} 条</span>
                         </div>
                         {curRoute && (
@@ -1520,42 +1521,55 @@ export default function CreativeWorkbench() {
                             <div className="cwb-route-head">
                               <span className="cwb-route-key">{curRoute.key || String.fromCharCode(65 + routeIdxSafe)}</span>
                               <b>{curRoute.name || '未命名路线'}</b>
-                              <span className={`cwb-check ${curRoute.selected ? 'on' : ''}`} />
+                              <span className="cwb-route-active">当前用于生成</span>
                             </div>
-                            {curRoute.angle && <p className="cwb-route-angle">切入角度：{curRoute.angle}</p>}
+                            {/* V4.114：完整展示这一条规划的全部字段，不再按条件吞掉 framework / proof / cta_role */}
+                            <div className="cwb-route-detail">
+                              <div className="cwb-route-field full"><span>切入角度</span><p>{curRoute.angle || '未指定'}</p></div>
+                              <div className="cwb-route-field full"><span>推荐描述</span><p>{curRoute.description || '未指定'}</p></div>
+                              <div className="cwb-route-field"><span>转化框架</span><p>{[curRoute.framework_label, curRoute.framework].filter(Boolean).join(' · ') || '未指定'}</p></div>
+                              <div className="cwb-route-field"><span>收口意图</span><p>{curRoute.cta_role || '未指定'}</p></div>
+                              <div className="cwb-route-field"><span>钩子</span><p>{curRoute.hook || '未指定'}</p></div>
+                              <div className="cwb-route-field"><span>证据表达</span><p>{curRoute.proof || '未指定'}</p></div>
+                              <div className="cwb-route-field full"><span>视觉钩子</span><p>{curRoute.visual_hook || '未指定'}</p></div>
+                              <div className="cwb-route-field full"><span>标签</span><p className="cwb-route-tags">
+                                {(curRoute.tags || []).length
+                                  ? (curRoute.tags || []).map((t: string, j: number) => <span key={j} className="cwb-rtag">{t}</span>)
+                                  : '未指定'}
+                              </p></div>
+                            </div>
+                            {/* V4.114：修改意见单独成区，明确它作用到本条路线生成的图片 */}
+                            <div className={`cwb-route-note ${curRoute.user_note ? 'on' : ''}`}>
+                              <div className="cwb-route-note-head">
+                                <b>你的修改意见</b>
+                                {curRoute.user_note && <span className="cwb-route-note-flag">已作用到本条路线生成的图片</span>}
+                              </div>
+                              <p>{curRoute.user_note || '未填写。点「改一句」输入调整要求（例如：把场景换成夜间、更突出便携性），将作为最高优先级的视觉指令作用到生成的图片素材中。'}</p>
+                            </div>
                             {editingRoute && editingRoute.key === (curRoute.key || String.fromCharCode(65 + routeIdxSafe)) ? (
                               <div className="cwb-route-edit" onClick={e => e.stopPropagation()}>
+                                <label className="cwb-field-label">输入修改意见（作用到生成的图片素材）</label>
                                 <textarea className="cwb-supplement-input" maxLength={200}
+                                  placeholder="例如：把场景换成夜间办公室、更突出便携性、采用俯拍构图…"
                                   value={editingRoute.text}
                                   onChange={e => setEditingRoute(er => er ? { ...er, text: e.target.value } : er)} />
                                 <div className="cwb-intent-row">
                                   <button type="button" className="cwb-link-btn" onClick={saveRouteEdit}
                                     disabled={!!editingRoute.saving || !planId}>
-                                    {editingRoute.saving ? '保存中…' : '保存这一条'}
+                                    {editingRoute.saving ? '保存中…' : '保存并作用到图片'}
                                   </button>
                                   <button type="button" className="cwb-link-btn" onClick={() => setEditingRoute(null)}>取消</button>
                                 </div>
+                                <p className="cwb-supplement-hint">原规划内容保持不变；修改意见会随本条路线进入出图提示词规则，仅调整视觉表达，不绘制画面文字、不编造商品事实与数字。</p>
                               </div>
                             ) : (
-                              <p>{curRoute.description}</p>
+                              planId && (
+                                <button type="button" className="cwb-link-btn cwb-route-edit-btn"
+                                  onClick={e => { e.stopPropagation(); setEditingRoute({ key: curRoute.key || String.fromCharCode(65 + routeIdxSafe), text: curRoute.user_note || '' }) }}>
+                                  改一句
+                                </button>
+                              )
                             )}
-                            {planId && !(editingRoute && editingRoute.key === (curRoute.key || String.fromCharCode(65 + routeIdxSafe))) && (
-                              <button type="button" className="cwb-link-btn cwb-route-edit-btn"
-                                onClick={e => { e.stopPropagation(); setEditingRoute({ key: curRoute.key || String.fromCharCode(65 + routeIdxSafe), text: curRoute.description || '' }) }}>
-                                改一句
-                              </button>
-                            )}
-                            {(curRoute.framework_label || curRoute.hook || curRoute.visual_hook) && (
-                              <div className="cwb-route-framework">
-                                {curRoute.framework_label && <span className="cwb-rtag fw">框架：{curRoute.framework_label}</span>}
-                                {curRoute.hook && <p>钩子：{curRoute.hook}</p>}
-                                {curRoute.visual_hook && <p>视觉钩子：{curRoute.visual_hook}</p>}
-                                {curRoute.proof && <p>证据表达：{curRoute.proof}</p>}
-                              </div>
-                            )}
-                            <div className="cwb-route-tags">
-                              {(curRoute.tags || []).map((t: string, j: number) => <span key={j} className="cwb-rtag">{t}</span>)}
-                            </div>
                           </div>
                         )}
                       </>
@@ -1588,7 +1602,7 @@ export default function CreativeWorkbench() {
                   </div>
                 )}
                 {hasImage && routes.some(r => r.selected) && (
-                  <p className="cwb-gen-note">本次将创建 {selected.length * routes.filter(r => r.selected).length} 个图片任务（{selected.length} 个平台 × {routes.filter(r => r.selected).length} 条路线）。</p>
+                  <p className="cwb-gen-note">本次将创建 {selected.length * routes.filter(r => r.selected).length} 个图片任务（{selected.length} 个平台 × {routes.filter(r => r.selected).length} 条路线：{curRoute?.name || '—'}）。该路线的修改意见已并入出图提示词。</p>
                 )}
                 <div className="cwb-confirm">
                   <button className="cwb-gen-btn" onClick={batchGenerate}

@@ -62,7 +62,7 @@ class TestRouteIndependentV4104(unittest.TestCase):
         self.assertIn("split screen", brief["scene_detail"])
 
     def test_04_rule_drops_auxiliary_routes(self):
-        self.assertEqual(RULE_VERSION, "3")
+        self.assertEqual(RULE_VERSION, "4")
         rule = build_image_prompt_rule(routes=[
             {"key": "A", "name": "路线A", "framework": "aida"},
             {"key": "B", "name": "路线B", "framework": "pas"},

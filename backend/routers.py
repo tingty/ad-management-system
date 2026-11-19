@@ -989,10 +989,12 @@ async def _cw_analyze_core(req: CWAnalyzeRequest, db: Session,
 def patch_cw_route(plan_id: int, key: str, payload: dict,
                    db: Session = Depends(get_db),
                    user: User = Depends(require_roles(*CAN_EDIT))):
-    """就地修改一条创意路线的名称 / 推荐描述 / 切入角度（只改这一条，不动其它路线）。
+    """就地修改一条创意路线的展示 / 表达字段，或保存「改一句」的修改意见（只改这一条）。
 
     - 只允许改展示与表达字段：name / description / angle / tags；
       framework / hook / proof / visual_hook / cta_role 也允许微调，但不允许改 key。
+    - V4.114：user_note 是用户输入的「修改意见」，与原 description 分开保存；
+      生成图片时作为本路线最高优先级的视觉调整指令注入提示词，不覆盖原规划内容。
     - 修改后路线仍按 key 参与「每条路线独立生成」，不需要重新规划整批。
     """
     rec = db.query(CreativePlan).filter_by(id=plan_id).first()
@@ -1008,7 +1010,8 @@ def patch_cw_route(plan_id: int, key: str, payload: dict,
             break
     if target is None:
         raise HTTPException(404, f"路线 {key} 不存在")
-    editable = {"name", "description", "angle", "tags", "hook", "proof", "visual_hook", "cta_role"}
+    editable = {"name", "description", "angle", "tags", "hook", "proof",
+                "visual_hook", "cta_role", "user_note"}
     changed = []
     for k, v in (payload or {}).items():
         if k not in editable:
