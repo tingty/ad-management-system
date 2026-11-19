@@ -30,6 +30,8 @@ type ImgItem = {
   label: string
   placement: string
   fallback: boolean
+  /** 图内文字是否被自动收敛（完整文案仍在文案素材里） */
+  fit?: string
 }
 
 type Phase = '' | 'analyzing' | 'copying' | 'imaging'
@@ -80,6 +82,9 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
   const [images, setImages] = useState<ImgItem[]>([])
   const [title, setTitle] = useState<string>(session.current.title || '')
   const [error, setError] = useState('')
+  // V4.111：出图任务失败时把真实原因显示出来。此前只在轮询里记录 jobPhase，
+  // 任务 failed 后界面只是「没有图片」，用户无法判断是尺寸、模型还是内容体检。
+  const [jobNote, setJobNote] = useState('')
   const [toast, setToast] = useState('')
   const [preview, setPreview] = useState<ImgItem | null>(null)
   const timer = useRef<number | null>(null)
@@ -91,10 +96,18 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
       .then((d) => {
         if (!alive) return
         setOpt(d)
-        const first = d.platforms?.find(p => p.platform === 'Meta') || d.platforms?.[0]
-        if (first) {
-          setSel(s => (Object.keys(s).length ? s : { [first.platform]: first.sizes.slice(0, 2).map(x => x.size) }))
-        }
+        // V4.111：尺寸清单会随标准库 / 规则口径收敛。旧会话里选过、现在已不可用的
+        // 尺寸必须剔除，否则会被后端判「未登记」而整单 422。
+        setSel(s => {
+          const valid: Record<string, string[]> = {}
+          for (const p of d.platforms || []) {
+            const keep = (s[p.platform] || []).filter(x => p.sizes.some(y => y.size === x))
+            if (keep.length) valid[p.platform] = keep
+          }
+          if (Object.keys(valid).length) return valid
+          const first = (d.platforms || []).find(p => p.platform === 'Meta') || (d.platforms || [])[0]
+          return first ? { [first.platform]: first.sizes.slice(0, 2).map(x => x.size) } : {}
+        })
       })
       .catch((e: any) => { if (alive) setError(e?.message || '初始化失败') })
     return () => { alive = false }
@@ -120,30 +133,42 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
     const tick = async () => {
       const nextPhase: Record<string, JobPhase> = {}
       const found: ImgItem[] = []
+      const notes: string[] = []
       let pending = false
       await Promise.all(jobs.map(async (j) => {
         try {
           const st: any = await api.generationJob(j.job_id)
           const status = String(st?.status || '')
           const terminal = !!st?.terminal
+          const imgs: any[] = st?.result?.images || []
           nextPhase[j.job_id] = terminal
             ? (status === 'succeeded' || status === 'partial_success' ? 'done' : 'failed')
             : (status === 'queued' ? 'queued' : 'running')
           if (!terminal) pending = true
-          for (const im of (st?.result?.images || [])) {
-            if (!im?.url) continue
+          // 失败时把真实原因带出来（任务级 error 优先，其次子任务说明），不再静默
+          if (terminal && status !== 'succeeded' && status !== 'partial_success') {
+            const subs: any[] = Array.isArray(st?.subtasks) ? st.subtasks : []
+            const sub = subs.find(x => x && x.status && x.status !== 'ok')
+            const reason = String(st?.error || sub?.outcome_note || sub?.reason || '').trim()
+            notes.push(`${j.platform}：${reason || '出图任务未返回可用图片'}`)
+          }
+          for (const im of imgs) {
+            if (!im?.url && !im?.file) continue
             found.push({
-              url: im.url,
+              // 任务结果里的 url 是服务端文件路径，渲染时统一走 api.fileUrl
+              url: im.url || '',
               file: im.file || '',
               platform: j.platform,
               size: im.size || '',
               label: sizeLabel(im.size || ''),
               placement: im.placement || '',
               fallback: !!im.fallback,
+              fit: im.overlay_fit || '',
             })
           }
         } catch {
           nextPhase[j.job_id] = 'failed'
+          notes.push(`${j.platform}：任务结果读取失败`)
         }
       }))
       if (!alive) return
@@ -155,6 +180,7 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
           return add.length ? [...prev, ...add] : prev
         })
       }
+      setJobNote(notes.length ? [...new Set(notes)].join('；').slice(0, 400) : '')
       setPhase(pending ? 'imaging' : '')
       if (pending) timer.current = window.setTimeout(tick, 3000)
     }
@@ -204,7 +230,7 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
     if (!text || phase) return
     if (imageReady && !selectedCount) { setError('请至少选择一个尺寸'); return }
     setError(''); setToast('')
-    setCopies([]); setJobs([]); setImages([]); setJobPhase({}); setTitle('')
+    setCopies([]); setJobs([]); setImages([]); setJobPhase({}); setTitle(''); setJobNote('')
     try {
       setPhase('analyzing')
       const a = await api.workshopAnalyze({
@@ -349,6 +375,7 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
       )}
 
       {error && <div className="ws-error">{error}</div>}
+      {jobNote && <div className="ws-error">{jobNote}</div>}
       {toast && <div className="ws-toast">{toast}</div>}
 
       {/* ③ 结果：分类展示 */}
@@ -358,6 +385,9 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
             <h2>图片素材</h2>
             <span className="ws-count">{images.length}</span>
           </header>
+          {images.some(it => it.fit) && (
+            <div className="ws-muted">图内文字已按版式收敛，完整文案见下方文案素材</div>
+          )}
           {imageGroups.map(g => (
             <div key={g.platform} className="ws-group">
               <div className="ws-group-head">
@@ -369,7 +399,7 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
                   <figure key={it.file || it.url} className="ws-card">
                     <button type="button" className="ws-thumb" onClick={() => setPreview(it)}
                       title="预览">
-                      <img src={it.url} alt={it.label} loading="lazy" />
+                      <img src={api.fileUrl(it.url || it.file)} alt={it.label} loading="lazy" />
                       {it.fallback && <span className="ws-flag">模板兜底</span>}
                     </button>
                     <figcaption>
@@ -424,7 +454,7 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
       {preview && (
         <div className="ws-lightbox" onClick={() => setPreview(null)}>
           <div className="ws-lightbox-inner" onClick={e => e.stopPropagation()}>
-            <img src={preview.url} alt={preview.label} />
+            <img src={api.fileUrl(preview.url || preview.file)} alt={preview.label} />
             <div className="ws-lightbox-bar">
               <span>{preview.platform} · {preview.label}</span>
               <span className="ws-actions">

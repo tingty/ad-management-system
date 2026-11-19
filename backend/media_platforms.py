@@ -503,12 +503,21 @@ def validate_task_matrix(platform: str, slots: list, total_pixels: int | None = 
         slot = raw if isinstance(raw, dict) else {}
         size = str(slot.get("size") or "").strip()
         # V4.103 / 方案H：spec_id 命中标准库时跳过展示名精确匹配，直接用冻结的
-        # ad_product / asset_role；尺寸仍须通过 allowed 校验（防止前端篡改 spec_id 绕过尺寸门）。
+        # ad_product / asset_role。
+        # V4.111：尺寸放行口径改为「旧规则目录 ∪ 本条 spec 登记尺寸」。素材标准库是
+        # 图片规格的单一事实来源（V4.84），但旧目录只收了展示类横幅尺寸，比如 Google
+        # 只登记了 300x250 等，根本没有 PMax / App Campaign 的 1200x1200。此前一律按
+        # 旧目录判定，导致标准库里合法、界面也能选的尺寸在出图阶段被判「不在允许清单」，
+        # 任务必然失败。这里改为：spec_id 命中且尺寸确在该条 spec 的 sizes 内即放行；
+        # 该成员校验本身就是防篡改——伪造 spec_id 也拿不到不属于它的尺寸。
         spec_entry = _entry_for_spec_id(slot.get("spec_id") or "") if slot.get("spec_id") else None
         if spec_entry and canonical_platform(spec_entry.platform) != key:
             errors.append(f"第 {i + 1} 个任务 spec_id 属于 {spec_entry.platform}，与本批平台 {key} 不一致")
             spec_entry = None
-        if size.lower().replace("×", "x") not in {s.lower() for s in allowed}:
+        allowed_norm = {s.lower().replace("×", "x") for s in allowed}
+        spec_norm = ({str(s).lower().replace("×", "x") for s in (spec_entry.sizes or ())}
+                     if spec_entry else set())
+        if size.lower().replace("×", "x") not in allowed_norm | spec_norm:
             errors.append(f"第 {i + 1} 个任务尺寸 {size or '(空)'} 不在 {key} 允许清单内")
             continue
         try:

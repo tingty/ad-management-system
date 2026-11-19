@@ -157,8 +157,32 @@ def size_label(size: str) -> str:
     return f"{aspect_of(size)} · {w}×{h}" if w and h else str(size)
 
 
+def _acceptable(platform: str, size: str, spec_id: str) -> bool:
+    """这个「平台 + 尺寸 + spec_id」组合能否通过出图执行期的媒体规则。
+
+    V4.111：工作坊把尺寸交给 `generation_jobs` 后，`run_job` 会用
+    `media_platforms.validate_task_matrix()` 再校验一次。此前 `platform_options()`
+    只查素材标准库，导致库里登记、但旧规则目录未收录的尺寸（如 Google 1200x1200、
+    TikTok 640x640）被摆到界面上，用户选了就必然在出图阶段被判「不在允许清单」，
+    任务失败而页面拿不到任何原因——表现就是「选了尺寸却生成不出图片」。
+
+    这里直接**调用执行期同一个校验函数**，不做第二套规则：能选的必然能出图。
+    """
+    from media_platforms import validate_task_matrix, MediaRuleError
+
+    try:
+        validate_task_matrix(platform, [{"size": size, "spec_id": spec_id}])
+        return True
+    except MediaRuleError:
+        return False
+
+
 def platform_options() -> list[dict]:
-    """按标准库列出「平台 → 可选尺寸」，每个尺寸带 spec_id / 比例 / 核验级别。"""
+    """按标准库列出「平台 → 可选尺寸」，每个尺寸带 spec_id / 比例 / 核验级别。
+
+    V4.111：只保留能通过执行期媒体规则的尺寸（同一套规则函数判定），
+    避免界面可选、任务必败。
+    """
     from media_spec_library import all_entries, image_targets
 
     seen: list[str] = []
@@ -176,6 +200,8 @@ def platform_options() -> list[dict]:
                 continue
             for s in (t.get("sizes") or []):
                 if s in used:
+                    continue
+                if not _acceptable(p, s, t.get("spec_id") or ""):
                     continue
                 used.add(s)
                 sizes.append({

@@ -622,6 +622,37 @@ def _overlay_text(copy_fields: dict, platform: str, brand: str):
     return (headline or "").strip(), (sub or "").strip(), (cta or "").strip()
 
 
+def _clip_overlay(text: str, limit: int) -> str:
+    """把一行图内文字压到预算内：优先在词 / 句读边界断开，再补省略号。"""
+    text = str(text or "").strip()
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    cut = text[:max(1, limit - 1)]
+    for sep in (" ", "，", ",", "、", "；", ";", "。", ".", "!", "！", "?", "？"):
+        pos = cut.rfind(sep)
+        if pos >= max(4, (limit - 1) // 2):
+            cut = cut[:pos]
+            break
+    return cut.rstrip(" ,，、;；.。!！?？") + "…"
+
+
+def fit_overlay_text(headline: str, sub: str, cta: str, w: int, h: int,
+                     layout: str = "", logo_path: str | None = None) -> tuple[str, str, str]:
+    """V4.111：把图内文字收敛到**实际版式**的排版预算内。
+
+    默认策略仍是「超预算就阻止出图、不硬截断」（见 `build_overlay_text`）。但素材
+    工作坊这类没有「编辑文案」步骤的链路，超预算意味着整批一张图都出不来且用户无
+    从修改，因此由调用方显式打开 `style_opts.fit_overlay`，这里按真实 layout /
+    logo 预留框把图上那一行收敛到可排版长度；完整文案仍原样作为投放字段保留。
+    """
+    budget = text_budget(w, h, layout=layout, logo_path=logo_path)
+    return (_clip_overlay(headline, budget["headline_chars"]),
+            _clip_overlay(sub, budget["sub_chars"]),
+            _clip_overlay(cta, budget["cta_chars"]) or str(cta or "").strip())
+
+
 def build_overlay_text(headline: str, sub: str, cta: str, w: int, h: int,
                        profile: dict | None = None, layout: str = "",
                        logo_path: str | None = None) -> dict:
@@ -806,6 +837,9 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
     profile = resolve_profile(analysis, key=analysis.get("industry_profile") or "")
     # 上线保留开关：strict_text=False 可临时回到旧的宽松排版（默认严格）
     strict_text = style_opts.get("strict_text", True) is not False
+    # V4.111：无文案编辑步骤的链路（素材工作坊）显式开启「图内文字自动收敛」，
+    # 否则超预算会把整批图判 needs_revision，用户一张图都得不到也无法修改。
+    auto_fit_overlay = bool(style_opts.get("fit_overlay"))
     spec = get_media_platform(platform) or {}
     # V4.88：图片任务矩阵以「素材标准库」为先；旧目录仅在本库未登记该平台时兜底，
     # 且每项仍会标注标准库核验级别，不把内部目录冒充官方硬规则。
@@ -923,6 +957,16 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 vlabel = ""
             concept_id = concept["concept_id"]
             layout = choose_layout(concept, config, w, h)
+            # V4.111：开启自动收敛的链路（素材工作坊）先按真实版式预算压缩图内文字，
+            # 保证「文案稍长」不会让整批图一张都出不来；未开启的链路维持原策略
+            # （超预算仍阻止出图，不输出省略号残图）。
+            overlay_fit_note = ""
+            if auto_fit_overlay:
+                fh, fs, fc = fit_overlay_text(headline, sub, cta, w, h,
+                                              layout=layout, logo_path=logo_path)
+                if (fh, fs, fc) != (headline, sub, cta):
+                    overlay_fit_note = "图内文字已按版式自动收敛到可排版长度"
+                    headline, sub, cta = fh, fs, fc
             brief = build_visual_brief(concept, analysis, profile, config, w, h,
                                        placement=placement,
                                        ad_product=slot.get("ad_product") or "")
@@ -1147,6 +1191,8 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 "url": t["out"], "file": t["fn"], "size": t["size"],
                 "w": t["w"], "h": t["h"], "placement": t["placement"],
                 "variant": t["vlabel"],
+                # V4.111：图内文字是否被自动收敛（完整文案仍是投放字段，见 copy）
+                "overlay_fit": overlay_fit_note,
                 "copy": {"headline": t["headline"], "sub": t["sub"], "cta": t["cta"]},
                 "status": "ok" if ai_ok else "fallback",
                 "ai_background": ai_ok,
@@ -1220,6 +1266,9 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
         })
 
         note_bits = [f"本批 {len(images)} 张成功（AI 底图 {ai_count} / 模板兜底 {fallback_count}）"]
+        fit_count = sum(1 for x in images if x.get("overlay_fit"))
+        if fit_count:
+            note_bits.append(f"{fit_count} 张的图内文字按版式自动收敛（完整文案仍作为投放字段保留）")
         if variants:
             note_bits.append(f"共 {len(variants)} 组创意文案，按任务矩阵指定的概念叠加，同一概念的标题与证据保持一致")
         note_bits.append(f"每张图按概念生成独立视觉简报，配置 {config['config_id']}（{CREATIVE_CONFIG_VERSION}）已随图归档")

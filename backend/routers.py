@@ -3461,13 +3461,25 @@ async def api_workshop_generate(req: WorkshopGenerateRequest, db: Session = Depe
             try:
                 slots = [MediaImageSlot(size=r["size"], spec_id=r.get("spec_id") or "")
                          for r in rows]
+                # V4.111：入队前先跑一遍执行期同一套媒体规则。此前后端要等后台任务
+                # 启动才校验，一旦尺寸与规则目录不一致，任务直接 failed、页面只看到
+                # 「没有图片」却拿不到原因。这里必败的组合当场说清楚，不排进付费队列。
+                try:
+                    validate_task_matrix(platform, [s.model_dump() for s in slots])
+                except MediaRuleError as e:
+                    warnings.append(f"{platform}：尺寸未通过媒体规则（{'；'.join(e.errors)}）")
+                    continue
+                # V4.111：工作坊没有「编辑文案」这一步，文案超出图内排版预算时整批会被
+                # 判 needs_revision（一张图都出不来且无从修改）。开启 fit_overlay 后由
+                # 出图链路按**实际版式**把图上那一行收敛到可排版长度；完整文案仍留在
+                # 「文案素材」里作为投放字段，不做删减。
+                ov = cw_workshop.overlay_variant(copy_res, analysis)
                 i_req = MediaImageRequest(
                     analysis=LandingAnalysis(**cw_workshop.landing_payload(analysis)),
                     platform=platform, lang=req.lang or "en",
                     copy_fields=copy_res.get("fields") or {},
-                    copy_variants=[MediaCopyVariant(
-                        **cw_workshop.overlay_variant(copy_res, analysis))],
-                    style_opts={}, slots=slots,
+                    copy_variants=[MediaCopyVariant(**ov)],
+                    style_opts={"fit_overlay": True}, slots=slots,
                 )
                 job, created = job_service.create_job(
                     db, {"images_request": i_req.model_dump(), "archive": {}}, user,
