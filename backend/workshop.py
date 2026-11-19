@@ -308,6 +308,77 @@ def copy_view(platform: str, result: dict) -> dict:
 def landing_payload(analysis: dict) -> dict:
     """把工作坊的统一分析整形成 `LandingAnalysis` 可接受的入参。
 
+    V4.112：类型收敛统一走 `analysis_contract.normalize_analysis()`（文本 / 字符串数组 /
+    channels 一次修完），这里只保留「按字段白名单裁剪」——boxes / snapshot 等前端展示用
+    的大字段不进任务负载。此前就地修 channels 的做法已收敛掉，避免两套口径。
+    """
+    from schemas import LandingAnalysis
+    from analysis_contract import normalize_analysis
+
+    data = normalize_analysis(analysis if isinstance(analysis, dict) else {})
+    return {k: v for k, v in data.items() if k in LandingAnalysis.model_fields}
+
+
+def group_targets(targets: Iterable[dict]) -> dict[str, list[dict]]:
+    """按平台分组并保留选择顺序（出图按平台各建一个任务）。"""
+    grouped: dict[str, list[dict]] = {}
+    for t in targets or []:
+        grouped.setdefault(str(t.get("platform") or ""), []).append(t)
+    return grouped
+
+
+# ---------------------------------------------------------------- 文案整形
+
+def _first(value) -> str:
+    if isinstance(value, list):
+        return str(value[0]).strip() if value else ""
+    return str(value or "").strip()
+
+
+def copy_view(platform: str, result: dict) -> dict:
+    """把平台文案结果整形成界面可直接渲染的「标签 → 值」，并如实标注是否回退。"""
+    result = result if isinstance(result, dict) else {}
+    schema = result.get("schema") or []
+    fields = result.get("fields") or {}
+    rows = []
+    for f in schema:
+        key = str(f.get("key") or "")
+        if not key:
+            continue
+        raw = fields.get(key)
+        values = [str(x).strip() for x in (raw if isinstance(raw, list) else [raw])
+                  if str(x or "").strip()]
+        if values:
+            rows.append({"key": key, "label": f.get("label") or key,
+                         "max": f.get("max") or 0, "values": values})
+    mi = result.get("model_info") or {}
+    fallback = bool(mi.get("fallback")) or str(mi.get("source") or "") in ("mock", "local")
+    review = int((result.get("validation") or {}).get("problem_count") or 0) if isinstance(
+        result.get("validation"), dict) else 0
+    if fallback:
+        status, reason = "failed", "文案模型未返回有效结果，已阻止使用本地模拟内容"
+    elif review:
+        status, reason = "review", "部分字段需要复核（长度 / 证据）"
+    else:
+        status, reason = "ok", ""
+    text = "\n".join(f"{r['label']}：" + " ｜ ".join(r["values"]) for r in rows)
+    return {
+        "platform": platform,
+        "status": status,
+        "reason": reason,
+        "rows": rows,
+        "text": text,
+        "model": {
+            "provider": mi.get("provider") or "",
+            "model": mi.get("model") or "",
+            "config_id": mi.get("config_id"),
+        },
+    }
+
+
+def landing_payload(analysis: dict) -> dict:
+    """把工作坊的统一分析整形成 `LandingAnalysis` 可接受的入参。
+
     `_build_cw_result` 产出的 analysis 里，channels 是平台名字符串数组，而
     `LandingAnalysis.channels` 要求 {platform, reason}；直接塞进去会在建任务时
     校验失败。这里按字段白名单裁剪并只修 channels，其余键（boxes / snapshot 等

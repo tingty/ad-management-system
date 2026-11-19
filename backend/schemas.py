@@ -184,6 +184,20 @@ class LandingAnalysis(BaseModel):
     # analysis 字典上写 creative_intent，而 MediaImageRequest.analysis 是强类型模型，
     # 序列化时会被裁掉 → 图片提示词拿不到受众 / 禁止项。这里显式落成正式字段。
     creative_intent: dict = {}
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_model_shapes(cls, data):
+        """V4.112：真实大模型输出的类型不稳定，入参前先收敛到本模型声明的类型。
+
+        只改类型不改语义：industry 给成 `{"main": "..."}`、advantages 给成
+        `"a, b, c"`、channels 给成 `["Meta"]` 等都能被接受，原文完整保留。
+        历史方案里已落库的旧分析同样走这里，避免老数据在新接口上 422。
+        """
+        if isinstance(data, dict):
+            from analysis_contract import normalize_analysis
+            return normalize_analysis(data)
+        return data
+
     class Config:
         from_attributes = True
         protected_namespaces = ()   # 允许字段名 model_info 不被 "model_" 保护前缀拦截

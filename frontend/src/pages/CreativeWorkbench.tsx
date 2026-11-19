@@ -297,6 +297,8 @@ export default function CreativeWorkbench() {
   const [landing, setLanding] = useState<any>(null) // 生成后端所需的 LandingAnalysis
   const [planId, setPlanId] = useState<number | null>(null)
   const [routes, setRoutes] = useState<Route[]>([])
+  // V4.112：10 条创意路线改为下拉选择，只展开当前这一条，不再平铺 10 张卡片
+  const [routeViewIdx, setRouteViewIdx] = useState(0)
   // V4.96：图片专用补充创意指令（原绑定 vs.options.prompt_hint 属视频状态，图片链路读不到）
   const [imageSupplement, setImageSupplement] = useState('')
   // V4.105 / 方案C：分析前先确认创作要求——一句话 + 解析后的结构化意图（受众/目标/核心价值/场景/风格/禁止项）
@@ -764,7 +766,15 @@ export default function CreativeWorkbench() {
     for (const p of targets) {
       try {
         setProgressText(`正在为 ${p} 生成广告文案…`)
-        const cr: any = await api.mediaCopy({ analysis, platform: p, lang: 'en', brief: confirmedBrief() }).catch(() => null)
+        // V4.112：不再把接口异常吞成 null——否则用户只能看到「未返回结果」，
+        // 拿不到真实原因（模型未配置 / 证据门阻断 / 字段类型不符 / 网关超时）。
+        let cr: any = null
+        try {
+          cr = await api.mediaCopy({ analysis, platform: p, lang: 'en', brief: confirmedBrief() })
+        } catch (e: any) {
+          copyFailures[p] = '文案生成失败：' + (e?.message || '接口未返回结果')
+          continue
+        }
         if (cr && cr.fields && !copyIsInvalid(cr)) {
           // V4.92：完整保留平台文案规格与校验结果——schema（字段/字数上限）、
           // char_table（逐字段实测字数 vs 上限）、validation（是否符合平台规则）、ad_product（RSA/UAC 等细分）。
@@ -773,9 +783,9 @@ export default function CreativeWorkbench() {
           const f = cr.fields
           variantsByPlat[p] = [{ headline: firstNonEmpty(f.headline ?? f.title), sub: pickFirstField(f.description, f.body, f.primary_text), cta: firstNonEmpty(f.cta), brand: firstNonEmpty(cr.brand), label: p }]
         } else {
-          copyFailures[p] = !cr ? '文案生成失败（mediaCopy 未返回结果）' : `文案校验未通过（${cr?.validation?.status || 'invalid'}）：${cr?.validation?.message || '请调整分析或文案后重试'}`
+          copyFailures[p] = !cr ? '文案生成失败（接口未返回内容）' : `文案校验未通过（${cr?.validation?.status || 'invalid'}）：${cr?.validation?.message || '请调整分析或文案后重试'}`
         }
-      } catch { copyFailures[p] = '文案生成发生异常' }
+      } catch (e: any) { copyFailures[p] = '文案生成发生异常：' + (e?.message || '未知错误') }
     }
     return { copiesByPlat, variantsByPlat, copyFailures }
   }
@@ -1233,6 +1243,10 @@ export default function CreativeWorkbench() {
       generating: '正在生成素材', result: '创作完成' } as any
   )[view] || ''
 
+  // V4.112：路线下拉的当前项。换一批路线后条数变少时自动收到最后一条，不会越界空白。
+  const routeIdxSafe = routes.length ? Math.min(routeViewIdx, routes.length - 1) : 0
+  const curRoute = routes[routeIdxSafe]
+
   return (
     <div className="cwb">
       {/* ① 顶部：标题 + 一句话介绍 + 两个常驻入口（新建创作 / 任务），不新增一级导航 */}
@@ -1449,51 +1463,73 @@ export default function CreativeWorkbench() {
                     {rerouteNote && <p className="cwb-reroute-note">{rerouteNote}</p>}
                     {intentSummary && <p className="cwb-reroute-note">本次创作要求：{intentSummary}</p>}
                     {intentConflicts.length > 0 && <p className="cwb-intent-warn">{intentConflicts.join('；')}</p>}
-                    <div className="cwb-routes">
-                      {routes.map((r, i) => (
-                        <div className={`cwb-route ${r.selected ? 'on' : ''}`} key={i} onClick={() => updateRoute(i, 'selected', !r.selected)}>
-                          <div className="cwb-route-head">
-                            <span className="cwb-route-key">{r.key || String.fromCharCode(65 + i)}</span>
-                            <b>{r.name || '未命名路线'}</b>
-                            <span className={`cwb-check ${r.selected ? 'on' : ''}`} />
-                          </div>
-                          {r.angle && <p className="cwb-route-angle">切入角度：{r.angle}</p>}
-                          {editingRoute && editingRoute.key === (r.key || String.fromCharCode(65 + i)) ? (
-                            <div className="cwb-route-edit" onClick={e => e.stopPropagation()}>
-                              <textarea className="cwb-supplement-input" maxLength={200}
-                                value={editingRoute.text}
-                                onChange={e => setEditingRoute(er => er ? { ...er, text: e.target.value } : er)} />
-                              <div className="cwb-intent-row">
-                                <button type="button" className="cwb-link-btn" onClick={saveRouteEdit}
-                                  disabled={!!editingRoute.saving || !planId}>
-                                  {editingRoute.saving ? '保存中…' : '保存这一条'}
-                                </button>
-                                <button type="button" className="cwb-link-btn" onClick={() => setEditingRoute(null)}>取消</button>
-                              </div>
-                            </div>
-                          ) : (
-                            <p>{r.description}</p>
-                          )}
-                          {planId && !(editingRoute && editingRoute.key === (r.key || String.fromCharCode(65 + i))) && (
-                            <button type="button" className="cwb-link-btn cwb-route-edit-btn"
-                              onClick={e => { e.stopPropagation(); setEditingRoute({ key: r.key || String.fromCharCode(65 + i), text: r.description || '' }) }}>
-                              改一句
-                            </button>
-                          )}
-                          {(r.framework_label || r.hook || r.visual_hook) && (
-                            <div className="cwb-route-framework">
-                              {r.framework_label && <span className="cwb-rtag fw">框架：{r.framework_label}</span>}
-                              {r.hook && <p>钩子：{r.hook}</p>}
-                              {r.visual_hook && <p>视觉钩子：{r.visual_hook}</p>}
-                              {r.proof && <p>证据表达：{r.proof}</p>}
-                            </div>
-                          )}
-                          <div className="cwb-route-tags">
-                            {(r.tags || []).map((t: string, j: number) => <span key={j} className="cwb-rtag">{t}</span>)}
-                          </div>
+                    {routes.length === 0 ? (
+                      <p className="cwb-reco-note">暂无创意路线，点「换一批路线」重新规划。</p>
+                    ) : (
+                      <>
+                        {/* V4.112：10 条路线收进下拉，只展开当前这条，不再平铺 10 张卡片 */}
+                        <div className="cwb-route-picker">
+                          <select className="cwb-select cwb-route-select" value={routeIdxSafe}
+                            aria-label="选择创意路线"
+                            onChange={e => setRouteViewIdx(Number(e.target.value))}>
+                            {routes.map((r, i) => (
+                              <option key={i} value={i}>
+                                {(r.key || String.fromCharCode(65 + i))} · {r.name || '未命名路线'}{r.selected ? '（已选）' : ''}
+                              </option>
+                            ))}
+                          </select>
+                          <label className="cwb-route-usegen">
+                            <input type="checkbox" checked={!!curRoute?.selected}
+                              onChange={e => updateRoute(routeIdxSafe, 'selected', e.target.checked)} />
+                            用于生成
+                          </label>
+                          <span className="cwb-route-count">第 {routeIdxSafe + 1} / {routes.length} 条</span>
                         </div>
-                      ))}
-                    </div>
+                        {curRoute && (
+                          <div className={`cwb-route cwb-route-single ${curRoute.selected ? 'on' : ''}`}>
+                            <div className="cwb-route-head">
+                              <span className="cwb-route-key">{curRoute.key || String.fromCharCode(65 + routeIdxSafe)}</span>
+                              <b>{curRoute.name || '未命名路线'}</b>
+                              <span className={`cwb-check ${curRoute.selected ? 'on' : ''}`} />
+                            </div>
+                            {curRoute.angle && <p className="cwb-route-angle">切入角度：{curRoute.angle}</p>}
+                            {editingRoute && editingRoute.key === (curRoute.key || String.fromCharCode(65 + routeIdxSafe)) ? (
+                              <div className="cwb-route-edit" onClick={e => e.stopPropagation()}>
+                                <textarea className="cwb-supplement-input" maxLength={200}
+                                  value={editingRoute.text}
+                                  onChange={e => setEditingRoute(er => er ? { ...er, text: e.target.value } : er)} />
+                                <div className="cwb-intent-row">
+                                  <button type="button" className="cwb-link-btn" onClick={saveRouteEdit}
+                                    disabled={!!editingRoute.saving || !planId}>
+                                    {editingRoute.saving ? '保存中…' : '保存这一条'}
+                                  </button>
+                                  <button type="button" className="cwb-link-btn" onClick={() => setEditingRoute(null)}>取消</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <p>{curRoute.description}</p>
+                            )}
+                            {planId && !(editingRoute && editingRoute.key === (curRoute.key || String.fromCharCode(65 + routeIdxSafe))) && (
+                              <button type="button" className="cwb-link-btn cwb-route-edit-btn"
+                                onClick={e => { e.stopPropagation(); setEditingRoute({ key: curRoute.key || String.fromCharCode(65 + routeIdxSafe), text: curRoute.description || '' }) }}>
+                                改一句
+                              </button>
+                            )}
+                            {(curRoute.framework_label || curRoute.hook || curRoute.visual_hook) && (
+                              <div className="cwb-route-framework">
+                                {curRoute.framework_label && <span className="cwb-rtag fw">框架：{curRoute.framework_label}</span>}
+                                {curRoute.hook && <p>钩子：{curRoute.hook}</p>}
+                                {curRoute.visual_hook && <p>视觉钩子：{curRoute.visual_hook}</p>}
+                                {curRoute.proof && <p>证据表达：{curRoute.proof}</p>}
+                              </div>
+                            )}
+                            <div className="cwb-route-tags">
+                              {(curRoute.tags || []).map((t: string, j: number) => <span key={j} className="cwb-rtag">{t}</span>)}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
                     <div className="cwb-supplement">
                       <label className="cwb-field-label">补充创意指令（可选）</label>
                       <textarea className="cwb-supplement-input" maxLength={500}

@@ -43,6 +43,7 @@ from media_spec_library import (library_payload as spec_library_payload,
 from prompt_contract import build_prompt_contract, render_video_contract_block
 from media_ad import generate_media_copy, generate_media_images
 from industry_profiles import resolve_profile
+from analysis_contract import as_text, as_text_list, normalize_analysis
 from creation_plan_service import (
     create_plan, set_coverage, confirm_plan, attach_job, finalize,
     get_plan, plan_to_dict,
@@ -678,8 +679,9 @@ def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
         "brand": _brand,
         "industry": boxes.get("industry") or "",
         "type": boxes.get("industry") or "",
-        "audience": ("、".join(brief.get("targetAudience") or []) or boxes.get("coreAudience") or "").strip(),
-        "advantages": brief.get("sellingPoints") or [],
+        "audience": ("、".join(as_text_list(brief.get("targetAudience")))
+                     or as_text(boxes.get("coreAudience"))).strip(),
+        "advantages": as_text_list(brief.get("sellingPoints")),
         "competitors": [],
         "channels": rec_plat,
         "language": "en",
@@ -688,8 +690,8 @@ def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
         "priceBand": boxes.get("priceBand") or "",
         "coreAudience": boxes.get("coreAudience") or "",
         "promotionGoal": brief.get("promotionGoal") or "",
-        "targetAudience": brief.get("targetAudience") or [],
-        "sellingPoints": brief.get("sellingPoints") or [],
+        "targetAudience": as_text_list(brief.get("targetAudience")),
+        "sellingPoints": as_text_list(brief.get("sellingPoints")),
         "recommendedPlatforms": rec_plat,
         "boxes": boxes,
         "brief": brief,
@@ -717,6 +719,9 @@ def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
             "evidence_note": evidence_pack.get("note") or "",
             "legacy_unverified": bool(evidence_pack.get("legacy_unverified")),
         })
+    # V4.112：统一收敛成 LandingAnalysis 可接受的类型（文本 / 字符串数组 / channels），
+    # 否则真实模型输出（industry 给对象、advantages 给字符串）会让文案与出图接口 422。
+    analysis = normalize_analysis(analysis)
     result = {
         "title": title, "summary": summary, "boxes": boxes, "brief": brief,
         "recommendedPlatforms": rec_plat, "analysis": analysis,
