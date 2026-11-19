@@ -10,6 +10,7 @@ import { api } from '../api'
  * 让投放与研发能统一核对、纠错：改规则只改后端标准库一处，页面与生成同时生效。
  */
 type Entry = {
+  spec_id: string
   platform: string; ad_product: string; asset_role: string; media: string
   verification: string; verification_label: string; source_url: string | null
   verified_on: string | null; sizes: string[]; min_sizes: string[]
@@ -174,7 +175,7 @@ export default function SpecLibrary() {
               {rows.map((e, i) => {
                 const vc = VERIFY_COLOR[e.verification] || VERIFY_COLOR.C
                 return (
-                  <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <tr key={e.spec_id || i} style={{ borderBottom: '1px solid var(--border)' }}>
                     <td style={td}>
                       <div style={{ fontWeight: 600 }}>{e.ad_product}</div>
                       <div className="muted" style={{ fontSize: 11 }}>{e.asset_role}</div>

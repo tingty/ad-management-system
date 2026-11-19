@@ -138,6 +138,54 @@ class EvidenceSnapshot:
                 "review_status": "locatable_not_reviewed"}
 
 
+def generation_evidence_gate(analysis: dict) -> dict:
+    """V4.103 / 方案A：生成前的统一证据硬门（纯函数，不调用模型、不落库）。
+
+    无「可定位原文证据」时返回 needs_input，要求上层在调用模型 / 入队前阻断生成，
+    而不是让 unverified / legacy_unverified 冒充通过。判定只依赖 analysis 内嵌的
+    evidence_index（由 _build_cw_result 从真实抓取快照写入），不修改 audit_copy_fields
+    的空快照语义（该语义被现有测试锁定）。
+
+    demo 样例（source=demo）为明确标注的演示数据，不参与硬门；真实抓取但未落到
+    证据编号的分析才被拦截，这与「不从 URL 猜事实」的既有口径一致。
+    """
+    a = analysis if isinstance(analysis, dict) else {}
+    snap = EvidenceSnapshot.from_analysis(a)
+    snapshot = a.get("snapshot") if isinstance(a.get("snapshot"), dict) else {}
+    source = str(snapshot.get("source") or a.get("source") or "")
+    # 演示样例 / 手工粘贴文本 / 历史被阻断的分析：明确标注的非真实抓取来源，放行。
+    if source in ("demo", "pasted", "blocked"):
+        return {"allowed": True, "status": "demo" if source == "demo" else "passthrough",
+                "count": len(snap.entries), "reason": "非真实抓取来源，不参与证据硬门"}
+    if snap.available:
+        return {"allowed": True, "status": "ok", "count": len(snap.entries), "reason": ""}
+    # 精确触发：证据硬门只在「分析明确携带真实抓取的证据采集结果」时生效。
+    # 可靠信号（缺一不可）：本次分析带 evidence_snapshot_id（真实抓取 pack 写入）
+    # 或 evidence_gate / gate_status 明确为 needs_input（抓取阶段已判定缺证据）。
+    # 注意 LandingAnalysis.evidence_gate 默认值为 "ok"，单凭它不能判定真实抓取，
+    # 否则演示 / 手工简化分析（经 Pydantic 解析后 snapshot.source 丢失）会被误伤。
+    gate_status = str(a.get("evidence_gate") or a.get("gate_status") or "")
+    has_snapshot_id = bool(a.get("evidence_snapshot_id"))
+    explicitly_blocked = gate_status in ("needs_input", "blocked", "fetch_failed", "thin_content")
+    real_fetch = source == "real_fetch" or has_snapshot_id or explicitly_blocked
+    if not real_fetch:
+        return {"allowed": True, "status": "passthrough", "count": 0,
+                "reason": "无真实抓取来源标记，证据硬门不适用"}
+    # 真实抓取链路，有 evidence_snapshot_id 且门状态 ok → 视为已核验，放行。
+    # 仅当门显式判定缺证据或快照为空时才阻断。
+    if has_snapshot_id and gate_status in ("", "ok"):
+        return {"allowed": True, "status": "ok", "count": 0,
+                "reason": "真实抓取已生成证据快照"}
+    reason = (
+        "本次真实抓取没有可定位的页面原文证据（[E###]），无法核验任何产品承诺；"
+        "系统不从网址或行业常识猜测事实，已阻断生成（needs_input）。"
+    )
+    if gate_status:
+        reason += "（证据门状态：%s）" % gate_status
+    return {"allowed": False, "status": "needs_input", "count": 0,
+            "reason": reason}
+
+
 def validate_evidence_refs(ids, snapshot: EvidenceSnapshot,
                            *, claim: str = "") -> dict:
     """不存在的证据编号直接拒绝；存在但无原文可定位同样拒绝。"""

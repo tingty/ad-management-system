@@ -724,7 +724,7 @@ export interface MediaImagePayload {
   copy_fields: Record<string, any>; copy_variants?: CopyVariant[]
   style_opts: Record<string, any>
   slots: { size: string; placement: string; placement_id?: string
-           concept_index?: number; concept_id?: string }[]
+           concept_index?: number; concept_id?: string; spec_id?: string }[]
   logo?: string
   spec_version?: string
   total_pixels?: number
@@ -1026,6 +1026,7 @@ export const api = {
       reviewed_on: string
       verification_label: Record<string, string>
       entries: {
+        spec_id: string
         platform: string; ad_product: string; asset_role: string; media: string
         verification: string; verification_label: string; source_url: string | null
         verified_on: string | null; sizes: string[]; min_sizes: string[]

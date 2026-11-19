@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>创意工作台诊断报告分析与优化方案（V4.100 文档 · 2026-11-19）</title>
+<style>
+  :root{
+    --ink:#141a22; --ink-2:#374151; --muted:#6b7280; --line:#e2e8f0;
+    --bg:#f5f7fa; --card:#fff; --brand:#1f5fa8; --brand-soft:#eaf2fb;
+    --amber:#b45309; --amber-soft:#fff7ed; --ok:#0f6e56; --ok-soft:#e1f5ee;
+    --bad:#b42318; --bad-soft:#fef3f2; --purple:#534ab7; --purple-soft:#eeedfe;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 22px 80px}
+  header.hero{background:linear-gradient(135deg,#1e3a5f,#1f5fa8 55%,#2b8a8a);color:#fff;
+    border-radius:16px;padding:30px 32px;box-shadow:0 10px 28px rgba(20,30,60,.18)}
+  header.hero h1{margin:0 0 8px;font-size:25px;line-height:1.35}
+  header.hero .sub{color:#d7e8f7;font-size:13.5px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .meta span{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);
+    padding:4px 10px;border-radius:999px;font-size:12px;color:#fff}
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px;margin-top:20px}
+  h2{font-size:19px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line);color:var(--brand)}
+  h3{font-size:15.5px;margin:22px 0 8px;color:var(--ink)}
+  h4{font-size:14px;margin:16px 0 6px;color:var(--brand)}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0 8px 20px;padding:0}
+  li{margin:5px 0}
+  code{background:#f1f4f8;border:1px solid #e3e9f0;border-radius:5px;padding:1px 5px;font-size:12.5px;
+    overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#1d4ed8}
+  .lead{background:var(--amber-soft);border-left:4px solid var(--amber);border-radius:8px;padding:12px 16px;margin:12px 0}
+  .note{background:var(--brand-soft);border-left:4px solid var(--brand);border-radius:8px;padding:12px 16px;margin:12px 0}
+  .warn{background:var(--bad-soft);border-left:4px solid var(--bad);border-radius:8px;padding:12px 16px;margin:12px 0}
+  .good{background:var(--ok-soft);border-left:4px solid var(--ok);border-radius:8px;padding:12px 16px;margin:12px 0}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top;text-align:left;word-break:break-word;overflow-wrap:anywhere}
+  th{background:#f8fafc;font-weight:600;color:var(--ink-2)}
+  .steps{counter-reset:s;list-style:none;margin-left:0;padding-left:0}
+  .steps li{position:relative;padding-left:34px;margin:10px 0}
+  .steps li:before{counter-increment:s;content:counter(s);position:absolute;left:0;top:1px;width:24px;height:24px;
+    background:var(--brand-soft);color:var(--brand);border-radius:50%;font-size:12px;font-weight:600;text-align:center;line-height:24px}
+  .tag{display:inline-block;font-size:11.5px;padding:2px 8px;border-radius:999px;margin:0 4px 4px 0;white-space:nowrap}
+  .tag.b{background:var(--brand-soft);color:var(--brand)}
+  .tag.a{background:var(--amber-soft);color:var(--amber)}
+  .tag.g{background:var(--ok-soft);color:var(--ok)}
+  .tag.r{background:var(--bad-soft);color:var(--bad)}
+  .tag.p{background:var(--purple-soft);color:var(--purple)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:760px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:14px}
+  .mini b{color:var(--brand)}
+  .kpi{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}
+  .kpi .k{flex:1;min-width:150px;background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi .k .n{font-size:26px;font-weight:700;color:var(--brand)}
+  .kpi .k .l{font-size:12px;color:var(--muted);margin-top:2px}
+  footer{color:var(--muted);font-size:12px;text-align:center;margin-top:26px}
+  .pill{font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px}
+  .pill.done{background:var(--ok-soft);color:var(--ok)}
+  .pill.todo{background:var(--amber-soft);color:var(--amber)}
+  .qbox{background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:14px 16px;margin:12px 0}
+  .qbox b{color:var(--amber)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>创意工作台诊断报告 —— 分析、借鉴与优化方案</h1>
+  <div class="sub">对照《创意工作台素材吸引力与用户创意干预诊断及修复实施方案 V4.100》逐项自查 · 已完成 7 项确定性缺陷修复并发版 · 9 类优化方案待确认</div>
+  <div class="meta">
+    <span>文档基线：V4.100 / 提交 4f66de5</span>
+    <span>核查基线：V4.101 → V4.102 / 提交 c05a8d1</span>
+    <span>分析日期：2026-11-19</span>
+    <span>状态：问题已修并同步 Git，优化方案待确认</span>
+  </div>
+</header>
+
+<section>
+  <h2>一、一句话结论</h2>
+  <div class="lead">
+    这份文档质量高、判断克制：它没有把「画面不好看」简单等同于「转化差」，而是明确区分<b>可复现缺陷</b>与<b>需投放验证的效果判断</b>，并要求「事实与判断分开」。这是最值得吸收的方法论。逐项自查后，文档列出的 15 项问题在当前代码中<b>大多真实存在</b>，V4.101 仅解决了其中一小部分。我已把<b>7 项具备确定性对错、改动可控的缺陷</b>直接修复、回归并发版（V4.102，已推送 Git）；剩下<b>9 类涉及产品决策或较大重构的优化方案</b>整理成本文下半部分，待你确认后再进入开发。
+  </div>
+  <div class="kpi">
+    <div class="k"><div class="n">15</div><div class="l">文档问题项（C/B/Q/S + 附带）</div></div>
+    <div class="k"><div class="n">7</div><div class="l">已直修缺陷（V4.102）</div></div>
+    <div class="k"><div class="n">9</div><div class="l">待确认优化方案</div></div>
+    <div class="k"><div class="n">346</div><div class="l">全量回归 · 0 失败</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>二、文档值得借鉴的地方</h2>
+  <div class="grid2">
+    <div class="mini"><b>1. 事实与判断分离</b><br/>「无产品价值表达」来自可见样本与代码路径；「可能影响转化」只作为专业判断，CTR/CVR/ROAS 必须关联广告账户验证。这个边界应写进所有验收口径，避免用大模型自评分或文件生成成功冒充效果结论。</div>
+    <div class="mini"><b>2. 先修可复现缺陷，再谈效果</b><br/>不把「吸引力不足」当成一句提示词就能解决，而是先修状态漂移、证据断链、逐项错误丢失等基础设施问题——这与我的一贯判断一致。</div>
+    <div class="mini"><b>3. 保留既有能力，最小界面改动</b><br/>文档明确「无需从零开发三步流程、参考图上传、路线勾选、分镜对话」，与用户「最小改动」要求吻合。我据此拒绝了大改交互的冲动。</div>
+    <div class="mini"><b>4. 优先级与意图分层</b><br/>「平台硬规则 ＞ 已确认事实 ＞ 用户策略 ＞ AI 建议 ＞ 默认行业表达」这条优先级链很实用，可直接作为未来 creative_intent 冲突裁决的准则。</div>
+    <div class="mini"><b>5. 验收要打在真实请求上</b><br/>文档反复要求「mock 供应商实际请求能捕获唯一标记」「不只检查文件里有没有关键词」。这比我过去偏静态断言的测试更硬，值得作为后续测试改进方向。</div>
+    <div class="mini"><b>6. 效果验证的实验设计</b><br/>同产品/目标/受众/版位/落地页条件下比较概念，提前定义预算与最小可检测改善，不因 CTR 变高就认定有效——这部分属业务验证，我完整保留为待确认项。</div>
+  </div>
+  <div class="note">对我自己的改进要求：后续专项测试要从「文件里有没有关键词」逐步升级到「拦截真实供应商请求、断言最终提示词与请求快照」。本次 7 项修复仍以静态断言 + 临时数据库行为测试为主，已在方案中为下一阶段留出升级路径。</div>
+</section>
+
+<section>
+  <h2>三、逐项自查结论（15 项）</h2>
+  <p>核查方式：只读代码审查 + 临时数据库复现，基于当前 HEAD <code>c05a8d1</code>。文档写于 V4.100，V4.101 的创意框架 brief 只打通了规划/生成链路，未触及状态、证据、权限、依赖等底层问题。</p>
+  <table>
+    <tr><th>编号</th><th>问题摘要</th><th>核查结论</th><th>本轮处理</th></tr>
+    <tr><td><b>B01</b></td><td>图片子任务成功但批次仍 queued</td><td>存在，根因为图片任务不经过视频 worker 的 _recount</td><td><span class="pill done">已修 V4.102</span></td></tr>
+    <tr><td><b>B03</b></td><td>被拦截图片 task_index=null、错误互相覆盖、子任务仍 running</td><td>存在，common 缺索引字段</td><td><span class="pill done">已修 V4.102</span></td></tr>
+    <tr><td><b>B06</b></td><td>自动匹配心理层读错会话键</td><td>存在，读 cw_session_v1（已弃用）</td><td><span class="pill done">已修 V4.102</span></td></tr>
+    <tr><td><b>C04</b></td><td>纯图提示词同时含「留白」与「禁止留白」</td><td>存在，brief 重新注入旧版式 composition</td><td><span class="pill done">已修 V4.102</span></td></tr>
+    <tr><td><b>Q02</b></td><td>抽帧依赖未声明，容器审核降级</td><td>存在，requirements.txt 无 imageio-ffmpeg</td><td><span class="pill done">已修 V4.102</span></td></tr>
+    <tr><td><b>S01</b></td><td>通用任务接口缺归属过滤（越权）</td><td>存在，列表/详情/取消/重试均无 owner 校验</td><td><span class="pill done">已修 V4.102</span></td></tr>
+    <tr><td><b>B05（文案）</b></td><td>保存提示误导「下一次生成生效」</td><td>存在，模板确实不接入生成链路</td><td><span class="pill done">文案已修 V4.102</span></td></tr>
+    <tr><td>附带</td><td>resetAll 未清空 imageSupplement</td><td><b>已修复</b>（V4.101 已补）</td><td>无需改动</td></tr>
+    <tr><td><b>C01</b></td><td>用户意图只影响下游视觉，不进 analyze；路线卡不可编辑</td><td>部分存在：brief 已打通文案/路线/图片/视频规划，analyze 与路线编辑仍未做</td><td><span class="pill todo">待确认</span></td></tr>
+    <tr><td><b>C02</b></td><td>抓取证据未完整进入统一分析</td><td>存在：_build_cw_result 不带 evidence_index/chain</td><td><span class="pill todo">待确认</span></td></tr>
+    <tr><td><b>C03</b></td><td>路线未成为独立生成概念</td><td>部分存在：概念仍由文案生成、混入他路线作修饰</td><td><span class="pill todo">待确认</span></td></tr>
+    <tr><td><b>C05</b></td><td>参考图只取色彩，无法保证商品准确</td><td>存在：纯风格学习 + fail-open，无 product_reference 角色</td><td><span class="pill todo">待确认</span></td></tr>
+    <tr><td><b>Q01</b></td><td>图片质检只证明有画面</td><td>存在：仅 grad/std/uniq，异常 fail-open 且标 has_content</td><td><span class="pill todo">待确认</span></td></tr>
+    <tr><td><b>B02</b></td><td>图片工作区依赖浏览器 120s 短轮询</td><td>存在：订阅只筛 video，无按 draft_id 服务端恢复</td><td><span class="pill todo">待确认</span></td></tr>
+    <tr><td><b>B04</b></td><td>部分成功被当完整完成</td><td>存在：任一有产出即 complete，partial_success 计为成功</td><td><span class="pill todo">待确认</span></td></tr>
+    <tr><td><b>B05（核心）</b></td><td>提示词管理保存不影响真实生成</td><td>存在：管理模板与生成模板是两套 key</td><td><span class="pill todo">待确认</span></td></tr>
+    <tr><td><b>B07</b></td><td>规格标准库未统一引用</td><td>存在：slots 丢 spec_id，结果卡硬编码 30MB</td><td><span class="pill todo">待确认</span></td></tr>
+  </table>
+  <div class="warn">注意文档自身的两个偏差，我没有照单全收：① 文档说「会话键只有 admb_cw_session_v1」，核查确认工作台确实已用这个键，问题只在提示词管理页读错；② 文档把「15 秒视频问题」明确标注为历史问题、不再认定当前任务存在，我尊重这一克制判断，未做无谓改动。</div>
+</section>
+
+<section>
+  <h2>四、本轮已修复的 7 项缺陷（V4.102 · 已同步 Git）</h2>
+  <table>
+    <tr><th>缺陷</th><th>修复做法</th><th>影响与边界</th></tr>
+    <tr><td>B01 批次状态漂移</td><td>图片任务进入终态即重算批次（函数内延迟导入规避循环依赖）；启动时对所有批次做幂等重算迁移</td><td>有进行中任务的批次仍判 running/queued，不误判完成；历史数据下次启动自动修正</td></tr>
+    <tr><td>B03 逐图错误丢失</td><td>common 统一补 task_index / target_id / route_id / stage；内容拦截保留 provider_error，与体检原因分离；task_results 透出</td><td>子任务可被收敛与分项重试，成功项不重复收费</td></tr>
+    <tr><td>B06 会话键</td><td>改读 <code>admb_cw_session_v1</code></td><td>自动匹配按当前产品分析取数</td></tr>
+    <tr><td>C04 提示词冲突</td><td><code>brief_prompt_block</code> 增加 overlay_mode；纯图模式把旧版式 composition 换成无字满版描述</td><td>叠加图片+文字/按钮模式的构图行为完全不变</td></tr>
+    <tr><td>Q02 依赖</td><td>requirements.txt 补 <code>imageio-ffmpeg&gt;=0.5.1</code></td><td>干净容器抽帧可用，审核不再无故降级</td></tr>
+    <tr><td>S01 越权</td><td>generation-jobs 列表/详情/取消/重试按 owner_id 过滤，统一 <code>_job_row</code> 校验</td><td>普通用户返回 404 不泄露他人任务；admin 跨账号保留</td></tr>
+    <tr><td>B05 误导文案</td><td>保存提示改为「仅沉淀/复制，不改变出图出片」</td><td>不改变模板定位，只纠正表述</td></tr>
+  </table>
+  <div class="good">验证：专项 <code>test_diagnosis_fixes_v4102.py</code> 14/14；全量回归 346 项 0 失败 / 0 错误 / 2 跳过；tsc 0 错误；npm run build 通过；发版校验通过；提交 c05a8d1 已推送，本地=远端。</div>
+</section>
+
+<section>
+  <h2>五、待确认优化方案（9 类，按建议优先级排序）</h2>
+  <p>以下方案都涉及产品决策、交互重构、数据契约或外部成本，我没有进入开发。每项给出「解决什么 → 建议做法 → 改动范围 → 验收 → 风险/需你拍板」。</p>
+
+  <h3><span class="tag r">P0 · 信任与事实</span> 方案 A：C02 证据链入统一分析</h3>
+  <div class="mini">
+    <p><b>解决：</b><code>_build_cw_result</code> 只存 snapshot，不把 evidence_index / chain / 原文 / 限定条件写入 analysis，导致证据门拿不到可定位原文，历史样本出现 <code>evidence_status=unverified</code>、<code>source_id=null</code>。</p>
+    <p><b>建议：</b>以同一抓取快照为单一来源，analysis 内嵌证据索引与原文、URL、时间、claim 映射；人工文本另起独立编号；分析模型返回的卖点必须引用存在的 E 编号并保留范围条件。</p>
+    <p><b>改动范围：</b>routers._build_cw_result、services 证据打包逻辑、claims.EvidenceSnapshot、schemas；新增证据落库测试。</p>
+    <p><b>验收：</b>每个对外承诺可还原原文；不存在的 ID 被拒；只有 ID 无原文不得标已核验；新任务不以 legacy_unverified 冒充通过。</p>
+    <p><b>需拍板：</b>是否把「无证据即阻断生成」设为硬门（会让部分历史可生成的任务转 needs_input）。</p>
+  </div>
+
+  <h3><span class="tag r">P0 · 转化核心</span> 方案 B：C03 路线成为独立生成概念</h3>
+  <div class="mini">
+    <p><b>解决：</b>图片概念仍由文案生成，其余勾选路线混作修饰，导致「路线不同、产品主体与价值相同」，甚至共享 concept_key。</p>
+    <p><b>建议：</b>每条路线独立产出结构化 CreativeConcept（受众任务、阻力、单一承诺、可见证据、产品动作、场景、下一步），concept_id 绑定 route_id + intent_version；不再混入其他候选路线；行业配置只给边界不替代策划。</p>
+    <p><b>改动范围：</b>creative_config.build_concept、media_ad 图片概念构造、image_prompt_rule 的「辅助路线」策略、CreativeWorkbench 选路透传。</p>
+    <p><b>验收：</b>选两条路线必须在价值切入/动作/证据上有实质差异且可追溯；跨尺寸同一概念不能只换颜色。</p>
+    <p><b>需拍板：</b>是否废弃「辅助路线修饰」机制——这会改变现有「一次出图融合多路线」的产品行为。</p>
+  </div>
+
+  <h3><span class="tag a">P1 · 用户意图</span> 方案 C：C01 意图打通 analyze + 路线卡可编辑</h3>
+  <div class="mini">
+    <p><b>解决：</b>V4.101 的 brief 已进文案/路线/图片/视频规划，但 analyze 阶段不接收用户意图，imageSupplement 仍只作用于图片视觉，路线卡只能勾选不能编辑。</p>
+    <p><b>建议：</b>在现有补充框承载结构化 creative_intent（受众/目标/核心价值/场景/风格/禁止项），三类素材共用；自然语言解析为 intent_patch，返回变更摘要与冲突；改视觉项仅重编译视觉，改受众/价值则重策划概念与文案；路线卡增加「就地改一句推荐描述」。</p>
+    <p><b>改动范围：</b>CWAnalyzeRequest、/cw/analyze、/cw/routes、creative_brief、前端补充框与路线卡、草稿快照。</p>
+    <p><b>验收：</b>输入「面向首次装修业主，不做全息，重点看清家具布局」后，路线/视觉简报/最终请求均体现该意图，事实与授权参考不变。</p>
+    <p><b>需拍板：</b>是否接受在分析前增加一次「确认创作要求」步骤（对现有三步流程有轻微增加）。</p>
+  </div>
+
+  <h3><span class="tag a">P1 · 商品保真</span> 方案 D：C05 参考图角色区分与产品保真</h3>
+  <div class="mini">
+    <p><b>解决：</b>V4.97 把参考图改为纯风格学习（只取色彩），无法保住精确 SKU / 界面 / 结构，软件产出与实体商品容易画错。</p>
+    <p><b>建议：</b>区分 product_reference（保真）与 style_reference（学风格）；对必须保真的商品用支持参考编辑的模型或授权素材；缺必要产品资产时返回 needs_input，不生成通用品替代。</p>
+    <p><b>改动范围：</b>reference_image.py、media_ad 参考图分支、schemas/前端参考图控件文案、provider 能力声明。</p>
+    <p><b>验收：</b>上传商品参考后保留型号/颜色/材质/结构；风格参考不替换产品；软件功能用真实授权产出，不把全息或虚构 UI 当功能。</p>
+    <p><b>需拍板：</b>是否引入支持参考图编辑的模型（可能新增供应商与费用），以及授权素材从哪来。</p>
+  </div>
+
+  <h3><span class="tag a">P1 · 质量判定</span> 方案 E：Q01 质检从「有画面」扩展为「有效素材」</h3>
+  <div class="mini">
+    <p><b>解决：</b>image_content_guard 只算 grad/std/uniq，沙发氛围图用于户型软件、用餐图用于返现应用都能通过；异常 fail-open 还复用 has_content。</p>
+    <p><b>建议：</b>保留低成本纯色检查；另做产品参与、价值可见、视觉冲突、OCR 检查；检查缺失标 unverified 而非已通过；质量状态独立于文件生成状态，用现有工作区标签展示。</p>
+    <p><b>改动范围：</b>image_content_guard、视觉审核链路（可复用 V4.94 的 video_vision_audit 能力）、资产 meta、前端状态标签。</p>
+    <p><b>验收：</b>上述两类错配至少进入产品相关性复核；不因漂亮/无字/尺寸正确直接判合格。</p>
+    <p><b>需拍板：</b>是否接受每次出片新增视觉模型调用成本；内部 90 分质量门槛是否纳入硬交付条件。</p>
+  </div>
+
+  <h3><span class="tag p">P2 · 稳定性</span> 方案 F：B02 图片任务服务端恢复 + B04 部分成功口径</h3>
+  <div class="mini">
+    <p><b>解决：</b>图片结果只在浏览器 120s 轮询窗口内可见，订阅只回填 video；部分成功被当完整完成，逐尺寸 issues 不展示。</p>
+    <p><b>建议：</b>建批次即订阅，图片/视频统一按 asset_id 从批次详情回填；超时只显示「仍处理中/同步失败」不判失败；按 draft_id 恢复服务端草稿；结果区明确「请求 N / 合格 M / 待处理 K」，成功数按可用资产计。</p>
+    <p><b>改动范围：</b>CreativeWorkbench 轮询与订阅、api、任务抽屉、creative_tasks 详情聚合。</p>
+    <p><b>验收：</b>超过 120s、刷新、短断网后仍能展示结果与具体错误；四个目标出两张显示 2/4 与两个原因，下载只含可用文件。</p>
+    <p><b>需拍板：</b>是否接受「草稿按 draft_id 存服务端」带来的会话存储改造。</p>
+  </div>
+
+  <h3><span class="tag p">P2 · 一致性</span> 方案 G：B05 核心 —— 提示词管理真正接线</h3>
+  <div class="mini">
+    <p><b>解决：</b>管理模板（material_prompt_*）与生成模板（media_copy_sys / media_image_sys）是两套 key，intent 与心理层只是展示元数据，保存不影响生成。</p>
+    <p><b>建议：</b>明确维护模板与运行模板的单一关联；把已发布版本、intent、所选心理层编译进策划与生成；记录模板 key、版本、正文哈希与最终请求；保留「未接线模板不声称生效」的诚实降级。</p>
+    <p><b>改动范围：</b>prompt_catalog、material_prompt_manage、media_ad、routers、前端保存提示。</p>
+    <p><b>验收：</b>测试模板加唯一视觉标记后，mock 供应商实际请求能捕获；改心理层使策划相应变化。</p>
+    <p><b>需拍板：</b>管理员改一条模板是否应立即影响全平台生成（ blast radius 大，建议先加「发布/回滚」机制）。</p>
+  </div>
+
+  <h3><span class="tag p">P2 · 合规展示</span> 方案 H：B07 规格标准库统一引用</h3>
+  <div class="mini">
+    <p><b>解决：</b>前端 slots 只传 size 与 placement=平台名，缺 spec_id/ad_product/asset_role；后端按展示名精确匹配易失配；结果卡硬编码 JPG/PNG≤30MB。</p>
+    <p><b>建议：</b>每个目标传稳定 spec_id，后端解析成冻结版位规则；契约读取真实宽高/格式/容量/安全区；前端读同一快照，未知仍标待核验。</p>
+    <p><b>改动范围：</b>schemas 的 slot、前端 slots 构造、media_spec_library、prompt_contract、结果卡展示。</p>
+    <p><b>验收：</b>已登记 spec_id 不误降未登记；实际文件规格与导出标签一致，目录与库版本可追溯。</p>
+    <p><b>需拍板：</b>spec_id 的生成与维护方式（前端生成还是服务端下发）。</p>
+  </div>
+
+  <h3><span class="tag g">P3 · 业务验证</span> 方案 I：投放对照实验</h3>
+  <div class="mini">
+    <p><b>解决：</b>文档最核心的提醒——生成成功、质量分数、大模型自评分都不能替代真实转化结论。</p>
+    <p><b>建议：</b>同产品/目标/受众/版位/落地页条件下比较旧方案与改造方案；先比价值概念，再对胜出概念调开场/视觉；电商看购买 CPA 与 ROAS，订阅看激活/付费/留存退款，线索看合格线索成本与成单；提前定义预算、最小可检测改善、观察窗口。</p>
+    <p><b>改动范围：</b>基本不改代码，属运营实验；可能需在导出清单里带 concept_id 以便回流归因。</p>
+    <p><b>验收：</b>样本不足不宣称胜出；不以 CTR 变高直接认定有效。</p>
+    <p><b>需拍板：</b>由谁在哪个广告账户执行、预算与时间窗口。</p>
+  </div>
+</section>
+
+<section>
+  <h2>六、建议开发顺序与我的取舍</h2>
+  <ol class="steps">
+    <li><b>已完成（V4.102）：</b>7 项确定性缺陷。这些有唯一正确行为、不碰产品语义，先修能让后续方案建立在可信的地基上。</li>
+    <li><b>下一批建议先做 A + H：</b>证据入统一分析、规格统一引用——两者都是「事实层」问题，修复后所有生成任务的可信度整体提升，且不需要你做大的交互取舍。</li>
+    <li><b>再做 B + E：</b>路线独立概念、质检扩展——这是「吸引力/有效性」的核心，但需要先就「是否废弃辅助路线修饰」「是否引入视觉模型成本」拍板。</li>
+    <li><b>然后 C + D + F + G：</b>意图、参考保真、恢复链路、提示词接线——改动面大，建议逐个版本推进，每版独立回归。</li>
+    <li><b>最后 I：</b>投放验证。在代码侧能力齐备后，用少量受控样本验证真实效果，再决定是否扩大自动化交付。</li>
+  </ol>
+  <div class="note">我刻意没有做的：不改三步流程与双工作区布局、不动 V4.101 的创意 brief/框架/换一批、不把「画面不好看」当成提示词问题硬修、不新增进程内任务字典或破坏现有任务单一事实源。这些是我对文档「最小改动」要求的理解。</div>
+</section>
+
+<section>
+  <h2>七、需要你确认的决策点（一次性列出）</h2>
+  <div class="qbox">
+    <ol>
+      <li><b>A 证据门：</b>无证据是否硬阻断生成（会让部分任务转 needs_input）？</li>
+      <li><b>B 概念：</b>是否废弃「多路线融合修饰」，改为每条路线完全独立生成？</li>
+      <li><b>C 流程：</b>是否接受在分析前增加一次「确认创作要求」？</li>
+      <li><b>D 参考图：</b>是否引入支持参考图编辑的模型 / 由谁提供授权商品素材？</li>
+      <li><b>E 质检：</b>是否接受每次出片新增视觉模型调用成本？90 分质量门槛是否设为硬交付条件？</li>
+      <li><b>G 提示词：</b>管理员改模板是否立即影响全平台生成？是否先加发布/回滚机制？</li>
+      <li><b>H 规格：</b>spec_id 由前端生成还是服务端下发？</li>
+      <li><b>I 验证：</b>由谁在哪个广告账户做对照实验，预算与观察窗口是多少？</li>
+    </ol>
+  </div>
+  <p>你可以按编号回复「做 / 不做 / 改」，我会据此把确认的方案拆成独立版本依次开发；未确认的方案保持现状，不影响当前系统稳定。</p>
+</section>
+
+<footer>
+  本报告基于只读代码核查与临时数据库复现 · 真实付费出片 / OCR 抽检 / 品牌确认 / 投放效果均为外部验收项，模拟测试不可替代 · 生成于 2026-11-19
+</footer>
+
+</div>
+</body>
+</html>

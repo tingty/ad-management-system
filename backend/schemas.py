@@ -215,6 +215,7 @@ class MediaImageSlot(BaseModel):
     placement_id: str = ""       # 广告版位 id（V4.40 任务矩阵传）
     concept_index: Optional[int] = None   # 本任务使用的创意文案组合下标（旧调用为空 → 顺序轮换）
     concept_id: str = ""         # 前端可展示的概念标识（不参与服务端解析）
+    spec_id: str = ""            # V4.103 / 方案H：服务端下发的稳定规格 ID，优先于展示名解析
 
 class MediaCopyVariant(BaseModel):
     """V4.38：一条被用户勾选的「创意文案组合」，作为一张推广图的叠加文案。"""

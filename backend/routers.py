@@ -59,6 +59,8 @@ from version import ENABLE_AUTO_CREATION_PLAN
 # V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
 from video_claims import (video_evidence_context, audit_video_plan,
                           repair_video_plan, video_asset_gate)
+# V4.103 / 方案A：生成前统一证据硬门（文案 / 图片 / 视频 / 通用任务共用）
+from claims import generation_evidence_gate
 # V4.90：视频文字 / 文案预检与保守修复（只管文本形态和批准文案，不重复证据门）
 from video_text_guard import (audit_video_text, repair_video_text,
                               render_video_text_guard_block)
@@ -144,6 +146,21 @@ def _rule_error(exc: MediaRuleError) -> HTTPException:
     })
 
 
+def _enforce_evidence_gate(analysis: dict) -> None:
+    """V4.103 / 方案A：真实抓取分析无可用证据时，在调用模型 / 入队前硬阻断。
+
+    返回 None 表示放行；否则抛 422 needs_input，前端按结构化 detail 展示原因。
+    精确限定于「真实抓取链路」，演示 / 粘贴 / 历史简化分析不受影响。
+    """
+    gate = generation_evidence_gate(analysis or {})
+    if not gate["allowed"]:
+        raise HTTPException(422, detail={
+            "message": "证据校验未通过，已在调用模型前阻断（needs_input）",
+            "errors": [gate["reason"]],
+            "evidence_gate": gate["status"],
+        })
+
+
 @router.get("/industry-profiles")
 def api_industry_profiles(_: User = Depends(require_roles(*ROLES))):
     """V4.39：行业 / 品类画像列表，供「素材创作」局部调整。
@@ -173,6 +190,8 @@ async def api_media_campaign_copy(req: MediaCopyRequest, db: Session = Depends(g
     # V4.101：未经用户确认的 brief 不得进入生成；前端也做同口径禁用。
     if req.brief and not req.brief.get("confirmed"):
         raise HTTPException(400, "创意 brief 尚未确认，请先在预览中确认后再生成文案")
+    # V4.103 / 方案A：真实抓取分析无证据时硬阻断，不调用付费模型。
+    _enforce_evidence_gate(req.analysis.model_dump())
     result = await generate_media_copy(db, req.analysis.model_dump(), platform, req.lang,
                                        ad_product=req.ad_product,
                                        style_opts=req.style_opts or {},
@@ -214,6 +233,8 @@ async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depend
     slots = [s.model_dump() for s in req.slots]
     variants = [v.model_dump() for v in req.copy_variants]
     analysis = req.analysis.model_dump()
+    # V4.103 / 方案A：真实抓取分析无证据时硬阻断，不调用付费模型。
+    _enforce_evidence_gate(analysis)
     profile = resolve_profile(analysis, key=analysis.get("industry_profile") or "")
     try:
         checked = validate_task_matrix(req.platform, slots,
@@ -620,7 +641,8 @@ _CW_VIDEO_PLAN_SYS = (
 
 
 def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
-                     analysis_meta=None, snapshot, info, db, user, platforms):
+                     analysis_meta=None, snapshot, info, db, user, platforms,
+                     evidence_pack=None):
     """V4.59 / B1 + B2：由 boxes/brief 构造「生成统一来源 analysis」、来源快照、并落库为创意方案草稿。
 
     `analysis` 字段对齐媒体生成链路 media_ad 读取的键，兼容历史恢复；
@@ -665,6 +687,26 @@ def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
         "url": analysis_meta.get("url") or "",
         "final_url": analysis_meta.get("final_url") or "",
     }
+    # V4.103 / 方案A+C02：把真实抓取的证据包内嵌进统一 analysis，作为 D0 证据门、
+    # prompt_contract 与 claim_contract 的单一事实来源。此前 pack 只用于拼提示词，
+    # 分析落库不带证据 → 证据门读到空快照 → evidence_status=unverified / source_id=null。
+    if evidence_pack:
+        gate = evidence_pack.get("gate") or {}
+        evidence = evidence_pack.get("evidence") or []
+        analysis.update({
+            "facts": [], "assumptions": [], "gaps": [],
+            "evidence_ids": evidence_pack.get("evidence_ids") or [],
+            "evidence_chain": [], "evidence_index": evidence,
+            "sections_index": evidence_pack.get("sections_index") or [],
+            "evidence_snapshot_id": evidence_pack.get("evidence_snapshot_id") or "",
+            "evidence_fetched_at": evidence_pack.get("fetched_at") or "",
+            "evidence_review_status": "locatable_not_reviewed" if evidence else "legacy_unverified",
+            "evidence_gate": gate.get("status") or "",
+            "blocked_reasons": gate.get("reasons") or [],
+            "evidence_coverage": evidence_pack.get("coverage") or {},
+            "evidence_note": evidence_pack.get("note") or "",
+            "legacy_unverified": bool(evidence_pack.get("legacy_unverified")),
+        })
     result = {
         "title": title, "summary": summary, "boxes": boxes, "brief": brief,
         "recommendedPlatforms": rec_plat, "analysis": analysis,
@@ -818,7 +860,7 @@ async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
         result = _build_cw_result(title, summary, boxes, brief, rec_plat,
                                  analysis_meta={"url": url, "final_url": page.get("final_url") or url},
                                  snapshot=snapshot, info=info, db=db,
-                                 user=user, platforms=platforms)
+                                 user=user, platforms=platforms, evidence_pack=pack)
         return CWAnalysisResult(**result)
 
     # ---- ③ 仅文本：基于用户粘贴描述分析（source=pasted） ----
@@ -1353,6 +1395,9 @@ async def api_cw_video_create_job(req: CWVideoGenerateRequest, db: Session = Dep
     不会产生第二次收费任务。
     """
     built = _cw_video_request_build(req, db)
+    # V4.103 / 方案A：真实抓取分析无可用证据时先硬阻断（claim_audit 对空快照返回
+    # legacy_unverified 不触发 needs_revision，需这道门补齐）。此时无供应商任务号、无费用。
+    _enforce_evidence_gate(built.get("analysis") or {})
     # V4.82：无证据 / 丢限定的承诺在入队前拦截。此时还没有供应商任务号，也没有费用。
     if built["claim_audit"]["status"] == "needs_revision":
         bad = "；".join(str(v.get("reason") or v.get("field") or "")[:80]
@@ -1905,6 +1950,12 @@ async def create_generation_job(body: dict, db: Session = Depends(get_db),
                 "plan_id": plan_id})
         if not plan.approval_token:
             raise HTTPException(422, detail={"message": "计划尚未确认（未冻结版本 / 未授权费用），不能生成"})
+    # V4.103 / 方案A：实际出图入口（前端走此路）统一证据硬门；
+    # 分析取自 images_request.analysis（auto_creation 取持久 plan 的 analysis_json）。
+    if not plan_id:
+        _job_analysis = (body.get("images_request") or {}).get("analysis") or {}
+        if _job_analysis:
+            _enforce_evidence_gate(_job_analysis if isinstance(_job_analysis, dict) else {})
     try:
         job, created = job_service.create_job(
             db, body, user, idempotency_key=str(body.get("idempotency_key") or "").strip(),

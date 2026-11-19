@@ -2,6 +2,35 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.103 证据硬门与规格统一引用——真实抓取无证据阻断生成、spec_id 稳定下发
+
+**发布日期**：2026-11-19 14:40
+**变更类型**：新增 / 优化
+**涉及模块**：素材创作平台 / 创意工作台（文案生成、图片生成、视频出片、落地页分析）、后端接口与证据链、数据模型 schemas、媒体规格标准库、前端与菜单与结果卡、系统设置、部署依赖、回归测试、发版流程、系统版本
+**变更摘要**：按用户对诊断报告 9 类优化方案的决策，第一批实施「事实层」两项——方案 A（证据链入统一分析 + 无证据硬阻断生成）与方案 H（规格标准库统一引用）。A：真实抓取的证据包此前只用于拼提示词、未写进分析，导致证据门读到空快照、evidence_status=unverified；本版把 evidence_index / snapshot_id / gate 等字段写入统一分析，并在文案 / 图片 / 视频 / 通用任务四个生成入口增加统一的证据硬门，真实抓取无可用证据时在调用付费模型 / 入队前阻断（needs_input），演示样例与手工粘贴文本不受影响。H：标准库每条规则新增稳定 spec_id，前端生成请求引用、后端按 ID 精确解析（命中即跳过展示名精确匹配），结果卡展示标准库登记的真实格式与容量，不再硬编码 JPG/PNG ≤30MB。本版不涉及路线路线独立、质检扩展、创作要求确认、参考图编辑、提示词接线与投放验证。
+**更新要点**
+- 【新增】`claims.generation_evidence_gate()` 统一证据硬门（纯函数）：仅当分析带真实抓取标记（evidence_snapshot_id / 显式 needs_input / snapshot=real_fetch）且无可用证据时才 needs_input；演示 / 粘贴 / 历史简化分析放行，不破坏既有分析与测试。
+- 【新增】`_build_cw_result` 接受 `evidence_pack`，把证据索引、编号全集、快照 ID、门状态等 10 个字段内嵌进统一 analysis；真实抓取分支传入 pack，落库与接口一并返回。
+- 【优化】四个生成入口（media-campaign/copy、media-campaign/images、generation-jobs、cw-video/generate-jobs）在调用模型 / 入队前统一过证据门；空快照不再冒充通过。
+- 【新增】媒体规格标准库 `SpecEntry.spec_id`（确定性派生、稳定唯一）+ `entry_for_spec_id` / `image_target_for_spec_id`；library_payload 与 image_targets 透出 spec_id。
+- 【优化】前端出图 slots 携带服务端下发的 spec_id；`validate_task_matrix` 与 `media_ad` 优先按 spec_id 解析（命中以标准库 ad_product/asset_role 为准，平台不一致拒绝），失败回退展示名匹配。
+- 【优化】结果卡 `specOf` 读取资产 meta 中的真实 formats / max_bytes，标准库未登记才标注「待核验」，不再硬编码容量。
+- 【验证】专项 test_evidence_gate_v4103 8/8、test_spec_id_v4103 7/7；全量回归 361 项 0 失败 / 0 错误 / 2 跳过；tsc 0 错误；npm run build 通过；发版校验通过。
+**本次优化与更改的功能 / 模块**
+- 【新增】claims 证据硬门 / 创意工作台证据链：generation_evidence_gate 纯函数，真实抓取无证据 needs_input
+- 【新增】媒体规格标准库 / spec_id：SpecEntry.spec_id 与按 ID 精确解析；前端出图与结果卡统一引用
+- 【优化】后端接口 / 生成入口：文案、图片、视频、通用任务四入口接入证据门
+- 【优化】前端与菜单 / CreativeWorkbench + SpecLibrary：slots 带 spec_id、结果卡读真实规格
+
+**影响范围**
+- 真实抓取落地页且无可定位原文证据的任务，生成将在调用模型前被拦截并提示 needs_input（此前会以 unverified 继续生成）；演示模式与手工粘贴文本不受影响
+- 已登记规格的图片任务按稳定 spec_id 出图，结果卡规格展示更准确；未登记规格仍保留旧兼容路径
+
+**验证**
+- 专项 test_evidence_gate_v4103 8/8、test_spec_id_v4103 7/7
+- 全量回归 361 项 0 失败 / 0 错误 / 2 跳过；tsc 0 错误；npm run build 通过；prepare_release --check 通过
+- 真实付费出片 / OCR 抽检 / 品牌确认 / 投放效果为外部验收项，模拟测试不可替代
+
 ## V4.102 诊断报告确定性缺陷修复——批次状态、逐图错误、任务越权与提示词冲突
 
 **发布日期**：2026-11-19 12:20

@@ -33,6 +33,9 @@ V4.40 / F08：目录从「按平台名 + 尺寸字符串」升级为**版本化�
 # ---------------------------------------------------------------------------
 import re
 
+# V4.103 / 方案H：按服务端下发的稳定 spec_id 精确解析规格，避免展示名精确匹配失配。
+from media_spec_library import entry_for_spec_id as _entry_for_spec_id
+
 SPEC_VERSION = "2026-11-12.1"
 SPEC_SOURCE = "内部整理：media_platforms.py + 《广告素材平台问题诊断与AI改造实施说明书》v1.0 静态审查"
 SPEC_VERIFIED_ON = ""      # 空 = 尚未按各平台官方文档核验；核验后填 YYYY-MM-DD
@@ -499,6 +502,12 @@ def validate_task_matrix(platform: str, slots: list, total_pixels: int | None = 
     for i, raw in enumerate(rows):
         slot = raw if isinstance(raw, dict) else {}
         size = str(slot.get("size") or "").strip()
+        # V4.103 / 方案H：spec_id 命中标准库时跳过展示名精确匹配，直接用冻结的
+        # ad_product / asset_role；尺寸仍须通过 allowed 校验（防止前端篡改 spec_id 绕过尺寸门）。
+        spec_entry = _entry_for_spec_id(slot.get("spec_id") or "") if slot.get("spec_id") else None
+        if spec_entry and canonical_platform(spec_entry.platform) != key:
+            errors.append(f"第 {i + 1} 个任务 spec_id 属于 {spec_entry.platform}，与本批平台 {key} 不一致")
+            spec_entry = None
         if size.lower().replace("×", "x") not in {s.lower() for s in allowed}:
             errors.append(f"第 {i + 1} 个任务尺寸 {size or '(空)'} 不在 {key} 允许清单内")
             continue
@@ -560,6 +569,16 @@ def validate_task_matrix(platform: str, slots: list, total_pixels: int | None = 
                 "不可作为已核验的版位交付物）")
         role = pl.get("asset_role") or _UNKNOWN_ROLE["asset_role"]
         product = pl.get("ad_product") or _UNKNOWN_ROLE["ad_product"]
+        # V4.103 / 方案H：spec_id 命中标准库时以冻结规则为准，杜绝展示名匹配失配。
+        spec_id_out = ""
+        if spec_entry:
+            role = spec_entry.asset_role or role
+            product = spec_entry.ad_product or product
+            spec_id_out = spec_entry.spec_id
+            if spec_entry.sizes and size.lower().replace("×", "x") not in {
+                    str(s).lower().replace("×", "x") for s in spec_entry.sizes}:
+                placement_warnings.append(
+                    f"第 {i + 1} 个任务尺寸 {size} 不在 spec_id={spec_id_out} 登记尺寸内，请核对规格")
         products.add(product)
         # 前端已确认的任务矩阵（带 concept_index）服务端不再删行，避免预览与实际不一致；
         # 仅旧调用（concept_index 为空）才按「同尺寸 + 同资产角色」合并无意义重复任务。
@@ -572,6 +591,7 @@ def validate_task_matrix(platform: str, slots: list, total_pixels: int | None = 
             "asset_role": role,
             "os": pl.get("os") or "unknown",
             "spec_version": SPEC_VERSION,
+            "spec_id": spec_id_out,
             "w": w, "h": h,
         }
         if ci is None and dedupe_key in seen:

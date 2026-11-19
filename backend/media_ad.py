@@ -47,7 +47,8 @@ from industry_profiles import (resolve_profile, is_complete_sentence, missing_pr
                                protected_fragments)
 from media_platforms import get_media_platform, SPEC_VERSION
 from media_spec_library import (image_targets as spec_image_targets,
-                                image_target_for_size as spec_image_target_for_size)
+                                image_target_for_size as spec_image_target_for_size,
+                                image_target_for_spec_id as spec_image_target_for_spec_id)
 from prompt_contract import build_prompt_contract, render_image_contract_block
 from image_prompt_rule import render_image_prompt_rule
 from image_content_guard import inspect_image_content
@@ -930,9 +931,13 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             cap_key = getattr(img, "capability_key", "template") if img is not None else "template"
             cap_params = (img_cfg.params if img_cfg else None) or {}
             gen_plan = plan_generation_size(cap_key, w, h, cap_params)
-            lib_match = spec_image_target_for_size(
-                platform, size, ad_product=slot.get("ad_product") or "",
-                asset_role=slot.get("asset_role") or "")
+            # V4.103 / 方案H：优先按服务端下发的 spec_id 精确解析，失败再回退展示名匹配。
+            lib_match = (spec_image_target_for_spec_id(slot.get("spec_id") or "")
+                         if slot.get("spec_id") else None)
+            if not lib_match:
+                lib_match = spec_image_target_for_size(
+                    platform, size, ad_product=slot.get("ad_product") or "",
+                    asset_role=slot.get("asset_role") or "")
             contract = build_prompt_contract(
                 media_type="image", analysis=analysis, brief=brief,
                 profile_key=profile.get("key") or "", placement=slot,
@@ -976,10 +981,16 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                     "version": str((config.get("prompt_rule") or {}).get("version") or ""),
                 },
                 "spec_library": {
+                    # V4.103 / 方案H：把真实登记格式 / 容量 / spec_id 写入资产 meta，
+                    # 结果卡据此展示真实规格，不再硬编码 JPG/PNG ≤30MB。
+                    "spec_id": slot.get("spec_id") or (lib_match or {}).get("spec_id") or "",
                     "library_version": lib_match.get("library_version") if lib_match else None,
                     "verification": (lib_match or {}).get("verification") or "C",
                     "verification_label": (lib_match or {}).get("verification_label")
                     or "标准库未登记 / 待确认",
+                    "formats": list((lib_match or {}).get("formats") or ()),
+                    "max_bytes": (lib_match or {}).get("max_bytes"),
+                    "sizes": list((lib_match or {}).get("sizes") or ()),
                     "source_url": (lib_match or {}).get("source_url"),
                     "note": (lib_match or {}).get("note")
                     or "该尺寸来自旧展示目录，素材标准库未登记，不按官方硬规则处理。",

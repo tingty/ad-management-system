@@ -32,6 +32,8 @@ verified_on / source_url。
 """
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
@@ -103,10 +105,27 @@ class SpecEntry:
     companions: tuple = ()          # 必需的伴随资产角色
     note: str = ""
 
+    @property
+    def spec_id(self) -> str:
+        """V4.103 / 方案H：稳定规格 ID，供前端引用、后端精确解析。
+
+        由 (platform, ad_product, asset_role, media) 的规范化组合确定性派生；
+        同一条目跨版本稳定，前端一次拉取即可长期引用，不再用展示名做精确匹配。
+        """
+        key = "|".join(_norm(x) for x in
+                       (self.platform, self.ad_product, self.asset_role, self.media))
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:10]
+        slug = re.sub(r"[^a-z0-9]+", "-", _norm(self.platform)).strip("-") or "spec"
+        product = re.sub(r"[^a-z0-9]+", "-", _norm(self.ad_product)).strip("-")
+        role = re.sub(r"[^a-z0-9]+", "-", _norm(self.asset_role)).strip("-")
+        parts = [p for p in (slug, product, role, self.media, digest) if p]
+        return "sp-" + "-".join(parts)
+
     def as_dict(self) -> dict:
         d = asdict(self)
         for k in ("sizes", "min_sizes", "aspect_ratios", "formats", "companions"):
             d[k] = list(d[k] or ())
+        d["spec_id"] = self.spec_id
         d["verification_label"] = VERIFY_LABEL.get(self.verification, "未标注")
         d["library_version"] = LIBRARY_VERSION
         return d
@@ -338,6 +357,28 @@ def entries_for(platform: str, media: str = "", ad_product: str = "") -> list[Sp
             and (not ad_product or _norm(e.ad_product) == _norm(ad_product))]
 
 
+def entry_for_spec_id(spec_id: str) -> SpecEntry | None:
+    """V4.103 / 方案H：按稳定 spec_id 精确解析条目，未命中返回 None。"""
+    sid = str(spec_id or "").strip()
+    if not sid:
+        return None
+    for e in LIBRARY:
+        if e.spec_id == sid:
+            return e
+    return None
+
+
+def image_target_for_spec_id(spec_id: str) -> dict | None:
+    """按稳定 spec_id 解析图片目标（优先路径），未登记返回 None。"""
+    e = entry_for_spec_id(spec_id)
+    if not e or e.media != "image":
+        return None
+    for row in image_targets(e.platform, e.ad_product, e.asset_role):
+        if row["spec_id"] == e.spec_id:
+            return row
+    return None
+
+
 def image_targets(platform: str, ad_product: str = "", asset_role: str = "") -> list[dict]:
     """V4.88：图片生成目标解析（与 video_target 对称，供任务矩阵与提示词共用）。
 
@@ -349,6 +390,7 @@ def image_targets(platform: str, ad_product: str = "", asset_role: str = "") -> 
         if asset_role and _norm(e.asset_role) != _norm(asset_role):
             continue
         out.append({
+            "spec_id": e.spec_id,
             "platform": e.platform,
             "ad_product": e.ad_product,
             "asset_role": e.asset_role,

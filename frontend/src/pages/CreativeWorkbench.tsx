@@ -173,13 +173,27 @@ function fileOf(a: any): string {
   } catch { /* 退回字符串切分 */ }
   return u.split('?')[0].split('/').pop() || ''
 }
+function fmtBytes(n: number): string {
+  if (!n || n <= 0) return ''
+  if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(n % (1024 ** 3) ? 1 : 0)} GB`
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(n % (1024 ** 2) ? 1 : 0)} MB`
+  return `${Math.round(n / 1024)} KB`
+}
 function specOf(img: any): { dim: string; ratio: string; fmt: string } {
   const w = Number(img?.w) || (img?.size ? parseInt(String(img.size).split('x')[0]) : 0)
   const h = Number(img?.h) || (img?.size ? parseInt(String(img.size).split('x')[1]) : 0)
   const ratio = aspectOf(img)
-  if (w && h) return { dim: `${w} × ${h} px`, ratio, fmt: 'JPG / PNG · ≤ 30 MB' }
-  if (img?.size) return { dim: `${img.size.replace('x', ' × ')} px`, ratio, fmt: 'JPG / PNG · ≤ 30 MB' }
-  return { dim: '自适应', ratio, fmt: 'JPG / PNG · ≤ 30 MB' }
+  // V4.103 / 方案H：优先展示标准库登记的真实格式与容量，不再硬编码 JPG/PNG ≤30MB。
+  const sl = img?.meta?.spec_library || img?.spec_library || null
+  const formats: string[] = Array.isArray(sl?.formats) ? sl.formats : []
+  const maxBytes: number = Number(sl?.max_bytes) || 0
+  const registered = !!sl && (sl.verification in { A: 1, B: 1, C: 1 })
+  const fmt = registered
+    ? `${(formats.length ? formats.join(' / ') : '格式待核验')}${maxBytes ? ` · ≤ ${fmtBytes(maxBytes)}` : ''}`
+    : 'JPG / PNG · ≤ 30 MB（标准库未登记，待核验）'
+  if (w && h) return { dim: `${w} × ${h} px`, ratio, fmt }
+  if (img?.size) return { dim: `${img.size.replace('x', ' × ')} px`, ratio, fmt }
+  return { dim: '自适应', ratio, fmt }
 }
 function copyOf(a: any): { headline: string; sub: string; cta: string } | null {
   const c = a?.copy || a?.meta?.copy
@@ -737,6 +751,19 @@ export default function CreativeWorkbench() {
     try {
       const rules: any = await api.mediaRules().catch(() => ({}))
       const allowed: Record<string, string[]> = rules?.platforms || {}
+      // V4.103 / 方案H：拉取服务端标准库，按 平台+尺寸 取稳定 spec_id，交给后端精确解析。
+      let specEntries: any[] = []
+      try {
+        const specLib: any = await api.mediaSpecLibrary()
+        specEntries = Array.isArray(specLib?.entries) ? specLib.entries : []
+      } catch { /* 规格库不可用时退回展示名匹配（兼容） */ }
+      const specIdFor = (platform: string, size: string): string => {
+        const norm = (s: string) => String(s || '').toLowerCase().replace('×', 'x').trim()
+        const hit = specEntries.find((e: any) =>
+          e.media === 'image' && norm(e.platform) === norm(platform)
+          && (Array.isArray(e.sizes) ? e.sizes : []).some((sz: string) => norm(sz) === norm(size)))
+        return hit?.spec_id || ''
+      }
       let genIdx = 0
       for (let i = 0; i < targets.length; i++) {
         const p = targets[i]
@@ -752,7 +779,7 @@ export default function CreativeWorkbench() {
             finalStates.push('failed'); done++; setProgressPct(Math.round(done / totalJobs * 100)); continue
           }
           setProgressText(`正在为 ${p} · ${route?.name || '默认'} 生成推广图片…`)
-          const slots = sizes.map(size => ({ size, placement: p }))
+          const slots = sizes.map(size => ({ size, placement: p, spec_id: specIdFor(p, size) }))
           // V4.96：不再把路线拆散塞进 creative_direction / content_style，
           // 改为把「当前主干路线 + 其余勾选路线 + 图片补充指令」交给后端统一生成唯一规则。
           const style_opts: any = {
