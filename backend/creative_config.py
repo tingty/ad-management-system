@@ -22,6 +22,13 @@ from claims import EvidenceSnapshot
 
 CREATIVE_CONFIG_VERSION = "4.41.1"
 
+# V4.101 / P2：框架 → 既有创意方向预设。让高转化框架真正驱动 MOOD / STYLE，
+# 不再因为前端没选预设而全部落空；不新增模型调用，零额外费用。
+FRAMEWORK_DIRECTION = {
+    "aida": "D01", "pas": "D02", "bab": "D11", "hso": "D18", "4p": "D06",
+    "contrast_proof": "D06", "scene": "D03", "social_proof": "D16", "scarcity": "D17",
+}
+
 # 策略字段：参与文案生成与画面语义，但只是「表达倾向」，不是事实依据。
 STRATEGY_FIELDS = ("direction_text", "style_text", "color_text",
                    "extra_prompt", "design_prompt")
@@ -88,6 +95,16 @@ def resolve_creative_config(style_opts: dict | None, lang: str = "en",
     color = _clean(so.get("color_scheme"))
     ov = overrides or {}
 
+    # V4.96：创意工作台把「所选路线 + 补充指令」作为结构化的 creative_plan 传入，
+    # 由本层统一生成规则并计入 config 快照；任何调用点不得自行拼这份规则。
+    creative_plan = so.get("creative_plan") if isinstance(so.get("creative_plan"), dict) else {}
+    # V4.101：用户未手选创意方向时，按主干路线的框架反推预设，接通 D01–D20。
+    if not direction:
+        plan_routes = creative_plan.get("routes") or []
+        if plan_routes and isinstance(plan_routes[0], dict):
+            direction = FRAMEWORK_DIRECTION.get(
+                str(plan_routes[0].get("framework") or "").strip(), "")
+
     d = build_directives(direction, style, color, lang=lang, overrides=ov)
     design = dict(d.get("design_overrides") or {})
 
@@ -97,14 +114,12 @@ def resolve_creative_config(style_opts: dict | None, lang: str = "en",
     if isinstance(so.get("styles"), list) and so["styles"]:
         design["styles"] = [_clean(x) for x in so["styles"] if _clean(x)][:3]
 
-    # V4.96：创意工作台把「所选路线 + 补充指令」作为结构化的 creative_plan 传入，
-    # 由本层统一生成规则并计入 config 快照；任何调用点不得自行拼这份规则。
-    creative_plan = so.get("creative_plan")
     prompt_rule = build_image_prompt_rule(
-        routes=(creative_plan or {}).get("routes") if isinstance(creative_plan, dict) else None,
-        supplement=(creative_plan or {}).get("supplement") if isinstance(creative_plan, dict) else "",
-        platform=(creative_plan or {}).get("platform") if isinstance(creative_plan, dict) else "",
-        overlay_mode=(creative_plan or {}).get("overlay_mode") if isinstance(creative_plan, dict) else "pure",
+        routes=creative_plan.get("routes"),
+        supplement=creative_plan.get("supplement") or "",
+        platform=creative_plan.get("platform") or "",
+        overlay_mode=creative_plan.get("overlay_mode") or "pure",
+        brief=creative_plan.get("brief"),
     )
 
     template = _clean(d.get("template"))

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { api, getToken } from '../api'
+import { api, getToken, type CreativeBrief } from '../api'
 import VideoStudio, { VideoState } from './VideoStudio'
 import { cwTaskBegin, cwTaskDismiss, cwTaskEnd, cwTaskReset, cwTaskUpdate, getCwTask, type CwStageStatus, type CwTaskStage } from '../cwTask'
 import CreativeTasksDrawer from '../CreativeTasksDrawer'
@@ -12,6 +12,12 @@ type Route = {
   tags: string[]
   angle: string
   selected: boolean
+  framework?: string
+  framework_label?: string
+  hook?: string
+  proof?: string
+  visual_hook?: string
+  cta_role?: string
 }
 type JobState = {
   platform: string
@@ -22,6 +28,19 @@ type JobState = {
   error?: string
   route: Route | null
 }
+
+// V4.101：框架目录未加载时的兜底，仅用于下拉展示；权威来源仍是 /api/creative-frameworks
+const FRAMEWORK_FALLBACK = [
+  { key: 'aida', label: 'AIDA · 注意→兴趣→欲望→行动' },
+  { key: 'pas', label: 'PAS · 痛点→放大→解决' },
+  { key: 'bab', label: 'BAB · 现状→理想→桥梁' },
+  { key: 'hso', label: 'HSO · 钩子→故事→优惠' },
+  { key: '4p', label: '4P · 承诺→画面→证明→推动' },
+  { key: 'contrast_proof', label: '对比证明 · 差异→验证→结论' },
+  { key: 'scene', label: '场景代入 · 时刻→动作→融入' },
+  { key: 'social_proof', label: '社会认同 · 群体→口碑→归因' },
+  { key: 'scarcity', label: '稀缺紧迫 · 时机→窗口→行动' },
+]
 
 const STEPS = [
   { n: 1, label: '解析产品', sub: '提取卖点与受众' },
@@ -269,6 +288,16 @@ export default function CreativeWorkbench() {
   const [routes, setRoutes] = useState<Route[]>([])
   // V4.96：图片专用补充创意指令（原绑定 vs.options.prompt_hint 属视频状态，图片链路读不到）
   const [imageSupplement, setImageSupplement] = useState('')
+  // V4.101 / P4：三类素材共用的用户提示词补全确认流程
+  const [creativeBriefInput, setCreativeBriefInput] = useState('')
+  const [creativeBriefFramework, setCreativeBriefFramework] = useState('aida')
+  const [creativeBriefDraft, setCreativeBriefDraft] = useState<CreativeBrief | null>(null)
+  const [creativeBriefConfirmed, setCreativeBriefConfirmed] = useState(false)
+  const [copyVariant, setCopyVariant] = useState(0)
+  const copyVariantRef = useRef(0)
+  const [creativeFrameworks, setCreativeFrameworks] = useState<Array<{ key: string; label: string; desc: string; requires_evidence: boolean }>>([])
+  const [rerouting, setRerouting] = useState(false)
+  const [rerouteNote, setRerouteNote] = useState('')
   const [analysisValid, setAnalysisValid] = useState(false)  // V4.70 自检 5.1：分析框架完整性
 
   const [assets, setAssets] = useState<any[]>([])
@@ -313,6 +342,11 @@ export default function CreativeWorkbench() {
     },
     note: '', modelInfo: null, videoModel: null, outputAspect: '', planning: false, generating: false, error: '', refineInput: '',
   })
+
+  // V4.101：框架目录一次加载，失败时 UI 仍有内置兜底列表。
+  useEffect(() => {
+    api.creativeFrameworks().then((d: any) => setCreativeFrameworks(d?.frameworks || [])).catch(() => {})
+  }, [])
 
   useEffect(() => {
     function applyNames(names: string[]) {
@@ -571,6 +605,49 @@ export default function CreativeWorkbench() {
     return analysis
   }
 
+  /** V4.101：只有用户点过「确认使用」的 brief 才允许进入三类生成链路。 */
+  function confirmedBrief(): CreativeBrief | null {
+    if (!creativeBriefDraft || !creativeBriefConfirmed) return null
+    return { ...creativeBriefDraft, confirmed: true, variation: copyVariantRef.current }
+  }
+
+  async function previewBrief() {
+    if (!creativeBriefInput.trim()) { setError('请先输入你希望强调的创意方向或提示词'); return }
+    setError('')
+    try {
+      const d = await api.previewCreativeBrief({
+        raw_input: creativeBriefInput.trim(),
+        analysis: currentAnalysis(),
+        platform: selectedPlatform || selected[0] || '',
+        framework: creativeBriefFramework,
+      })
+      setCreativeBriefDraft(d)
+      setCreativeBriefConfirmed(false)
+    } catch (e: any) {
+      setError('补全提示词失败：' + (e?.message || '未知错误'))
+    }
+  }
+
+  /** V4.101：换一批路线只重调规划接口，不重新抓落地页，也不触发出片费用。 */
+  async function rerouteRoutes() {
+    if (!cw) return
+    setRerouting(true); setRerouteNote('')
+    try {
+      const seed = 'v' + Date.now()
+      const excluded = routes.filter(r => r.selected).map(r => r.name).filter(Boolean)
+      const res: any = await api.cwRoutes({
+        plan_id: cw?.id ?? planId ?? undefined,
+        analysis: cw?.analysis || {}, platforms: selected, brief: cw?.brief || {}, count: 10,
+        framework: creativeBriefFramework,
+        user_brief: confirmedBrief(), seed, exclude_names: excluded,
+      })
+      setRoutes((res?.routes || []).map((r: any) => ({ ...r, selected: false })))
+      setRerouteNote(excluded.length ? `已排除上一批选中的 ${excluded.length} 条路线，重新规划完成` : '已重新规划一批路线')
+    } catch (e: any) {
+      setError('换一批路线失败：' + (e?.message || '未知错误'))
+    } finally { setRerouting(false) }
+  }
+
   /**
    * V4.92：为所有选中平台生成广告文案（依据大模型 + 证据门）。
    * 抽成纯数据 helper：文案现在是独立素材类型，不再因「纯图片」叠加模式被跳过。
@@ -591,11 +668,12 @@ export default function CreativeWorkbench() {
     for (const p of targets) {
       try {
         setProgressText(`正在为 ${p} 生成广告文案…`)
-        const cr: any = await api.mediaCopy({ analysis, platform: p, lang: 'en' }).catch(() => null)
+        const cr: any = await api.mediaCopy({ analysis, platform: p, lang: 'en', brief: confirmedBrief() }).catch(() => null)
         if (cr && cr.fields && !copyIsInvalid(cr)) {
           // V4.92：完整保留平台文案规格与校验结果——schema（字段/字数上限）、
           // char_table（逐字段实测字数 vs 上限）、validation（是否符合平台规则）、ad_product（RSA/UAC 等细分）。
-          copiesByPlat[p] = { fields: cr.fields, schema: cr.schema, char_table: cr.char_table, ad_product: cr.ad_product, brand: cr.brand, model_info: cr.model_info, validation: cr.validation }
+          // V4.101：同时保留本次使用的创意 brief 快照，供工作区回显。
+          copiesByPlat[p] = { fields: cr.fields, schema: cr.schema, char_table: cr.char_table, ad_product: cr.ad_product, brand: cr.brand, model_info: cr.model_info, validation: cr.validation, creative_brief: cr.creative_brief }
           const f = cr.fields
           variantsByPlat[p] = [{ headline: firstNonEmpty(f.headline ?? f.title), sub: pickFirstField(f.description, f.body, f.primary_text), cta: firstNonEmpty(f.cta), brand: firstNonEmpty(cr.brand), label: p }]
         } else {
@@ -617,6 +695,18 @@ export default function CreativeWorkbench() {
     const okCount = Object.keys(data.copiesByPlat).length
     const errs = Object.entries(data.copyFailures).map(([p, m]) => `${p}：${m}`)
     return { okCount, errs, data }
+  }
+
+  /** V4.101：对当前文案规划不满意时换一批；不重新分析落地页，只重生成文案。 */
+  async function regenerateCopy() {
+    if (running) return
+    setRunning(true)
+    setProgressText('正在换一批文案方向…')
+    try {
+      copyVariantRef.current += 1
+      setCopyVariant(copyVariantRef.current)
+      await generateCopy(currentAnalysis())
+    } finally { setRunning(false) }
   }
 
   async function generateImages(hid: number | null, batchId = '', prebuilt?: Awaited<ReturnType<typeof buildCopies>>): Promise<{ okImages: number; anyFailed: boolean; errs: string[] }> {
@@ -674,10 +764,14 @@ export default function CreativeWorkbench() {
               routes: ([route, ...activeRoutes.filter(r => r !== route)].filter(Boolean) as any[]).map(r => ({
                 key: r.key, name: r.name, angle: r.angle,
                 description: r.description, tags: r.tags || [],
+                framework: r.framework || '', framework_label: r.framework_label || '',
+                hook: r.hook || '', proof: r.proof || '',
+                visual_hook: r.visual_hook || '', cta_role: r.cta_role || '',
               })),
               supplement: imageSupplement || '',
               platform: p,
               overlay_mode: overlayMode,
+              brief: confirmedBrief(),
             },
           }
           if (refPath) style_opts.reference_image = refPath
@@ -829,6 +923,8 @@ export default function CreativeWorkbench() {
     if (!doCopy && !doImg && !doVid) { setError('请至少选择一种素材类型（文案 / 图片 / 视频）'); return }
     if (doImg && !routes.some(r => r.selected)) { setError('请至少选择一条图片创意路线'); return }
     if (doVid && (!vs.plan || !vs.plan.shots?.length)) { setError('请先在第二步完成视频分镜规划'); return }
+    // V4.101：用户自定义提示词必须先补全并确认，未确认不进入任何生成链路。
+    if (creativeBriefDraft && !creativeBriefConfirmed) { setError('请先在「创意提示词方案」中确认补全后的提示词，再开始生成'); return }
     setError(''); setView('generating'); setAssets([]); setJobs([]); setChecked({}); setCopiesByPlatform({}); setProgressPct(0); setProgressText('正在创建素材任务…')
     cwTaskReset()   // V4.77：新一轮生成，任务常驻浮窗重新出现（此前手动关闭的抑制解除）
     let hid: number | null = null
@@ -979,6 +1075,10 @@ export default function CreativeWorkbench() {
       voiceover: 'narration', duration: 15, aspect: '9:16', lang: 'zh', prompt_hint: '' },
       note: '', modelInfo: null, videoModel: null, outputAspect: '', planning: false, generating: false, error: '', refineInput: '' })
     setBrandLogo(''); setBrandLogoName('')
+    // V4.101：清空用户提示词补全状态，避免新创作沿用上一版未确认/已确认方案
+    setCreativeBriefInput(''); setCreativeBriefFramework('aida'); setCreativeBriefDraft(null)
+    setCreativeBriefConfirmed(false); setCopyVariant(0); copyVariantRef.current = 0
+    setRerouteNote(''); setImageSupplement('')
     setAnalysisValid(false)
   }
   /** V4.81 / P3 + V4.83：新建创作只创建空白草稿，不删除任何已有任务与结果；后台任务继续执行。 */
@@ -1224,6 +1324,43 @@ export default function CreativeWorkbench() {
           <section className="cwb-section">
             {cw && view !== 'analyzing' && (
               <>
+                {/* V4.101 / P4：三类素材共用的「用户输入 → 系统补全 → 查阅确认」入口 */}
+                <div className="cwb-plan-block cwb-brief-block">
+                  <div className="cwb-sub-row">
+                    <h3 className="cwb-sub">创意提示词方案（可选 · 文案 / 图片 / 视频共用）</h3>
+                    <span className="cwb-tag-reco">系统补全 · 确认后生效</span>
+                  </div>
+                  <p className="cwb-reco-note">输入你希望强调的方向（例如「突出真实续航，用前后对比，结尾引导了解」）。系统补全为钩子 → 证据 → CTA 的完整方案并展示，确认后才进入生成；未确认不会调用生成链路。</p>
+                  <div className="cwb-brief-form">
+                    <select className="cwb-brief-framework" value={creativeBriefFramework}
+                      onChange={e => { setCreativeBriefFramework(e.target.value); setCreativeBriefDraft(null); setCreativeBriefConfirmed(false) }}>
+                      {(creativeFrameworks.length ? creativeFrameworks : FRAMEWORK_FALLBACK).map(f => (
+                        <option key={f.key} value={f.key}>{f.label}</option>
+                      ))}
+                    </select>
+                    <input className="cwb-brief-input" value={creativeBriefInput}
+                      placeholder="输入你自己的创意提示词 / 想强调的方向"
+                      onChange={e => { setCreativeBriefInput(e.target.value); setCreativeBriefDraft(null); setCreativeBriefConfirmed(false) }} />
+                    <button type="button" className="cwb-link-btn" onClick={previewBrief}>补全并预览</button>
+                  </div>
+                  {creativeBriefDraft && (
+                    <div className="cwb-brief-preview">
+                      <pre>{creativeBriefDraft.prompt_text}</pre>
+                      {!!creativeBriefDraft.warnings?.length && (
+                        <div className="cwb-brief-warnings">{creativeBriefDraft.warnings.map((w, i) => <p key={i}>⚠ {w}</p>)}</div>
+                      )}
+                      <div className="cwb-brief-actions">
+                        <button type="button" className="cwb-link-btn"
+                          onClick={() => { setCreativeBriefDraft({ ...creativeBriefDraft, confirmed: true }); setCreativeBriefConfirmed(true) }}>确认使用</button>
+                        <button type="button" className="cwb-link-btn"
+                          onClick={() => { setCreativeBriefDraft(null); setCreativeBriefConfirmed(false) }}>放弃</button>
+                        <span className={creativeBriefConfirmed ? 'cwb-brief-ok' : 'cwb-brief-pending'}>
+                          {creativeBriefConfirmed ? '已确认 · 将进入文案 / 图片 / 视频生成' : '未确认 · 不会进入生成'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 {hasCopy && (
                   <div className="cwb-plan-block cwb-plan-copy">
                     <div className="cwb-sub-row">
@@ -1243,10 +1380,14 @@ export default function CreativeWorkbench() {
                       <p className="cwb-reco-note">已按 {selectedPlatform || '所选媒体'} 的素材规格自动适配，每条勾选路线各出一组图</p>
                       <div className="cwb-route-actions">
                         <span className="cwb-route-count">已选 {routes.filter(r => r.selected).length} / {routes.length}</span>
+                        <button type="button" className="cwb-link-btn" onClick={rerouteRoutes} disabled={rerouting || !cw}>
+                          {rerouting ? '重新规划中…' : '换一批路线'}
+                        </button>
                         <button type="button" className="cwb-link-btn" onClick={() => setRoutes(rs => rs.map(r => ({ ...r, selected: true })))}>全选</button>
                         <button type="button" className="cwb-link-btn" onClick={() => setRoutes(rs => rs.map(r => ({ ...r, selected: false })))}>清空</button>
                       </div>
                     </div>
+                    {rerouteNote && <p className="cwb-reroute-note">{rerouteNote}</p>}
                     <div className="cwb-routes">
                       {routes.map((r, i) => (
                         <div className={`cwb-route ${r.selected ? 'on' : ''}`} key={i} onClick={() => updateRoute(i, 'selected', !r.selected)}>
@@ -1257,6 +1398,14 @@ export default function CreativeWorkbench() {
                           </div>
                           {r.angle && <p className="cwb-route-angle">切入角度：{r.angle}</p>}
                           <p>{r.description}</p>
+                          {(r.framework_label || r.hook || r.visual_hook) && (
+                            <div className="cwb-route-framework">
+                              {r.framework_label && <span className="cwb-rtag fw">框架：{r.framework_label}</span>}
+                              {r.hook && <p>钩子：{r.hook}</p>}
+                              {r.visual_hook && <p>视觉钩子：{r.visual_hook}</p>}
+                              {r.proof && <p>证据表达：{r.proof}</p>}
+                            </div>
+                          )}
                           <div className="cwb-route-tags">
                             {(r.tags || []).map((t: string, j: number) => <span key={j} className="cwb-rtag">{t}</span>)}
                           </div>
@@ -1278,6 +1427,7 @@ export default function CreativeWorkbench() {
                   <div className="cwb-plan-block">
                     <VideoStudio mode="plan" analysis={cw?.analysis} platform={selectedPlatform}
                       referenceImage={referenceImage} brandLogo={brandLogo} injectLogo={injectLogo}
+                      creativeBrief={confirmedBrief()} framework={creativeBriefFramework}
                       state={vs} setState={setVs} />
                   </div>
                 )}
@@ -1295,6 +1445,7 @@ export default function CreativeWorkbench() {
                 <div className="cwb-confirm">
                   <button className="cwb-gen-btn" onClick={batchGenerate}
                     disabled={materialTypes.length === 0
+                      || !!(creativeBriefDraft && !creativeBriefConfirmed)
                       || (hasImage && !routes.some(r => r.selected))
                       || (hasVideo && !(vs.plan && vs.plan.shots?.length && !vs.plan.generation_blocked && vs.plan.asset_gate?.status !== 'asset_missing'))}>
                     确认并批量生成{materialTypes.length ? `（${materialTypes.map(k => materialLabel[k]).join(' + ')}）` : ''}
@@ -1340,6 +1491,7 @@ export default function CreativeWorkbench() {
                   )}
                   {Object.keys(copiesByPlatform).length > 0 && (
                     <div className="cwb-copy-actions">
+                      <button className="cwb-link-btn sm" onClick={regenerateCopy} disabled={running}>换一批文案{copyVariant ? `（第 ${copyVariant + 1} 版）` : ''}</button>
                       <button className="cwb-link-btn sm" onClick={copyAllCopy}>复制全部</button>
                       <button className="cwb-link-btn sm" onClick={downloadAllCopy}>下载 JSON</button>
                     </div>
@@ -1360,6 +1512,9 @@ export default function CreativeWorkbench() {
                         </span>
                         {c.model_info?.provider && (
                           <span className="cwb-copy-model">{c.model_info.provider}/{c.model_info.model}</span>
+                        )}
+                        {c.creative_brief?.brief_hash && (
+                          <span className="cwb-copy-spec-tag">创意 brief：{c.creative_brief.framework || '自定义'} · {c.creative_brief.brief_hash}</span>
                         )}
                         <div className="cwb-copy-actions">
                           <button className="cwb-link-btn sm" onClick={() => copyCopyPlatform(p)}>复制</button>

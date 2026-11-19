@@ -190,6 +190,18 @@ class MediaCopyRequest(BaseModel):
     # V4.41 / F04：编辑过的方向 / 风格 / 配色预设必须参与文案生成。
     # 只注入 ResolvedCreativeConfig.strategy；纯视觉字段不进入文案大模型。
     style_opts: dict = {}
+    # V4.101 / P1：用户在「完善并确认」后提交的创意 brief（必须 confirmed=true 才生效）。
+    brief: dict = {}
+
+
+class CreativeBriefPreviewIn(BaseModel):
+    """V4.101 / P4：用户原始提示词 → 系统补全预览（不生成素材、不触发付费出片）。"""
+    raw_input: str = ""
+    analysis: dict = {}
+    platform: str = ""
+    framework: str = ""
+    layers: List[str] = []
+
 
 class MediaImageSlot(BaseModel):
     """V4.40 / F07 + F08：任务矩阵中的一行（一个版位 × 尺寸 × 概念）。
@@ -388,6 +400,12 @@ class CWRoutesRequest(BaseModel):
     platforms: List[str] = []
     brief: dict = {}
     count: int = 3
+    # V4.101 / P2：换一批路线用；framework 限定框架，user_brief 为已确认的补全 brief，
+    # seed / exclude_names 让同一产品可规划出真正不同的路线，而不是固定 10 条。
+    framework: str = ""
+    user_brief: dict = {}
+    seed: str = ""
+    exclude_names: List[str] = []
 
 
 # ----------------------------- V4.61 / B4：创意工作台「素材沉淀库」 -----------------------------
@@ -426,6 +444,13 @@ class CWRoute(BaseModel):
     tags: List[str] = []
     angle: str = ""
     selected: bool = True
+    # V4.101 / P2：高转化框架与细化的钩子/证据/视觉表达（可选，向后兼容）
+    framework: str = ""
+    framework_label: str = ""
+    hook: str = ""
+    proof: str = ""
+    visual_hook: str = ""
+    cta_role: str = ""
 
 
 class CWRoutesResult(BaseModel):
@@ -455,6 +480,12 @@ class CWVideoPlanRequest(BaseModel):
     messages: List[CWVideoMessage] = []   # 多轮对话（含 user 微调 + assistant 上一轮回复）
     current_plan: Optional[dict] = None   # 已有的分镜方案（微调时带入，由模型增量修订）
     options: dict = {}             # {mode, voiceover, duration, aspect, lang}
+    # V4.101 / P3：换一批分镜 / 框架化规划。regenerate=true 时不带 current_plan，
+    # 让模型重出而非被旧方案锚定；user_brief 必须为已确认 brief。
+    framework: str = ""
+    user_brief: dict = {}
+    regenerate: bool = False
+    seed: str = ""
 
 
 class CWVideoPlanResult(BaseModel):

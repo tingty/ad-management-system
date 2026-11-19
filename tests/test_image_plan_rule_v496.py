@@ -58,6 +58,7 @@ class TestImagePlanRuleV496(unittest.TestCase):
         self.assertNotEqual(a["config_id"], b["config_id"])
 
     def test_04_prompt_rule_injected_before_contract(self):
+        import re
         from media_ad import _media_image_prompt
         cfg = resolve_creative_config({
             "creative_plan": {"routes": [{"key": "A", "name": "路线一"}],
@@ -66,11 +67,17 @@ class TestImagePlanRuleV496(unittest.TestCase):
             {"industry": "消费电子", "type": "电商", "audience": "都市白领",
              "advantages": ["续航"], "competitors": []},
             "Meta", cfg, {}, overlay_mode="pure")
-        self.assertIn("[CreativePlanRule v1]", prompt)
+        # V4.101：规则块随 RULE_VERSION 升级（v1→v2 新增主干框架细项）。
+        # 断言标记存在且在零文字契约之前兜底，不锁死具体版本号，避免后续版本升级再误伤。
+        rule_match = re.search(r"\[CreativePlanRule v\d+\]", prompt)
+        self.assertIsNotNone(rule_match, "提示词须包含创意规则块")
+        rule_marker = rule_match.group(0)
         self.assertIn("强调续航", prompt)
-        rule_pos = prompt.index("[CreativePlanRule v1]")
+        rule_pos = prompt.index(rule_marker)
         contract_pos = prompt.find("[PromptContract]")
         self.assertGreater(contract_pos, rule_pos, "零文字契约必须在规则块之后兜底")
+        # V4.101 新增：规则块须显式写出主干转化框架（钩子 / 证据 / 视觉钩子 / 收口）。
+        self.assertIn("主干转化框架", prompt)
 
     def test_05_backend_count_and_keys(self):
         routers = (BACKEND / "routers.py").read_text(encoding="utf-8")
@@ -83,8 +90,15 @@ class TestImagePlanRuleV496(unittest.TestCase):
 
     def test_06_fallback_ten_routes(self):
         routers = (BACKEND / "routers.py").read_text(encoding="utf-8")
-        for name in ("痛点对比实验", "价值锚定对照", "户外挑战验证", "开箱第一视角"):
+        # V4.101：原「痛点对比实验」框架化后拆为「前后对比实验」+「半路受阻痛点」，
+        # 差异化语义未丢；其余三条名称保持不变。
+        for name in ("前后对比实验", "半路受阻痛点", "价值锚定对照", "户外挑战验证", "开箱第一视角"):
             self.assertIn(name, routers, "兜底须含 10 条差异化路线：%s" % name)
+        # V4.101 新增：10 条兜底路线均已框架化，须带 framework / hook / cta_role 等转化字段。
+        block = routers.split("_CW_FALLBACK_ROUTES = [", 1)[1].split("\n]", 1)[0]
+        for field in ("framework", "hook", "proof", "visual_hook", "cta_role"):
+            self.assertEqual(block.count('"%s":' % field), 10,
+                             "10 条兜底路线均须标注 %s" % field)
 
     def test_07_frontend_wiring(self):
         page = (FRONTEND / "pages" / "CreativeWorkbench.tsx").read_text(encoding="utf-8")

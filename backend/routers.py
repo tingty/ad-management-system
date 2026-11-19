@@ -12,6 +12,7 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LoginRequest, UserOut, UserCreate, UserUpdate,
                      PromptOut, PromptUpdate, PromptDefaultIn, LayerMatchIn,
                      LandingAnalysisRequest, LandingAnalysis, MediaCopyRequest, MediaImageRequest,
+                     CreativeBriefPreviewIn,
                      CreativeAnalysisRequest, CreativeAnalysisResult,
                      CreativePlanRequest, CreativePlanResult, CreativeRoute,
                      CWAnalyzeRequest, CWAnalysisResult, CWRoutesRequest, CWRoute, CWRoutesResult,
@@ -48,6 +49,11 @@ from material_prompt_manage import (
     MODULE as MATERIAL_PROMPT_MODULE, LEGACY_MODULE as MATERIAL_PROMPT_LEGACY_MODULE,
     PROMPT_TYPES, PSYCHOLOGICAL_LAYERS,
     variables_of as material_variables_of, auto_match_layers,
+)
+# V4.101：文案 / 图片 / 视频共用的创意框架与用户确认 brief
+from creative_brief import (
+    framework_options, framework_of, normalize_brief,
+    build_copy_brief_block, build_image_brief_block, build_video_brief_block,
 )
 from version import ENABLE_AUTO_CREATION_PLAN
 # V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
@@ -164,10 +170,37 @@ async def api_media_campaign_copy(req: MediaCopyRequest, db: Session = Depends(g
         platform = validate_platform(req.platform)
     except MediaRuleError as e:
         raise _rule_error(e)
+    # V4.101：未经用户确认的 brief 不得进入生成；前端也做同口径禁用。
+    if req.brief and not req.brief.get("confirmed"):
+        raise HTTPException(400, "创意 brief 尚未确认，请先在预览中确认后再生成文案")
     result = await generate_media_copy(db, req.analysis.model_dump(), platform, req.lang,
                                        ad_product=req.ad_product,
-                                       style_opts=req.style_opts or {})
+                                       style_opts=req.style_opts or {},
+                                       brief=req.brief or None)
     return result
+
+
+# ----------------------------- V4.101 创意框架 / 用户 brief 预览 -----------------------------
+@router.get("/creative-frameworks")
+def api_creative_frameworks(_: User = Depends(require_roles(*ROLES))):
+    """九类高转化创意框架注册表，供前端下拉与展示叙事节奏。"""
+    return {"frameworks": framework_options()}
+
+
+@router.post("/creative-brief/preview")
+@router.post("/media-campaign/copy/prompt-preview")
+def api_creative_brief_preview(req: CreativeBriefPreviewIn,
+                               _: User = Depends(require_roles(*ROLES))):
+    """把用户原始提示词补全为结构化 brief 供查阅 / 编辑 / 确认。
+
+    纯规则补全，不调用付费模型、不生成素材；返回 confirmed=false，
+    前端必须让用户确认后才能把 brief 传入生成接口。
+    """
+    brief = normalize_brief(req.raw_input, req.analysis or {}, req.framework,
+                            req.layers or [], confirmed=False)
+    if req.platform:
+        brief["prompt_text"] += "\n投放平台：%s" % req.platform
+    return brief
 
 @router.post("/media-campaign/images")
 async def api_media_campaign_images(req: MediaImageRequest, db: Session = Depends(get_db),
@@ -439,18 +472,102 @@ _CW_ANALYZE_SYS = (
 )
 
 _CW_ROUTES_SYS = (
-    "你是资深的出海效果广告创意策略师。基于产品分析结论、项目简报与目标媒体平台，"
+    "你是资深的出海效果广告创意策略师。基于产品分析结论、项目简报、目标媒体平台与可选的用户确认 brief，"
     "规划【N】条差异化的创意概念路线（概念级，不逐平台拆分；【N】由 user_prompt 中的 count 给定，1–10）。只返回 JSON："
     "{\"title\": \"本次创意路线主题\","
     " \"routes\": ["
-    "   {\"key\": \"A\", \"name\": \"路线名\", \"description\": \"路线说明（切入方式与表达）\", \"tags\": [\"标签1\",\"标签2\"], \"angle\": \"切入角度\"},"
-    "   {\"key\": \"B\", ...},"
-    "   ..."
+    "   {\"key\": \"A\", \"name\": \"路线名\", \"description\": \"路线说明（切入方式与表达）\","
+    "    \"tags\": [\"标签1\",\"标签2\"], \"angle\": \"切入角度\","
+    "    \"framework\": \"aida|pas|bab|hso|4p|contrast_proof|scene|social_proof|scarcity 之一\","
+    "    \"hook\": \"首屏/前三秒钩子（具体动作或利益，不是空泛口号）\","
+    "    \"proof\": \"可信证据如何呈现（只能引用页面证据，不写数字/评分/用户数）\","
+    "    \"visual_hook\": \"画面视觉钩子（构图/光线/动作/对比，不写文字）\","
+    "    \"cta_role\": \"结尾收口动作或叠加位意图（不写入画面文字）\"},"
+    "   {\"key\": \"B\", ...}, ..."
     " ]}"
     "要求：routes 条数恰好等于 count；key 从 A 开始按字母顺序依次为 A/B/C/…/J；"
-    "每条路线要有清晰差异（覆盖转化导向 / 生活方式 / 场景叙事 / 痛点对比 / 功能证明 / 情绪共鸣等不同角度），"
-    "不得复用同一角度换词；tags 2-3 个；不要编造数据。"
+    "每条路线必须绑定一种框架，且 framework / hook / proof / visual_hook / cta_role 与 name/description 一致；"
+    "十条路线要覆盖不同框架与不同角度，不得复用同一角度换词；tags 2-3 个；"
+    "若 user_prompt 给出 user_brief，则以其中确认的框架、钩子与叙事节奏为准；"
+    "禁止编造价格、折扣、评分、用户数、倒计时与背书，证据不足时把 proof 写成「真实功能演示」。"
 )
+
+# V4.101 / P2：兜底路线升级为「框架 + 具体钩子 + 证据 + 视觉钩子 + 收口」，
+# 并按 seed 轮换，避免换一批仍返回同一组。
+_CW_FALLBACK_ROUTES = [
+    {"name": "前后对比实验", "description": "用同机位同光线的真实前后对照，让变化在前三秒被看见。",
+     "tags": ["转化导向", "产品演示"], "angle": "前后对比", "framework": "contrast_proof",
+     "hook": "同一场景的两种状态直接并置", "proof": "用页面已明示功能做同条件演示，不写数字",
+     "visual_hook": "左右分屏 / 同机位切换，产品出现在变化处", "cta_role": "变化之后顺势引导了解"},
+    {"name": "半路受阻痛点", "description": "先呈现未满足的痛点代价，再把产品作为干净利落的解法登场。",
+     "tags": ["痛点放大", "转化导向"], "angle": "痛点→解法", "framework": "pas",
+     "hook": "受阻瞬间作为开场画面", "proof": "以真实操作解决该痛点，不虚构效果数据",
+     "visual_hook": "受阻特写 → 产品介入的镜头切换", "cta_role": "从痛点回到可行动的解法"},
+    {"name": "续航自由出发", "description": "用连续通勤场景展示产品自然融入，强化可依赖感。",
+     "tags": ["场景叙事", "功能利益"], "angle": "场景证明", "framework": "scene",
+     "hook": "出门瞬间的连续动作，不用空镜铺垫", "proof": "页面已明示的续航能力用真实场景呈现",
+     "visual_hook": "第一视角手持跟随，光线从清晨到傍晚", "cta_role": "低干扰的轻 CTA"},
+    {"name": "晨间日常切片", "description": "以真实生活时刻切入，让产品成为日常节奏的一部分。",
+     "tags": ["生活方式", "日常场景"], "angle": "日常陪伴", "framework": "bab",
+     "hook": "熟悉的清晨场景先建立代入", "proof": "用连续动作说明产品如何跨越现状到理想状态",
+     "visual_hook": "同一空间的两种状态对照，产品出现在转折处", "cta_role": "邀请进入理想状态"},
+    {"name": "细节微距特写", "description": "用材质与工艺近景建立品质感，再用整体画面给出结果。",
+     "tags": ["质感", "产品特写"], "angle": "质感证明", "framework": "4p",
+     "hook": "微距细节先行，随后拉开揭示整体", "proof": "只呈现页面可确认的外观与材质，不写评分",
+     "visual_hook": "浅景深微距 + 光线扫过表面", "cta_role": "证据之后的顺势推动"},
+    {"name": "用户口碑现场", "description": "用真实使用场景中的群体信号建立信任，不伪造评价截图。",
+     "tags": ["信任背书", "口碑"], "angle": "社会认同", "framework": "social_proof",
+     "hook": "多人自然使用同一产品的画面", "proof": "只引用页面可定位的口碑事实，无数据则用场景表达",
+     "visual_hook": "群像中景转到产品近景", "cta_role": "跟随可信群体的行动"},
+    {"name": "开箱第一视角", "description": "第一视角开箱，让外观与核心功能在同一动作链里被看见。",
+     "tags": ["开箱", "第一视角"], "angle": "沉浸体验", "framework": "aida",
+     "hook": "拆封动作直接开场", "proof": "功能演示只展示页面已确认能力",
+     "visual_hook": "手部动作 + 产品主体逐步露出", "cta_role": "明确下一步且降低风险"},
+    {"name": "功能可视化", "description": "把核心功能做成一眼看懂的可视化演示，降低理解成本。",
+     "tags": ["功能利益", "信息可视"], "angle": "功能演示", "framework": "4p",
+     "hook": "结果先出现，再回溯怎么做到的", "proof": "用真实功能演示承担证明，不写用户数",
+     "visual_hook": "结果可视化 + 简洁动作特写", "cta_role": "结果之后的顺势推动"},
+    {"name": "户外挑战验证", "description": "在出行与户外条件中验证可靠性，强化适用场景。",
+     "tags": ["场景叙事", "挑战验证"], "angle": "极限验证", "framework": "contrast_proof",
+     "hook": "把产品放进真实压力场景", "proof": "同条件对照展示能力边界，不夸大适用环境",
+     "visual_hook": "广角环境 + 产品稳定工作的特写", "cta_role": "以结论引导进一步了解"},
+    {"name": "价值锚定对照", "description": "用使用场景与长期价值做对照，突出物有所值但不编造价格。",
+     "tags": ["价值导向", "转化导向"], "angle": "价值锚定", "framework": "hso",
+     "hook": "先给使用场景中的具体收益", "proof": "收益必须由页面事实支撑；无优惠事实时不写优惠",
+     "visual_hook": "场景收益与产品并置，不绘制价格字样", "cta_role": "利益驱动的立即行动"},
+]
+
+
+def _apply_route_variation(routes: list[dict], seed: str, exclude_names: list[str]) -> list[dict]:
+    """模型真的返回路线时，换一批同样要改变顺序 / 排除上一批，而不是只改兜底。"""
+    if not routes or (not seed and not exclude_names):
+        return routes
+    pool = list(routes)
+    if seed:
+        offset = sum(ord(c) for c in seed) % len(pool)
+        pool = pool[offset:] + pool[:offset]
+    excluded = {str(x).strip() for x in (exclude_names or []) if str(x).strip()}
+    if excluded:
+        filtered = [r for r in pool if r.get("name") not in excluded]
+        if filtered:
+            pool = filtered
+    for i, r in enumerate(pool):
+        r["key"] = chr(65 + i) if i < 26 else chr(65 + i % 26)
+    return pool
+
+
+def _rotated_fallback_routes(seed: str, exclude_names: list[str], count: int) -> list[dict]:
+    pool = list(_CW_FALLBACK_ROUTES)
+    if seed:
+        offset = sum(ord(c) for c in seed) % len(pool)
+        pool = pool[offset:] + pool[:offset]
+    excluded = {str(x).strip() for x in (exclude_names or []) if str(x).strip()}
+    if excluded:
+        filtered = [r for r in pool if r["name"] not in excluded]
+        if len(filtered) >= count:
+            pool = filtered
+    return pool[:count]
+
 
 # V4.66 创意工作台·视频素材创作区：对话式分镜策划
 _CW_VIDEO_PLAN_SYS = (
@@ -466,8 +583,12 @@ _CW_VIDEO_PLAN_SYS = (
     "   \"duration_sec\": 15,"
     "   \"aspect\": \"9:16 | 1:1 | 16:9\","
     "   \"voiceover\": \"none | narration | tts\","
-    "   \"hook\": \"前3秒钩子文案（抓注意力）\","
-    "   \"cta\": \"结尾行动号召文案\","
+    "   \"framework\": \"aida|pas|bab|hso|4p|contrast_proof|scene|social_proof|scarcity 之一\","
+    "   \"framework_label\": \"框架中文名\","
+    "   \"hook\": \"前3秒钩子（用动作/反差表达，不作为上屏文字）\","
+    "   \"cta\": \"结尾行动号召（作为收口动作/叠加位，不画字）\","
+    "   \"frames\": {\"hook\": \"钩子段\", \"pain\": \"痛点段\", \"solution\": \"方案段\", \"proof\": \"证据段\", \"cta\": \"收口段\"},"
+    "   \"sound_design\": \"音效/BGM/旁白节奏建议（静音浏览也要能理解主动作）\","
     "   \"shots\": ["
     "     {\"idx\": 1, \"t\": \"0-3s\", \"shot\": \"镜头方式(image_to_video|source_video|motion_graphics|scene_3d|text_to_video)\","
     "      \"visual\": \"画面描述（动作/主体/场景，必须可动态呈现）\", \"text\": \"叠加字幕\", \"vo\": \"旁白文案\","
@@ -477,8 +598,13 @@ _CW_VIDEO_PLAN_SYS = (
     "   \"deliverables\": [\"15s 主片\", \"6s 剪辑版\", \"首帧封面图\"],"
     "   \"note\": \"制作须知（合规/节奏/音乐方向）\""
     " }}"
-    "要求：shots 默认 4 镜覆盖 15 秒（0-3s 钩子 → 3-8s 真实功能 → 8-12s 可信支撑 → 12-15s 品牌收口）；"
-    "每镜 visual 必须描述真实可生成的动态画面，不能只是静态图；可按对话微调节奏/卖点/时长；"
+    "要求：shots 默认 4 镜覆盖 15 秒；必须把所选framework映射为具体五段节奏："
+    "0-3s 钩子（反差动作/结果前置，不用空镜）→ 3-6s 痛点放大 → 6-10s 方案演示 → "
+    "10-13s 证据证明 → 13-15s CTA 收口（产品定格 + 叠加位意图）；"
+    "frames 与 shots 必须一一对应，sound_design 给出可执行的节奏与音频建议；"
+    "每镜 visual 必须描述真实可生成的动态画面，camera/motion 要具体到运镜与转场，不能只是静态图；"
+    "可按对话微调节奏/卖点/时长；若 payload 给出 user_brief，则以其中确认的框架、钩子与节奏为准；"
+    "若 regenerate=true，必须换一套完全不同的框架或钩子，不得复述 current_plan；"
     "不要编造产品未提及的事实；信息不足时给合理默认。\n"
     "V4.82 硬约束：必须严格遵守 payload.evidence_contract。字幕 / 旁白 / 钩子 / CTA 中"
     "任何数字、评分、用户数、价格、效果、试用、订阅或兼容性表述，都必须能在本次页面原文"
@@ -506,11 +632,18 @@ def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
     _seen = set()
     rec_plat = [p for p in (canonical_platform(x) for x in (rec_plat or []))
                 if p and not (p in _seen or _seen.add(p))]
+    # V4.101 / P2：自动识别行业画像与已确认品牌，避免 MOOD/STYLE/BRAND_CONTEXT 长期为空。
+    _profile_hint = {"industry": boxes.get("industry") or "", "type": boxes.get("industry") or "",
+                     "audience": boxes.get("coreAudience") or ""}
+    _profile = resolve_profile(_profile_hint)
+    _brand = getattr(snapshot, "brand", "") or ""
+    if getattr(snapshot, "brand_status", "") not in ("confirmed", "unverified"):
+        _brand = ""
     analysis = {
         "title": title,
         "summary": summary,
         "product": title,
-        "brand": "",
+        "brand": _brand,
         "industry": boxes.get("industry") or "",
         "type": boxes.get("industry") or "",
         "audience": ("、".join(brief.get("targetAudience") or []) or boxes.get("coreAudience") or "").strip(),
@@ -518,7 +651,7 @@ def _build_cw_result(title, summary, boxes, brief, rec_plat, *,
         "competitors": [],
         "channels": rec_plat,
         "language": "en",
-        "industry_profile": "",
+        "industry_profile": _profile["key"],
         "purchaseMotivation": boxes.get("purchaseMotivation") or "",
         "priceBand": boxes.get("priceBand") or "",
         "coreAudience": boxes.get("coreAudience") or "",
@@ -735,8 +868,16 @@ async def api_cw_routes(req: CWRoutesRequest, db: Session = Depends(get_db),
     except (TypeError, ValueError):
         count = 3
     llm, info = get_llm_with_info(db, "analysis")
-    user_prompt = json.dumps({"analysis": analysis, "brief": brief, "platforms": platforms,
-                              "count": count}, ensure_ascii=False)
+    fw_key = str(req.framework or "").strip()
+    user_brief = req.user_brief if isinstance(req.user_brief, dict) and req.user_brief.get("confirmed") else {}
+    if user_brief and not fw_key:
+        fw_key = str(user_brief.get("framework") or "")
+    user_prompt = json.dumps({
+        "analysis": analysis, "brief": brief, "platforms": platforms,
+        "count": count, "framework": fw_key,
+        "user_brief": user_brief,
+        "exclude_names": req.exclude_names or [], "seed": req.seed or "",
+    }, ensure_ascii=False)
     try:
         resp = await llm.chat(_CW_ROUTES_SYS, user_prompt)
         parsed = parse_json(resp) or {}
@@ -746,6 +887,7 @@ async def api_cw_routes(req: CWRoutesRequest, db: Session = Depends(get_db),
     routes = []
     for r in (parsed.get("routes") or [])[:count]:
         if isinstance(r, dict):
+            r_fw = framework_of(str(r.get("framework") or fw_key or ""))
             routes.append({
                 "key": str(r.get("key") or "").strip(),
                 "name": str(r.get("name") or "").strip(),
@@ -753,27 +895,32 @@ async def api_cw_routes(req: CWRoutesRequest, db: Session = Depends(get_db),
                 "tags": [str(t).strip() for t in (r.get("tags") or []) if str(t).strip()][:4],
                 "angle": str(r.get("angle") or "").strip(),
                 "selected": True,
+                "framework": r_fw["key"],
+                "framework_label": r_fw["label"],
+                "hook": str(r.get("hook") or "").strip(),
+                "proof": str(r.get("proof") or "").strip(),
+                "visual_hook": str(r.get("visual_hook") or "").strip(),
+                "cta_role": str(r.get("cta_role") or "").strip(),
             })
     keys = [chr(65 + i) for i in range(10)]
     for i, r in enumerate(routes):
         if not r["key"]:
             r["key"] = keys[i] if i < len(keys) else chr(65 + i)
-    # Mock / 解析失败兜底：10 条差异化角度，按 count 截取（不伪造产品事实）
+    # V4.101：模型返回路线也参与换一批，seed / exclude_names 对两条路径一致生效。
+    routes = _apply_route_variation(routes, req.seed or "", req.exclude_names or [])
+    # Mock / 解析失败兜底：框架化路线 + seed 轮换（不伪造产品事实）
     if not routes:
-        fallback = [
-            ("痛点对比实验", "用强烈视觉对比演示使用前后差异，前三秒制造悬念。", ["转化导向", "产品演示"], "前后对比"),
-            ("专注力超能力", "将产品塑造成工作与生活中的效率装备。", ["生活方式", "情绪价值"], "效率叙事"),
-            ("续航自由出发", "通过连续场景证明续航，强化产品信任。", ["场景叙事", "功能利益"], "场景证明"),
-            ("晨间日常切片", "以清晨日常切入，展示产品自然融入生活节奏。", ["生活方式", "日常场景"], "日常陪伴"),
-            ("细节微距特写", "用近景与材质细节传达做工与质感，建立品质感。", ["质感", "产品特写"], "质感证明"),
-            ("用户口碑现场", "以真实使用场景中的口碑表达传递可信度，不引用未确认数据。", ["信任背书", "口碑"], "社会认同"),
-            ("开箱第一视角", "以第一视角开箱呈现产品外观与核心功能。", ["开箱", "第一视角"], "沉浸体验"),
-            ("功能可视化", "把核心功能做成可视化演示，让卖点一眼看懂。", ["功能利益", "信息可视"], "功能演示"),
-            ("户外挑战验证", "在户外与出行场景中验证产品的可靠性与便携性。", ["场景叙事", "挑战验证"], "极限验证"),
-            ("价值锚定对照", "以使用场景与长期价值做对照，突出物有所值，不编造价格数字。", ["价值导向", "转化导向"], "价值锚定"),
-        ]
-        routes = [{"key": keys[i], "name": n, "description": d, "tags": t, "angle": a, "selected": True}
-                  for i, (n, d, t, a) in enumerate(fallback[:count])]
+        base = _rotated_fallback_routes(req.seed or "", req.exclude_names or [], count)
+        routes = []
+        for i, item in enumerate(base):
+            r_fw = framework_of(item["framework"])
+            routes.append({
+                "key": keys[i], "name": item["name"], "description": item["description"],
+                "tags": list(item["tags"]), "angle": item["angle"], "selected": True,
+                "framework": r_fw["key"], "framework_label": r_fw["label"],
+                "hook": item["hook"], "proof": item["proof"],
+                "visual_hook": item["visual_hook"], "cta_role": item["cta_role"],
+            })
     result = {"title": str(parsed.get("title") or "创意路线规划").strip(),
               "routes": routes, "model_info": info, "source": info.get("source", "local")}
     if plan_id:
@@ -804,6 +951,13 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
     analysis = req.analysis or {}
     platform = (req.platform or "").strip()
     lang = str((req.options or {}).get("lang") or "zh")
+    fw_key = str(req.framework or "").strip()
+    user_brief = req.user_brief if isinstance(req.user_brief, dict) and req.user_brief.get("confirmed") else {}
+    if user_brief and not fw_key:
+        fw_key = str(user_brief.get("framework") or "")
+    fw = framework_of(fw_key)
+    # V4.101：换一批时不带旧方案，避免模型被 current_plan 锚定。
+    current_plan = None if req.regenerate else (req.current_plan or None)
     convo = "\n".join(
         f"{'用户' if m.role == 'user' else '助手'}: {m.content}"
         for m in (req.messages or []) if m.content and m.content.strip()
@@ -813,9 +967,16 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
         "platform": platform,
         "reference_image": req.reference_image or "",
         "options": req.options or {},
-        "current_plan": req.current_plan or None,
+        "current_plan": current_plan,
         "conversation": convo,
         "language": lang,
+        # V4.101：框架化规划 / 换一批 / 用户确认 brief
+        "framework": fw["key"],
+        "framework_label": fw["label"],
+        "regenerate": bool(req.regenerate),
+        "seed": req.seed or "",
+        "user_brief": user_brief,
+        "creative_brief_block": build_video_brief_block(user_brief, platform),
         # V4.82：证据契约与可用事实显式进 prompt；不再只靠「不要编造」这句口头约束
         "evidence_contract": video_evidence_context(analysis),
     }
@@ -844,8 +1005,8 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
             "duration_sec": 15,
             "aspect": "9:16",
             "voiceover": (req.options or {}).get("voiceover", "none"),
-            "hook": f"认识{product}",
-            "cta": "了解更多",
+            "hook": f"看清{product}在这一步的不同",
+            "cta": "了解它如何做到",
             "shots": [
                 {"idx": 1, "t": "0-3s", "shot": "text_to_video", "visual": f"{product} 使用场景中的自然动作特写", "text": "真实使用场景", "vo": "看看实际效果", "camera": "手持跟随推近", "motion": "主体入画"},
                 {"idx": 2, "t": "3-8s", "shot": "text_to_video", "visual": f"{product} 核心功能连续演示，动作自然衔接", "text": support, "vo": "看看它如何完成这个任务", "camera": "俯拍＋特写", "motion": "功能演示循环"},
@@ -858,6 +1019,12 @@ async def api_cw_video_plan(req: CWVideoPlanRequest, db: Session = Depends(get_d
         if not reply:
             reply = "已基于产品分析生成一份默认 15 秒四镜分镜；告诉我你想强调的卖点或平台打法，我帮你微调。"
 
+    # V4.101：把用户确认的框架 / brief 回填进 plan，供结果展示与出片提示词消费
+    if not plan.get("framework") and fw_key:
+        plan["framework"] = fw["key"]
+        plan["framework_label"] = fw["label"]
+    if user_brief:
+        plan["creative_brief"] = user_brief
     # 把平台 / 选项 / 参考图回填进 plan，便于前端展示与生成复用
     plan["platform"] = platform
     plan["options"] = req.options or {}
@@ -1320,11 +1487,15 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
     output_aspect = forced or requested_aspect
 
     # 从分镜方案构造一段可供文生/图生视频模型消费的提示词。
-    # V4.88：无字策略下不再把 shot.text 送进模型（它只保留在分镜 JSON 供节奏 / VO 策划）。
+    # V4.88：无字策略下不把 shot.text 送进模型（只保留在分镜 JSON 供节奏 / VO 策划）。
+    # V4.101：过去只送 t/visual/vo，导致规划出的 hook/cta/camera/motion 全部丢失；
+    # 这里把运镜与转场作为「导演指令」送达供应商，hook/cta 只作为动作意图，不画字。
     shots = plan.get("shots") or []
     seg_lines = []
     for s in shots:
         seg = f"[{s.get('t') or ''}] {s.get('visual') or ''}"
+        if s.get("camera"): seg += f"（运镜：{s['camera']}）"
+        if s.get("motion"): seg += f"（动作/转场：{s['motion']}）"
         if s.get("vo"): seg += f"（旁白：{s['vo']}）"
         seg_lines.append(seg)
     duration = int(plan.get("duration_sec") or options.get("duration") or 15)
@@ -1365,6 +1536,23 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
     if brief.get("promotionGoal"): prompt_parts.append(f"推广目标：{brief.get('promotionGoal')}")
     if brief.get("sellingPoints"): prompt_parts.append("核心卖点：" + "、".join(brief["sellingPoints"][:3]))
     prompt_parts.append(f"时长：{duration} 秒；比例：{output_aspect}")
+    # V4.101：框架 / 钩子 / 收口作为导演指令进入出片提示词；措辞明确「不画字」，
+    # 与零文字契约及三道防线保持一致。
+    if plan.get("framework_label") or plan.get("framework"):
+        beat = plan.get("frames") or {}
+        beat_text = "；".join(f"{k}={v}" for k, v in beat.items() if v) if isinstance(beat, dict) else ""
+        prompt_parts.append("创意框架：%s%s" % (
+            plan.get("framework_label") or plan.get("framework"),
+            "；五段节奏：" + beat_text if beat_text else ""))
+    if plan.get("hook"):
+        prompt_parts.append("开场钩子意图（用动作/反差表达，不作为上屏文字）：" + str(plan["hook"]))
+    if plan.get("cta"):
+        prompt_parts.append("收口动作意图（仅作为动作/叠加位，不绘制文字）：" + str(plan["cta"]))
+    if plan.get("sound_design"):
+        prompt_parts.append("节奏与音频建议：" + str(plan["sound_design"]))
+    brief_block = build_video_brief_block(plan.get("creative_brief"), platform)
+    if brief_block:
+        prompt_parts.append(brief_block)
     if seg_lines: prompt_parts.append("分镜：" + "；".join(seg_lines))
     # V4.82：出片提示词带同一份证据契约 —— 分镜阶段被删掉的数字不会在生成阶段被"补充要求"找回来
     prompt_parts.append(video_evidence_context(analysis))
@@ -1384,6 +1572,9 @@ def _cw_video_request_build(req: CWVideoGenerateRequest, db: Session) -> dict:
         "product": product,
         "headline": plan.get("hook") or product,
         "cta": plan.get("cta") or "立即下载",
+        "framework": plan.get("framework") or "",
+        "creative_brief_hash": str((plan.get("creative_brief") or {}).get("brief_hash") or "")
+        if isinstance(plan.get("creative_brief"), dict) else "",
         "spec": "1080x1920" if output_aspect == "9:16" else ("1080x1080" if output_aspect == "1:1" else "1920x1080"),
         "lang": str(options.get("lang") or "en"),
         "duration": duration,

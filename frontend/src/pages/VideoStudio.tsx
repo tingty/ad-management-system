@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react'
-import { api } from '../api'
+import { api, type CreativeBrief } from '../api'
 import VideoTextOverlay from '../VideoTextOverlay'
 
 /* V4.70 创意工作台 · 视频素材模块（受控组件，状态由父级 CreativeWorkbench 托管，便于 Step2 规划 → Step3 工作区共享分镜方案）
@@ -34,6 +34,9 @@ interface VideoStudioProps {
   brandLogo?: string
   injectLogo?: boolean
   mode: 'plan' | 'work'
+  /** V4.101：来自上层「提示词补全并确认」的 brief，三类素材共用 */
+  creativeBrief?: CreativeBrief | null
+  framework?: string
   state: VideoState
   setState: (updater: (prev: VideoState) => VideoState) => void
   // 工作区模式下，由父级注入「生成中」的聚合进度文本（可选）
@@ -124,7 +127,7 @@ function AspectChip({ aspect }: { aspect?: string }) {
   )
 }
 
-export default function VideoStudio({ analysis, platform, referenceImage, brandLogo, injectLogo, mode, state, setState, onSubmitJob }: VideoStudioProps) {
+export default function VideoStudio({ analysis, platform, referenceImage, brandLogo, injectLogo, mode, creativeBrief, framework, state, setState, onSubmitJob }: VideoStudioProps) {
   const { messages, plan, videos, options, note, modelInfo, videoModel, planning, generating, error, refineInput } = state
   const chatRef = useRef<HTMLDivElement>(null)
   // V4.75：视频链路自检结果（只读配置，不触发出片）
@@ -164,9 +167,10 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
     setState(s => ({ ...s, options: { ...s.options, [key]: val } }))
   }
 
-  async function planStoryboard(seed?: string) {
+  async function planStoryboard(seed?: string, regenerate = false) {
     setState(s => ({ ...s, error: '' }))
-    const msgs = seed ? [...s_messages(), { role: 'user', content: seed } as VideoMsg] : s_messages()
+    const realSeed = regenerate ? (seed || '换一套完全不同的创意框架与前三秒钩子，不要复述上一版') : seed
+    const msgs = realSeed ? [...s_messages(), { role: 'user', content: realSeed } as VideoMsg] : s_messages()
     if (!msgs.length) {
       setState(s => ({ ...s, error: '请先输入创作构想，或点击「生成分镜草案」' }))
       return
@@ -179,8 +183,12 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
         reference_image: referenceImage || '',
         brand_logo: (injectLogo && brandLogo) ? brandLogo : '',
         messages: msgs,
-        current_plan: plan || undefined,
+        current_plan: regenerate ? undefined : (plan || undefined),
         options,
+        framework: framework || creativeBrief?.framework || '',
+        user_brief: creativeBrief?.confirmed ? creativeBrief : undefined,
+        regenerate,
+        seed: regenerate ? ('v' + Date.now()) : undefined,
       })
       const next = [...msgs]
       if (r?.reply) next.push({ role: 'assistant', content: r.reply })
@@ -325,6 +333,12 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
               {ASPECT_OPTS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
             </select>
           </label>
+          <label className="vs-opt vs-opt-wide">
+            <span>补充出片提示词（可选）</span>
+            <textarea value={options.prompt_hint || ''} rows={2}
+              placeholder="例如：镜头更紧凑、前 3 秒用反差动作；不要写价格 / 评分等无证据数字"
+              onChange={(e) => setOpt('prompt_hint', e.target.value)} />
+          </label>
           {showRef && (
             <div className="vs-ref">
               <img src={fileUrl(referenceImage)} alt="参考图" />
@@ -378,6 +392,7 @@ export default function VideoStudio({ analysis, platform, referenceImage, brandL
               分镜方案{plan ? `（${plan.shots?.length || 0} 镜 · ${plan.duration_sec || options.duration}s · ${plan.aspect || options.aspect}）` : ''}
             </span>
             <div className="vs-preview-actions">
+              {plan && <button className="vs-ghost" onClick={() => planStoryboard(undefined, true)} disabled={planning}>换一批分镜</button>}
               {plan && <button className="vs-ghost" onClick={downloadJson}>下载分镜 JSON</button>}
               <button className="vs-ghost" onClick={reset}>重置</button>
             </div>

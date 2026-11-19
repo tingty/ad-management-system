@@ -79,7 +79,10 @@ MEDIA_COPY_SYS = (
     "字段结构（key 必须完全匹配，count>1 的字段用字符串数组）：[[SCHEMA]]\n"
     "字数红线（务必遵守，超长会被平台拒投）：[[LIMITS]]\n"
     "语言要求：用 [[LANGUAGE]] 撰写，语气贴合平台与目标人群。\n"
-    "[[CREATIVE]]"
+    "转化表达：每条文案先给可验证的结果型钩子，再用具体利益与可信证据建立兴趣，"
+    "最后用平台允许的 CTA 收口；不得为吸引力编造数字、折扣、评分、倒计时或背书。\n"
+    "[[CREATIVE]]\n"
+    "[[USER_BRIEF]]"
 )
 
 MEDIA_CONTEXT_SYS = (
@@ -106,6 +109,7 @@ COPY_OUTPUT_CONTRACT = (
     "字段结构（key 必须完全匹配，count>1 的字段用字符串数组）：[[SCHEMA]]\n"
     "字数红线（超长会被平台拒投）：[[LIMITS]]\n"
     "语言要求：用 [[LANGUAGE]] 撰写，为媒体平台【[[PLATFORM]]】贴合其版位与受众调性。\n"
+    "转化表达：钩子 → 具体利益 → 可信证据 → CTA 收口；CTA 必须取自平台候选值。\n"
     "事实约束：仅使用上方落地页分析结论中真实出现的信息，禁止编造数字、折扣、倒计时、奖项与背书。"
 )
 
@@ -174,7 +178,8 @@ def render_prompt(template: str, variables: dict) -> str:
 
 
 def compose_copy_prompt(template: str, *, schema: str, limits: str,
-                        language: str, platform: str, creative: str = "") -> str:
+                        language: str, platform: str, creative: str = "",
+                        user_brief: str = "") -> str:
     """文案系统提示词 = 目录模板 / 总结库模板 + 系统强制输出契约 + 创意表达倾向。
 
     V4.41 / F04：`creative` 是 `ResolvedCreativeConfig.strategy` 解析出的预设文本，
@@ -185,13 +190,16 @@ def compose_copy_prompt(template: str, *, schema: str, limits: str,
     tpl = template or ""
     variables = {"SCHEMA": schema, "LIMITS": limits,
                  "LANGUAGE": language, "PLATFORM": platform,
-                 "CREATIVE": creative or ""}
+                 "CREATIVE": creative or "", "USER_BRIEF": user_brief or ""}
     has_contract = "[[SCHEMA]]" in tpl
     body = render_prompt(tpl, variables)
     if not has_contract:
         body += "\n" + render_prompt(COPY_OUTPUT_CONTRACT, variables)
+    # V4.101：旧模板 / 用户自定义模板可能没有新占位符，显式追加保证确认后的 brief 一定生效。
     if creative and "[[CREATIVE]]" not in tpl:
         body += "\n" + creative
+    if user_brief and "[[USER_BRIEF]]" not in tpl:
+        body += "\n" + user_brief
     return body
 
 

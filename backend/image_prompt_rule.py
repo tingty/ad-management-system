@@ -17,7 +17,9 @@
 import hashlib
 import re
 
-RULE_VERSION = "1"
+from creative_brief import build_image_brief_block
+
+RULE_VERSION = "2"
 MAX_ROUTES = 10
 MAX_SUPPLEMENT = 500
 
@@ -44,11 +46,17 @@ def _clean_route(raw: dict, idx: int) -> dict:
         "angle": _clean(route.get("angle"), 120),
         "description": _clean(route.get("description"), 200),
         "tags": tags,
+        "framework": _clean(route.get("framework"), 24),
+        "framework_label": _clean(route.get("framework_label"), 60),
+        "hook": _clean(route.get("hook"), 160),
+        "proof": _clean(route.get("proof"), 160),
+        "visual_hook": _clean(route.get("visual_hook"), 160),
+        "cta_role": _clean(route.get("cta_role"), 120),
     }
 
 
 def build_image_prompt_rule(*, routes=None, supplement: str = "", platform: str = "",
-                            overlay_mode: str = "pure") -> dict:
+                            overlay_mode: str = "pure", brief: dict | None = None) -> dict:
     """把所选路线 + 补充指令构建成一条统一规则。
 
     返回 dict：version / routes / route_keys / supplement / rule_text / rule_hash。
@@ -59,10 +67,11 @@ def build_image_prompt_rule(*, routes=None, supplement: str = "", platform: str 
     supp = _clean(supplement, MAX_SUPPLEMENT)
     plat = _clean(platform, 40)
     mode = _clean(overlay_mode, 20) or "pure"
+    brief_block = build_image_brief_block(brief, plat) if brief else ""
 
-    if not items and not supp:
+    if not items and not supp and not brief_block:
         return {"version": RULE_VERSION, "routes": [], "route_keys": [],
-                "supplement": "", "rule_text": "", "rule_hash": ""}
+                "supplement": "", "rule_text": "", "rule_hash": "", "brief_hash": ""}
 
     lines: list[str] = ["[CreativePlanRule v%s] 本次出图的唯一创意规则（已合并所选创意规划与补充指令，按优先级执行）：" % RULE_VERSION]
     if items:
@@ -70,6 +79,11 @@ def build_image_prompt_rule(*, routes=None, supplement: str = "", platform: str 
         lines.append("主干路线 %s「%s」：切入角度=%s；视觉表达=%s；标签=%s。" % (
             head["key"], head["name"], head["angle"] or "未指定",
             head["description"] or "未指定", "、".join(head["tags"]) or "无"))
+        lines.append("主干转化框架：%s；钩子=%s；证据表达=%s；视觉钩子=%s；收口意图=%s。" % (
+            head["framework_label"] or head["framework"] or "AIDA",
+            head["hook"] or "首屏结果或反差", head["proof"] or "真实功能演示，不写数字",
+            head["visual_hook"] or "主体与场景形成可观察变化",
+            head["cta_role"] or "叠加位收口，不绘制文字"))
         if len(items) > 1:
             others = []
             for r in items[1:]:
@@ -81,6 +95,8 @@ def build_image_prompt_rule(*, routes=None, supplement: str = "", platform: str 
 
     if supp:
         lines.append("用户补充指令（仅调整视觉表达，优先级最高）：" + supp + "。")
+    if brief_block:
+        lines.append(brief_block)
 
     constraints = [
         "以主干路线决定画面主体与情绪基调，辅助路线只做修饰，禁止多主题拼贴或逐个路线各画一遍",
@@ -104,6 +120,7 @@ def build_image_prompt_rule(*, routes=None, supplement: str = "", platform: str 
         "rule_hash": hashlib.sha256(rule_text.encode("utf-8")).hexdigest()[:12],
         "overlay_mode": mode,
         "platform": plat,
+        "brief_hash": str((brief or {}).get("brief_hash") or "") if brief_block else "",
     }
 
 

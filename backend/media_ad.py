@@ -39,6 +39,8 @@ from services import get_prompt
 from claims import EvidenceSnapshot, claim_contract, audit_copy_fields
 from prompt_catalog import (render_prompt, compose_copy_prompt, compose_image_prompt,
                             load_preset_overrides, MEDIA_IMAGE_SYS)
+# V4.101：共用的用户确认 brief（表达策略，非事实依据）
+from creative_brief import build_copy_brief_block, build_image_brief_block
 from imaging import render_ad_png, text_budget, TextOverflowError
 from text_utils import fit_text, clip_report
 from industry_profiles import (resolve_profile, is_complete_sentence, missing_protected,
@@ -452,7 +454,8 @@ def _char_table(fields: dict, schema) -> list:
 
 async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en",
                               ad_product: str = "", style_opts: dict | None = None,
-                              creative_config: dict | None = None) -> dict:
+                              creative_config: dict | None = None,
+                              brief: dict | None = None) -> dict:
     """基于落地页分析结论 + 选中平台，生成可编辑广告文案（V4.39 / F01 + F10，V4.40 / F08）。
 
     - 保留原始模型输出与每次裁剪的状态；
@@ -461,6 +464,8 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
     - 模型展示与真实调用共用同一路由，回退标记在调用结束后刷新。
     - V4.41 / F04：注入 `ResolvedCreativeConfig.strategy` 的编辑后预设文本；
       纯视觉字段（调色板 / 版式 / 背景键）不会进入文案提示词。
+    - V4.101 / P1：注入用户确认过的创意 brief（钩子 / 证据 / CTA 框架），
+      只调整表达，不替代证据快照；未确认 brief 由调用方拦截。
     """
     platform = platform or "Meta"
     analysis = _as_dict(analysis)
@@ -473,6 +478,7 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
         style_opts, lang=lang, overrides=load_preset_overrides(db))
 
     ctx = _analysis_context(analysis, platform, lang, db)
+    brief_block = build_copy_brief_block(brief, platform)
     sys_prompt = compose_copy_prompt(
         get_prompt(db, "media_copy_sys"),
         schema=_schema_instr(schema),
@@ -480,6 +486,7 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
         language=LANG_NAME.get(lang, "English"),
         platform=platform,
         creative=strategy_block(config),
+        user_brief=brief_block,
     )
 
     llm, info = get_llm_with_info(db, "copy")
@@ -579,6 +586,14 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
         # F04：文案任务归档「当时实际使用的配置」，后续改预设不会覆盖这份快照
         "creative_config": config_snapshot(config),
         "creative_prompt_hash": prompt_hash(sys_prompt),
+        # V4.101：用户确认过的表达策略快照，供结果卡片回显与追溯
+        "creative_brief": ({
+            "brief_hash": brief.get("brief_hash"),
+            "framework": brief.get("framework"),
+            "hook": brief.get("hook"),
+            "cta": brief.get("cta"),
+            "prompt_text": brief.get("prompt_text"),
+        } if brief and brief.get("confirmed") else None),
     }
 
 

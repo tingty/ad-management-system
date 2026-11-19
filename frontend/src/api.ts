@@ -519,6 +519,32 @@ export interface ClaimAudit {
                  type: string; missing?: string[]; invalid_ids?: string[]; reason: string }[]
   note?: string
 }
+/** V4.101：用户确认后的创意表达策略快照 */
+export interface CreativeBrief {
+  raw_input?: string
+  framework?: string
+  framework_label?: string
+  product?: string
+  audience?: string
+  hook?: string
+  pain?: string
+  desire?: string
+  proof?: string
+  attribution?: string
+  decision?: string
+  cta?: string
+  visual_hook?: string
+  beat?: string
+  tone?: string
+  layers?: string[]
+  warnings?: string[]
+  confirmed?: boolean
+  brief_hash?: string
+  prompt_text?: string
+  /** 同一 brief 下「换一批文案」的变体序号 */
+  variation?: number
+}
+
 export interface MediaCopyResult {
   platform: string
   /** V4.40 / F08：广告产品（用于区分 Google RSA / UAC 等文案 schema） */
@@ -549,6 +575,7 @@ export interface MediaCopyResult {
   /** V4.41 / F04：本次文案实际使用的配置快照（后续改预设不覆盖） */
   creative_config?: CreativeConfigSnapshot
   creative_prompt_hash?: string
+  creative_brief?: CreativeBrief | null
 }
 
 /** V4.41 / F04：归档用的不可变配置快照 */
@@ -1039,8 +1066,16 @@ export const api = {
   // 基于落地页分析结论 + 选中平台，调用大模型生成可编辑广告文案
   mediaCopy: (payload: { analysis: LandingAnalysis; platform: string; lang?: string
     /** V4.41 / F04：编辑过的方向 / 风格 / 配色预设参与文案生成 */
-    style_opts?: Record<string, any> }) =>
+    style_opts?: Record<string, any>
+    /** V4.101：用户确认后的创意 brief（未确认会被后端 400 拦截） */
+    brief?: CreativeBrief | null }) =>
     req<MediaCopyResult>('/api/media-campaign/copy', { method: 'POST', body: JSON.stringify(payload) }),
+  // V4.101：框架目录 + 用户提示词补全预览（纯规则，不生成素材、不产生出片费用）
+  creativeFrameworks: () => req<{ frameworks: Array<{ key: string; label: string; desc: string;
+    beats: string[]; layers: string[]; requires_evidence: boolean }> }>('/api/creative-frameworks'),
+  previewCreativeBrief: (payload: { raw_input: string; analysis?: any; platform?: string;
+    framework?: string; layers?: string[] }) =>
+    req<CreativeBrief>('/api/creative-brief/preview', { method: 'POST', body: JSON.stringify(payload) }),
   // 基于「勾选的创意文案组合」+ 落地页分析结论 + 风格/样式/颜色，生成推广图片
   mediaImages: (payload: MediaImagePayload) =>
     req<MediaImageResult>('/api/media-campaign/images', { method: 'POST', body: JSON.stringify(payload) }),
@@ -1095,7 +1130,8 @@ export const api = {
   // V4.59 / B1：支持 demo_mode（演示模式开关，仅开启时返回样例数据并标注 source=demo）
   cwAnalyze: (payload: { url?: string; text?: string; platforms: string[]; demo_mode?: boolean }) =>
     req<any>('/api/cw/analyze', { method: 'POST', body: JSON.stringify(payload) }),
-  cwRoutes: (payload: { plan_id?: number; analysis: any; platforms: string[]; brief: any; count?: number }) =>
+  cwRoutes: (payload: { plan_id?: number; analysis: any; platforms: string[]; brief: any; count?: number
+    framework?: string; user_brief?: CreativeBrief | null; seed?: string; exclude_names?: string[] }) =>
     req<any>('/api/cw/routes', { method: 'POST', body: JSON.stringify(payload) }),
   // V4.61 / B4：创意工作台「素材沉淀库」（参考图 / 产品 / 品牌）增查删
   cwLibrary: (params: { kind?: string; limit?: number; offset?: number } = {}) =>
@@ -1108,6 +1144,7 @@ export const api = {
   cwVideoPlan: (payload: {
     analysis: any; platform: string; reference_image?: string; brand_logo?: string;
     messages: { role: string; content: string }[]; current_plan?: any; options?: any;
+    framework?: string; user_brief?: CreativeBrief | null; regenerate?: boolean; seed?: string;
   }) =>
     req<any>('/api/cw-video/plan', { method: 'POST', body: JSON.stringify(payload) }),
   cwVideoGenerate: (payload: {
