@@ -1796,15 +1796,33 @@ def _active_config(db, usage):
     from models import ModelConfig
     return _pick_config(db.query(ModelConfig).all(), usage)
 
-def get_llm_with_info(db, usage="analysis") -> tuple[LLMProvider, dict]:
+
+#: V4.113：用途之间允许复用的兜底链——文案模型缺失时复用同一个文本模型。
+#: 真实环境里最常见的配置方式是「只配一个文本模型（分析用途）」，并不是每个人都会
+#: 额外勾一个「文案」。此前 copy 用途找不到配置就直接退回 Mock，表现为「文案一条都
+#: 出不来」。文案与分析共用同一种 chat 能力，复用是安全且可解释的（model_info 会标注）。
+USAGE_REUSE = {"copy": ("analysis",)}
+
+
+def get_llm_with_info(db, usage="analysis", *, allow_reuse=False) -> tuple[LLMProvider, dict]:
     """V4.39 / F10：统一路由入口，**只挑选一次配置**，同时返回调用快照。
 
     此前 services._resolve_model 自己按 is_active 挑一次，get_llm 又按 last_test_ok
     挑一次，页面展示的配置可能与实际调用的不同。现在展示与调用共用同一个 cfg。
     快照字段：provider / model / role / config_id / request_id / source / fallback /
     error_type / retries；不含 api_key、base_url 等敏感信息。
+
+    V4.113：`allow_reuse=True` 时，若本用途没有可用配置，按 `USAGE_REUSE` 复用一个
+    同能力的配置，并在快照里用 `resolved_from` 如实标注来源用途，绝不冒充独立配置。
     """
     cfg = _active_config(db, usage)
+    resolved_from = ""
+    if cfg is None and allow_reuse:
+        for alt in USAGE_REUSE.get(usage, ()):
+            cfg = _active_config(db, alt)
+            if cfg is not None:
+                resolved_from = alt
+                break
     info = {
         "provider": (cfg.provider if cfg else ""),
         "model": ((cfg.model or "") if cfg else ""),
@@ -1815,6 +1833,7 @@ def get_llm_with_info(db, usage="analysis") -> tuple[LLMProvider, dict]:
         "fallback": not bool(cfg),
         "error_type": "",
         "retries": 0,
+        "resolved_from": resolved_from,
     }
     if not cfg:
         return MockLLM(), info
@@ -1854,7 +1873,32 @@ def finalize_invocation(info: dict, llm: LLMProvider, parsed_ok: bool = True) ->
         info["fallback"] = False
         info["source"] = "llm" if parsed_ok else "invalid_response"
     info["retries"] = int(getattr(llm, "retries", 0) or 0)
+    if getattr(llm, "exception_type", ""):
+        info["exception_type"] = str(getattr(llm, "exception_type"))
     return info
+
+
+#: V4.113：模型调用的失败原因 → 可执行的中文说明。
+#: 此前这些错误只落在 model_info.error_type 里（页面从不展示），用户看到的永远是
+#: 「文案未生成成功，请检查模型配置」，既不知道是 Key 过期、限流还是网络不通。
+LLM_ERROR_TEXT = {
+    "auth": ("模型鉴权失败（401 / 403）",
+             "到「系统设置 → 大模型配置」检查 API Key 与 Base URL，重新点测试连通性"),
+    "rate_limit": ("模型限流（429）", "稍后重试，或换一条额度更充足的配置"),
+    "timeout": ("模型调用超时", "稍后重试；频繁超时请换更快的模型或检查出口网络"),
+    "network": ("无法连接模型服务", "检查 Base URL、代理与服务器出网策略"),
+    "upstream": ("模型服务返回错误", "查看该配置「最近一次测试」的 HTTP 状态与报错"),
+    "init_error": ("模型配置初始化失败", "重新保存一次该配置，确认协议 / 地址 / 模型名"),
+    "invalid_response": ("模型返回内容不是有效 JSON", "换用支持 JSON 输出的模型，或降低 temperature"),
+}
+
+
+def llm_error_text(error_type: str) -> tuple[str, str]:
+    """把 error_type 映射为（人话原因, 处理建议）；未知类型给保守说明。"""
+    key = str(error_type or "").strip().lower()
+    if key in LLM_ERROR_TEXT:
+        return LLM_ERROR_TEXT[key]
+    return ("模型调用未成功", "检查「系统设置 → 大模型配置」的连通性测试结果后重试")
 
 
 def resolve_analysis_llm(db) -> tuple[LLMProvider, dict]:

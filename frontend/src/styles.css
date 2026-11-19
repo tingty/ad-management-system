@@ -1693,6 +1693,22 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cwb-results-title .cwb-reco-note { margin: 4px 0 0; }
 .cwb-results-empty { border: 1px dashed var(--border, #e5e7eb); border-radius: 14px; padding: 34px 20px; text-align: center; color: var(--muted, #6b7280); font-size: 13px; line-height: 1.6; }
 
+/* V4.113：模型自检条 + 文案阻断原因（把「为什么没出来」写在页面上，不靠猜） */
+.cwb-model-alert { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px;
+  padding: 9px 12px; border: 1px solid #fcd34d; background: #fffbeb; border-radius: 10px;
+  font-size: 12.5px; line-height: 1.6; color: #92400e; }
+.cwb-model-alert b { color: #b45309; }
+.cwb-model-alert span { color: #92400e; }
+.cwb-model-alert span + span::before { content: '·'; margin-right: 8px; color: #d97706; }
+.cwb-model-alert .cwb-link-btn { margin-left: auto; color: #b45309; font-weight: 600; text-decoration: underline; }
+.cwb-copy-blocked { margin-top: 8px; padding: 10px 12px; border: 1px solid #fecaca; background: #fef2f2;
+  border-radius: 10px; font-size: 12.5px; line-height: 1.7; color: #b91c1c; }
+.cwb-copy-blocked b { display: block; margin-bottom: 4px; }
+.cwb-copy-blocked ul { margin: 0 0 6px; padding-left: 18px; }
+.cwb-copy-blocked li { margin: 2px 0; word-break: break-word; }
+.cwb-copy-blocked em { font-style: normal; font-weight: 600; }
+.cwb-copy-blocked .cwb-link-btn { color: #b91c1c; text-decoration: underline; font-weight: 600; }
+
 /* 资产卡：文案内容 + 放大 / 下载 */
 .cwb-asset-img { cursor: zoom-in; }
 .cwb-asset-img video { width: 100%; height: 100%; object-fit: cover; background: #000; }

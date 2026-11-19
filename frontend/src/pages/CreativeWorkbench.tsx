@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api, getToken, type CreativeBrief, type CreativeIntent } from '../api'
 import VideoStudio, { VideoState } from './VideoStudio'
 import { cwTaskBegin, cwTaskDismiss, cwTaskEnd, cwTaskReset, cwTaskUpdate, getCwTask, type CwStageStatus, type CwTaskStage } from '../cwTask'
@@ -247,6 +247,8 @@ export default function CreativeWorkbench() {
   const [error, setError] = useState('')
   const [demoMode, setDemoMode] = useState(false)   // V4.59 / B1：演示模式开关（默认关闭）
   const [copiesByPlatform, setCopiesByPlatform] = useState<Record<string, any>>({})  // V4.60 / B3：各平台生成的广告文案
+  // V4.113：按平台保存文案失败的真实原因，直接显示在文案工作区（不再只堆在页面底部）
+  const [copyErrors, setCopyErrors] = useState<Record<string, string>>({})
   // V4.110：输入区不再有「素材图片选择 / 参考图 / 品牌」三块组件。
   // 参考图只在视频「图生视频」里需要，已迁到视频规划区上传，这里仅保存父级提交时要用的路径。
   const [videoRef, setVideoRef] = useState('')
@@ -367,6 +369,14 @@ export default function CreativeWorkbench() {
   useEffect(() => {
     api.creativeFrameworks().then((d: any) => setCreativeFrameworks(d?.frameworks || [])).catch(() => {})
   }, [])
+
+  // V4.113：模型自检（只读）。打开页面就告诉用户「文案 / 图片模型是否就绪、为什么没就绪」，
+  // 不用等点了生成、等两分钟、最后只拿到一句「文案未生成成功」再去猜。
+  const [modelStatus, setModelStatus] = useState<{ items: any[]; ready: boolean; missing: string[] } | null>(null)
+  const loadModelStatus = useCallback(() => {
+    api.cwModelStatus().then(d => setModelStatus(d)).catch(() => setModelStatus(null))
+  }, [])
+  useEffect(() => { loadModelStatus() }, [loadModelStatus])
 
   useEffect(() => {
     function applyNames(names: string[]) {
@@ -509,6 +519,8 @@ export default function CreativeWorkbench() {
     const imgTotal = jobs.length
     const imgDone = jobs.filter(j => ['succeeded', 'partial_success', 'done'].includes(j.status)).length
     const imgFailed = jobs.filter(j => ['failed', 'canceled'].includes(j.status)).length
+    // V4.113：文案缺失导致的「未提交」也算已结束，否则步骤条会一直停在 running
+    const imgBlocked = jobs.filter(j => j.status === 'blocked').length
     const vidRunning = !!vs.generating
     const vidCount = (vs.videos || []).length
 
@@ -516,21 +528,26 @@ export default function CreativeWorkbench() {
     // V4.92：文案阶段（同步模型调用，随任务开始即视为完成）
     if (hasCopy) {
       const copyCount = Object.keys(copiesByPlatform).length
+      const copyFailCount = Object.keys(copyErrors).length
       stages.push({
         key: 'copy',
         label: copyCount > 0 ? `创意文案（${copyCount} 个平台）` : '创意文案',
-        status: copyCount > 0 ? 'done' : (view === 'generating' ? 'running' : 'pending'),
+        status: copyCount > 0 ? 'done'
+          : (view === 'generating' ? 'running' : (copyFailCount ? 'failed' : 'pending')),
+        note: copyCount === 0 && copyFailCount ? `${copyFailCount} 个平台未生成` : '',
       })
     }
     if (hasImage) {
+      const finished = imgDone + imgFailed + imgBlocked
       const st: CwStageStatus = imgTotal === 0
         ? 'running'
-        : (imgDone + imgFailed >= imgTotal ? (imgDone > 0 ? 'done' : 'failed') : 'running')
+        : (finished >= imgTotal ? (imgDone > 0 ? 'done' : 'failed') : 'running')
       stages.push({
         key: 'image',
         label: `推广图片（${imgDone}/${imgTotal || 0}）`,
         status: st,
-        note: imgFailed ? `${imgFailed} 个任务失败` : '',
+        note: [imgFailed ? `${imgFailed} 个任务失败` : '',
+               imgBlocked ? `${imgBlocked} 个未提交（文案缺失）` : ''].filter(Boolean).join('；'),
       })
     }
     if (hasVideo) {
@@ -782,11 +799,19 @@ export default function CreativeWorkbench() {
           copiesByPlat[p] = { fields: cr.fields, schema: cr.schema, char_table: cr.char_table, ad_product: cr.ad_product, brand: cr.brand, model_info: cr.model_info, validation: cr.validation, creative_brief: cr.creative_brief }
           const f = cr.fields
           variantsByPlat[p] = [{ headline: firstNonEmpty(f.headline ?? f.title), sub: pickFirstField(f.description, f.body, f.primary_text), cta: firstNonEmpty(f.cta), brand: firstNonEmpty(cr.brand), label: p }]
+        } else if (cr?.blocked?.message) {
+          // V4.113：模型没跑成功（未配置 / 鉴权失败 / 限流 / 非 JSON）时，
+          // 直接展示后端给出的真实原因与处理动作，不再让用户对着「未生成成功」猜。
+          copyFailures[p] = String(cr.blocked.message)
+        } else if (cr?.validation?.status === 'blocked' && cr.validation.message) {
+          copyFailures[p] = String(cr.validation.message)
         } else {
           copyFailures[p] = !cr ? '文案生成失败（接口未返回内容）' : `文案校验未通过（${cr?.validation?.status || 'invalid'}）：${cr?.validation?.message || '请调整分析或文案后重试'}`
         }
       } catch (e: any) { copyFailures[p] = '文案生成发生异常：' + (e?.message || '未知错误') }
     }
+    // 一旦有失败，顺手刷新模型自检——页面顶部的状态条会同步显示真实原因
+    if (Object.keys(copyFailures).length) loadModelStatus()
     return { copiesByPlat, variantsByPlat, copyFailures }
   }
 
@@ -794,6 +819,7 @@ export default function CreativeWorkbench() {
   async function generateCopy(analysis: any): Promise<{ okCount: number; errs: string[]; data: any }> {
     const data = await buildCopies(analysis, selected)
     setCopiesByPlatform(data.copiesByPlat)
+    setCopyErrors(data.copyFailures)
     const brandSet = new Set<string>()
     for (const p of Object.keys(data.copiesByPlat)) { const b = data.copiesByPlat[p]?.brand; if (b && String(b).trim()) brandSet.add(String(b).trim()) }
     for (const b of brandSet) { api.addCwLibrary({ kind: 'brand', title: b, meta: { platforms: Object.keys(data.copiesByPlat) } }).catch(() => {}) }
@@ -821,6 +847,7 @@ export default function CreativeWorkbench() {
     // V4.92：文案数据优先复用「确认并批量生成」阶段已生成的结果，避免重复调用大模型。
     const { copiesByPlat, variantsByPlat, copyFailures } = prebuilt || await buildCopies(analysis, selected)
     setCopiesByPlatform(copiesByPlat)
+    setCopyErrors(copyFailures)
     const brandSet = new Set<string>()
     for (const p of Object.keys(copiesByPlat)) { const b = copiesByPlat[p]?.brand; if (b && String(b).trim()) brandSet.add(String(b).trim()) }
     for (const b of brandSet) { api.addCwLibrary({ kind: 'brand', title: b, meta: { platforms: Object.keys(copiesByPlat) } }).catch(() => {}) }
@@ -856,11 +883,14 @@ export default function CreativeWorkbench() {
         for (const route of routeList) {
           genIdx++
           if (copyFailures[p]) {
+            // V4.113：这不是「图片任务失败」，而是「文案没出来 → 图片根本没提交」。
+            // 之前统一记成 failed，页面就显示「部分图片任务生成失败，请调整媒体或重试」，
+            // 把用户引到改尺寸 / 换平台，实际上该修的是模型配置。
             const reason = copyFailures[p]
             const tag = `${p}${route?.name ? '·' + route.name : ''}`
-            capturedErrors.push(`${tag}：${reason}`)
-            setJobs(j => [...j, { platform: p, jobId: null, status: 'failed', progress: 0, images: [], route, error: reason }])
-            finalStates.push('failed'); done++; setProgressPct(Math.round(done / totalJobs * 100)); continue
+            capturedErrors.push(`${tag}：${reason}（图片未提交）`)
+            setJobs(j => [...j, { platform: p, jobId: null, status: 'blocked', progress: 0, images: [], route, error: `图片未提交：${reason}` }])
+            finalStates.push('blocked'); done++; setProgressPct(Math.round(done / totalJobs * 100)); continue
           }
           setProgressText(`正在为 ${p} · ${route?.name || '默认'} 生成推广图片…`)
           // V4.104 / 方案B：每条路线完全独立生成——slots 携带本组路线标识，
@@ -1044,7 +1074,7 @@ export default function CreativeWorkbench() {
     if (doVid && (!vs.plan || !vs.plan.shots?.length)) { setError('请先在第二步完成视频分镜规划'); return }
     // V4.101：用户自定义提示词必须先补全并确认，未确认不进入任何生成链路。
     if (creativeBriefDraft && !creativeBriefConfirmed) { setError('请先在「创意提示词方案」中确认补全后的提示词，再开始生成'); return }
-    setError(''); setView('generating'); setAssets([]); setJobs([]); setChecked({}); setCopiesByPlatform({}); setProgressPct(0); setProgressText('正在创建素材任务…')
+    setError(''); setView('generating'); setAssets([]); setJobs([]); setChecked({}); setCopiesByPlatform({}); setCopyErrors({}); setProgressPct(0); setProgressText('正在创建素材任务…')
     cwTaskReset()   // V4.77：新一轮生成，任务常驻浮窗重新出现（此前手动关闭的抑制解除）
     setImgTally(null); setImgPendingNote('')   // V4.107：新一轮生成重置「请求 / 合格 / 待处理」计数
     let hid: number | null = null
@@ -1582,6 +1612,23 @@ export default function CreativeWorkbench() {
           {/* ④ 生成成果：展示在「创意路线」下方（图片 / 视频 + 尺寸规格 + 文案内容） */}
           {/* 第三步：批量生成——图片与视频两个工作区，仅展示生成进度与结果（不暴露内部流程细节） */}
           <section className="cwb-results">
+            {/* V4.113：模型自检条——只提示与本次勾选的素材类型相关的未就绪项，
+                并给出具体原因（未配置 / 已停用 / 未测试通过 / 测试失败），附直达配置入口。 */}
+            {(() => {
+              if (!modelStatus) return null
+              const need = new Set<string>(['analysis'])
+              if (hasCopy) need.add('copy')
+              if (hasImage || hasVideo) need.add('image')
+              const bad = modelStatus.items.filter(i => need.has(i.usage) && !i.ready)
+              if (!bad.length) return null
+              return (
+                <div className="cwb-model-alert">
+                  <b>模型未就绪：</b>
+                  {bad.map(i => <span key={i.usage}>{i.label}「{i.reason}」</span>)}
+                  <a className="cwb-link-btn" href="#/llm">去「大模型配置」</a>
+                </div>
+              )
+            })()}
             <div className="cwb-results-head">
               <div className="cwb-results-title">
                 <h3 className="cwb-sub">批量生成工作区</h3>
@@ -1648,7 +1695,17 @@ export default function CreativeWorkbench() {
                   )
                 })}
                 {view === 'result' && Object.keys(copiesByPlatform).length === 0 && (
-                  <div className="err" style={{ marginTop: 8 }}>文案未生成成功，请检查模型配置或重新生成。</div>
+                  Object.keys(copyErrors).length > 0 ? (
+                    <div className="cwb-copy-blocked">
+                      <b>文案未生成，原因如下：</b>
+                      <ul>
+                        {Object.entries(copyErrors).map(([p, m]) => <li key={p}><em>{p}</em>：{m}</li>)}
+                      </ul>
+                      <a className="cwb-link-btn" href="#/llm">去「大模型配置」检查</a>
+                    </div>
+                  ) : (
+                    <div className="err" style={{ marginTop: 8 }}>文案未生成成功，请检查模型配置或重新生成。</div>
+                  )
                 )}
               </div>
             )}
@@ -1756,6 +1813,18 @@ export default function CreativeWorkbench() {
 
                 {jobs.some(j => j.status === 'failed') && view === 'result' && (
                   <div className="err" style={{ marginTop: 10 }}>部分图片任务生成失败，请调整媒体或重试。</div>
+                )}
+                {/* V4.113：文案没出来时图片是「未提交」，不是「生成失败」——分开说清楚 */}
+                {jobs.some(j => j.status === 'blocked') && view === 'result' && (
+                  <div className="cwb-copy-blocked" style={{ marginTop: 10 }}>
+                    <b>以下图片未提交生成：</b>
+                    <ul>
+                      {jobs.filter(j => j.status === 'blocked').slice(0, 6).map((j, k) => (
+                        <li key={k}><em>{j.platform}{j.route?.name ? `·${j.route.name}` : ''}</em>：{j.error || '文案未生成'}</li>
+                      ))}
+                    </ul>
+                    <a className="cwb-link-btn" href="#/llm">去「大模型配置」检查</a>
+                  </div>
                 )}
               </div>
             )}

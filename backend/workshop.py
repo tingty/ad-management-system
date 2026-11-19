@@ -133,6 +133,45 @@ def missing_models(db, usages: Iterable[str]) -> list[dict]:
     return [i for i in st["items"] if i["usage"] in want and not i["ready"]]
 
 
+def workbench_model_status(db) -> dict:
+    """V4.113：创意工作台的模型就绪视图（以「实际会调用哪条配置」为准）。
+
+    工作坊是硬门：只认「显式配置 + 最近测试通过」，因为不拿没验证过的模型跑真实费用。
+    创意工作台是既有链路：`providers._pick_config` 在「全部未测试 / 测试失败」时仍会
+    选中配置并真实调用，所以这里的 ready 必须与实际调用口径一致，否则会出现
+    「页面提示模型未就绪、点生成却成功了」的状态矛盾。`last_test_ok` 不为 True 时
+    不判未就绪，只用 note 如实提示，便于用户自行决定是否重新测试。
+
+    另外允许「文案模型缺失时复用分析模型」（两者都是 chat 能力），复用如实标成
+    `reused_from` + `note`，与 `get_llm_with_info(allow_reuse=True)` 行为一致。
+    """
+    from providers import _active_config, get_image
+
+    st = model_status(db)
+    by = {i["usage"]: i for i in st["items"]}
+    for usage in ("analysis", "copy", "image"):
+        item = by.get(usage)
+        if not item or item["ready"]:
+            continue
+        cfg = _active_config(db, usage)
+        if cfg is None:
+            continue
+        if usage == "image" and get_image(db) is None:
+            continue  # 协议未识别，确实不可用（与 model_status 口径保持一致）
+        note = ("最近一次连通测试未通过，建议重新测试" if cfg.last_test_ok is False
+                else "尚未测试连通性（系统仍按此配置调用）")
+        by[usage] = dict(item, ready=True, reason="", note=note,
+                         last_test_ok=cfg.last_test_ok)
+    ana, copy, image = by.get("analysis"), by.get("copy"), by.get("image")
+    if copy and not copy["ready"] and ana and ana["ready"]:
+        copy = dict(copy, ready=True, reason="", reused_from="analysis",
+                    note="未单独配置文案模型，将复用分析模型 %s/%s"
+                         % (ana.get("provider") or "—", ana.get("model") or "—"))
+    items = [i for i in (ana, copy, image) if i]
+    missing = [i["label"] for i in items if not i["ready"]]
+    return {"items": items, "ready": not missing, "missing": missing}
+
+
 # ---------------------------------------------------------------- 规格选项
 
 def _wh(size: str) -> tuple[int, int]:
@@ -281,10 +320,15 @@ def copy_view(platform: str, result: dict) -> dict:
             rows.append({"key": key, "label": f.get("label") or key,
                          "max": f.get("max") or 0, "values": values})
     mi = result.get("model_info") or {}
+    blocked = result.get("blocked") if isinstance(result.get("blocked"), dict) else None
     fallback = bool(mi.get("fallback")) or str(mi.get("source") or "") in ("mock", "local")
     review = int((result.get("validation") or {}).get("problem_count") or 0) if isinstance(
         result.get("validation"), dict) else 0
-    if fallback:
+    if blocked:
+        # V4.113：模型侧真实原因（鉴权 / 限流 / 超时 / 非 JSON）原样透出，
+        # 不再统一成「文案模型未返回有效结果」。
+        status, reason = "failed", str(blocked.get("message") or "文案模型未返回有效结果")
+    elif fallback:
         status, reason = "failed", "文案模型未返回有效结果，已阻止使用本地模拟内容"
     elif review:
         status, reason = "review", "部分字段需要复核（长度 / 证据）"
@@ -317,86 +361,6 @@ def landing_payload(analysis: dict) -> dict:
 
     data = normalize_analysis(analysis if isinstance(analysis, dict) else {})
     return {k: v for k, v in data.items() if k in LandingAnalysis.model_fields}
-
-
-def group_targets(targets: Iterable[dict]) -> dict[str, list[dict]]:
-    """按平台分组并保留选择顺序（出图按平台各建一个任务）。"""
-    grouped: dict[str, list[dict]] = {}
-    for t in targets or []:
-        grouped.setdefault(str(t.get("platform") or ""), []).append(t)
-    return grouped
-
-
-# ---------------------------------------------------------------- 文案整形
-
-def _first(value) -> str:
-    if isinstance(value, list):
-        return str(value[0]).strip() if value else ""
-    return str(value or "").strip()
-
-
-def copy_view(platform: str, result: dict) -> dict:
-    """把平台文案结果整形成界面可直接渲染的「标签 → 值」，并如实标注是否回退。"""
-    result = result if isinstance(result, dict) else {}
-    schema = result.get("schema") or []
-    fields = result.get("fields") or {}
-    rows = []
-    for f in schema:
-        key = str(f.get("key") or "")
-        if not key:
-            continue
-        raw = fields.get(key)
-        values = [str(x).strip() for x in (raw if isinstance(raw, list) else [raw])
-                  if str(x or "").strip()]
-        if values:
-            rows.append({"key": key, "label": f.get("label") or key,
-                         "max": f.get("max") or 0, "values": values})
-    mi = result.get("model_info") or {}
-    fallback = bool(mi.get("fallback")) or str(mi.get("source") or "") in ("mock", "local")
-    review = int((result.get("validation") or {}).get("problem_count") or 0) if isinstance(
-        result.get("validation"), dict) else 0
-    if fallback:
-        status, reason = "failed", "文案模型未返回有效结果，已阻止使用本地模拟内容"
-    elif review:
-        status, reason = "review", "部分字段需要复核（长度 / 证据）"
-    else:
-        status, reason = "ok", ""
-    text = "\n".join(f"{r['label']}：" + " ｜ ".join(r["values"]) for r in rows)
-    return {
-        "platform": platform,
-        "status": status,
-        "reason": reason,
-        "rows": rows,
-        "text": text,
-        "model": {
-            "provider": mi.get("provider") or "",
-            "model": mi.get("model") or "",
-            "config_id": mi.get("config_id"),
-        },
-    }
-
-
-def landing_payload(analysis: dict) -> dict:
-    """把工作坊的统一分析整形成 `LandingAnalysis` 可接受的入参。
-
-    `_build_cw_result` 产出的 analysis 里，channels 是平台名字符串数组，而
-    `LandingAnalysis.channels` 要求 {platform, reason}；直接塞进去会在建任务时
-    校验失败。这里按字段白名单裁剪并只修 channels，其余键（boxes / snapshot 等
-    前端展示用）不入库到出图请求，避免把无关大字段带进任务负载。
-    """
-    from schemas import LandingAnalysis
-
-    a = analysis if isinstance(analysis, dict) else {}
-    data = {k: v for k, v in a.items() if k in LandingAnalysis.model_fields}
-    ch = data.get("channels")
-    if isinstance(ch, list):
-        data["channels"] = [x if isinstance(x, dict) else {"platform": str(x), "reason": ""}
-                            for x in ch if str(x).strip()]
-    for key in ("competitors", "advantages", "evidence_ids"):
-        v = data.get(key)
-        if isinstance(v, list):
-            data[key] = [str(x) for x in v if str(x).strip()]
-    return data
 
 
 def overlay_variant(result: dict, analysis: dict) -> dict:

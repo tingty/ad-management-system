@@ -120,7 +120,8 @@ class TestAnalysisContractV4112(unittest.TestCase):
         routers.get_llm_with_info = lambda db, usage="analysis": (
             FakeLLM(MODEL_OUT), {"provider": "fake", "model": "fake", "role": usage,
                                  "source": "llm", "fallback": False, "config_id": None})
-        media_ad.get_llm_with_info = lambda db, usage="copy": (
+        # V4.113：文案入口新增 allow_reuse 关键字，桩函数必须一并接受
+        media_ad.get_llm_with_info = lambda db, usage="copy", **kw: (
             FakeLLM(COPY_OUT), {"provider": "fake", "model": "fake", "role": usage,
                                 "source": "llm", "fallback": False, "config_id": None})
 

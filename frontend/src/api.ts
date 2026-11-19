@@ -1221,6 +1221,12 @@ export const api = {
     req<{ intent: CreativeIntent; patch: CreativeIntent; changes: string[]; notes: string[]
       conflicts: string[]; change_kind: 'none' | 'visual' | 'concept'; summary: string }>(
       '/api/cw/intent/parse', { method: 'POST', body: JSON.stringify(payload) }),
+  // V4.113：创意工作台模型自检（只读）——打开页面即显示三类用途的生效配置与未就绪原因
+  cwModelStatus: () =>
+    req<{ items: { usage: string; label: string; ready: boolean; reason: string
+      name?: string; provider?: string; model?: string; config_id?: number
+      reused_from?: string; note?: string }[]
+      ready: boolean; missing: string[] }>('/api/cw/model-status'),
   cwRoutes: (payload: { plan_id?: number; analysis: any; platforms: string[]; brief: any; count?: number
     framework?: string; user_brief?: CreativeBrief | null; seed?: string; exclude_names?: string[]
     creative_intent?: CreativeIntent }) =>

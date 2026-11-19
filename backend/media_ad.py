@@ -459,6 +459,39 @@ def _char_table(fields: dict, schema) -> list:
     return rows
 
 
+def _copy_block_state(parsed: dict, model_info: dict, call_error: str = "") -> dict | None:
+    """V4.113：判断本次文案是否「根本没有可用结果」，并给出可执行的中文原因。
+
+    返回 None 表示拿到了真实模型的解析结果；返回 dict 表示必须阻断，字段：
+    code / message / action / model。message 会写进 validation.message，前端原样展示，
+    不再用「请检查模型配置」一句概括所有故障。
+    """
+    from providers import llm_error_text
+
+    mi = model_info or {}
+    provider = str(mi.get("provider") or "")
+    model = str(mi.get("model") or "")
+    who = f"{provider}/{model}" if provider or model else "未指定模型"
+    source = str(mi.get("source") or "")
+    if call_error or mi.get("fallback") or source in ("mock", "local"):
+        if not provider and not model:
+            reason = "没有可用的文案模型"
+            action = ("到「系统设置 → 大模型配置」勾选一条「文案」用途的配置；"
+                      "只配了分析模型时会自动复用它")
+            code = "model_missing"
+        else:
+            text, action = llm_error_text(str(mi.get("error_type") or ""))
+            reason = f"{text}（{who}）"
+            code = "model_failed"
+        return {"code": code, "model": who, "action": action,
+                "message": f"文案未生成：{reason}。{action}"}
+    if not parsed:
+        action = "换用支持 JSON 输出的模型，或降低 temperature 后重试"
+        return {"code": "invalid_response", "model": who, "action": action,
+                "message": f"文案未生成：模型返回内容无法解析为 JSON（{who}）。{action}"}
+    return None
+
+
 async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en",
                               ad_product: str = "", style_opts: dict | None = None,
                               creative_config: dict | None = None,
@@ -496,19 +529,36 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
         user_brief=brief_block,
     )
 
-    llm, info = get_llm_with_info(db, "copy")
+    llm, info = get_llm_with_info(db, "copy", allow_reuse=True)
+    call_error = ""
     try:
         resp = await llm.chat(sys_prompt, ctx)
         parsed = parse_json(resp) or {}
         info = finalize_invocation(info, llm, bool(parsed))
-    except Exception:
+    except Exception as e:
         resp, parsed = "", {}
+        call_error = "%s: %s" % (type(e).__name__, str(e)[:200])
         info = finalize_invocation(info, llm, False)
+        info["exception_type"] = type(e).__name__
     model_info = dict(info)
     model_info["role"] = "copy"
+    # V4.113：模型没给出可用结果时，**如实阻断**并在 validation.message 里写清真实原因。
+    # 此前异常被吞掉、Mock 文案的字段名又与平台 schema 对不上，前端只能显示
+    # 「文案未生成成功，请检查模型配置」，用户无法判断是 Key 过期、限流还是网络不通。
+    blocked = _copy_block_state(parsed, model_info, call_error)
 
     built = _build_fields_checked(parsed, schema, profile)
     fields = built["fields"]
+    # 解析成功但一个字段都没落到平台 schema 上（模型用了别的键名 / 返回空对象），
+    # 同样属于「没拿到可用文案」，不能当成「文案不合规」让用户去改文案。
+    if not blocked and not any(
+            (len([x for x in v if str(x).strip()]) if isinstance(v, list) else str(v).strip())
+            for v in fields.values()):
+        who = "%s/%s" % (model_info.get("provider") or "", model_info.get("model") or "")
+        blocked = {"code": "empty_fields", "model": who.strip("/"),
+                   "action": "确认该模型按「平台字段 JSON」输出，必要时更换模型或降低 temperature",
+                   "message": f"文案未生成：模型没有返回任何可用的平台文案字段（{who.strip('/') or '未指定模型'}）。"
+                              "请确认模型按平台字段 JSON 输出，必要时更换模型。"}
     revisions: list[dict] = []
     needs_revision: list[dict] = []
     compress_llm = None
@@ -523,7 +573,7 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
         else:
             fields[key] = value
 
-    for clip in built["clips"]:
+    for clip in ([] if blocked else built["clips"]):
         key, index = clip["field"], clip["index"]
         original, limit = clip["original"], clip["limit"]
         success = False
@@ -532,7 +582,7 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
                 break
             compress_calls += 1
             if compress_llm is None:
-                compress_llm = get_llm_with_info(db, "copy")[0]
+                compress_llm = get_llm_with_info(db, "copy", allow_reuse=True)[0]
             try:
                 cand = await _semantic_compress(compress_llm, key, original, limit,
                                                 lang, profile, attempt)
@@ -559,7 +609,8 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
                               "attempts": COMPRESS_MAX_ATTEMPTS})
 
     # V4.44 / N01：生成后统一校验证据引用与限定保护，与文案是否超长、是否压缩无关
-    claim_audit = audit_copy_fields(fields, analysis)
+    # V4.113：模型没有返回内容时不去跑证据审计——空字段的审计结论会掩盖真正的原因。
+    claim_audit = {} if blocked else audit_copy_fields(fields, analysis)
     for v in (claim_audit.get("violations") or []):
         needs_revision.append({
             "field": v.get("field", ""), "label": labels.get(v.get("field", ""), v.get("field", "")),
@@ -570,6 +621,16 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
             "type": v.get("type"),
         })
     validation = _validate(fields, schema, needs_revision)
+    if blocked:
+        # 状态用 blocked 而不是 invalid：invalid 会被读成「文案写得不合规」，
+        # 实际情况是「模型没跑成功」，两者处理动作完全不同（改文案 vs 修模型配置）。
+        validation = {
+            "valid": False, "ok": False, "status": "blocked",
+            "message": blocked["message"],
+            "issues": [{"level": "error", "code": "model", "message": blocked["message"]}],
+            "problems": [{"level": "error", "field": "模型", "msg": blocked["message"]}],
+            "needs_revision": [], "problem_count": 1,
+        }
     char_rows = _char_table(fields, schema)
     return {
         "platform": platform,
@@ -580,6 +641,8 @@ async def generate_media_copy(db, analysis: dict, platform: str, lang: str = "en
         "char_table": char_rows,
         "validation": validation,
         "model_info": model_info,
+        # V4.113：前端据此直接把真实原因显示在文案工作区，不必再猜「为什么没出文案」。
+        "blocked": blocked,
         "brand": _brand_of(analysis),
         "raw_fields": built["raw_fields"],
         "clips": built["clips"],

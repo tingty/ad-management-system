@@ -814,6 +814,18 @@ async def api_cw_intent_parse(req: CWIntentParseRequest,
     )
 
 
+@router.get("/cw/model-status")
+def api_cw_model_status(db: Session = Depends(get_db),
+                        _: User = Depends(require_roles(*ROLES))):
+    """V4.113：创意工作台的模型自检（只读，不调用模型、不产生费用）。
+
+    V4.113 的真实故障里，用户点「生成」后只看到「文案未生成成功」，无法判断是
+    没配置、Key 过期还是模型返回格式不对。这里在页面打开时就给出三种用途的
+    生效配置与具体原因（含「文案复用分析模型」的如实标注）。
+    """
+    return cw_workshop.workbench_model_status(db)
+
+
 @router.post("/cw/analyze", response_model=CWAnalysisResult)
 async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
                          user: User = Depends(require_roles(*CAN_EDIT))):

@@ -2,6 +2,47 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.113 创意工作台生成修复——模型失败不再静默回退，错误原因与模型自检直接可见
+
+**发布日期**：2026-11-19 17:29
+**变更类型**：缺陷修复 / 优化 / 新增
+**涉及模块**：创意工作台（文案生成链路、失败原因展示、模型自检条、图片任务状态）、素材工作坊（文案卡原因透出）、后端接口（文案模型选配与复用、失败原因映射、只读自检端点）、素材创作平台（文案结果契约）、前端与菜单（结果区提示与样式）、回归测试、发版流程、系统版本
+**变更摘要**：修复创意工作台「生成文案和图片依然报错」且提示无法定位的问题。根因是**模型调用失败被静默换成 Mock 文案**：文案模型返回 401 / 超时 / 限流时，`generate_media_copy` 把异常吞掉并回退本地 Mock；Mock 的键是 `titles` / `descriptions`，与平台 schema（`primary_text` / `headline` / `description` / `cta`）对不上，字段全空后只剩一句「文案未生成成功，请检查模型配置」，用户无法判断是 Key 过期、限流、没配置还是返回格式不对；随后每个图片任务又被记成 `failed`，页面再补一句「请调整媒体或重试」，把用户引向改尺寸 / 换平台，而实际该修的是模型配置。另一个常见成因是真实环境只勾了「分析」用途、没单独勾「文案」用途，`copy` 用途找不到配置就直接回退 Mock。修复后：模型失败一律显式 `blocked` 并给出**具体原因与处理动作**；文案模型缺失时按 `USAGE_REUSE` 复用分析模型且如实标注来源；打开创意工作台即在结果区显示三类用途的模型自检；文案没出来时图片记成「未提交」而非「生成失败」，两条提示分开写。素材工作坊的文案卡读同一份原因，不另写一套话术。同时清掉 `workshop.py` 里被重复定义的旧函数块（`copy_view` / `landing_payload` / `group_targets` / `_first` 各留一份）。
+**更新要点**
+- 【修复】`generate_media_copy` 不再吞异常：新增 `_copy_block_state()`，覆盖「调用抛错 / 回退 Mock / 无可用配置 / 返回非 JSON / 解析成功但零个平台字段」五种失败，统一返回 `validation.status="blocked"`、`blocked.code/message/action/model`，`message` 直接写到页面。
+- 【新增】`providers.LLM_ERROR_TEXT` + `llm_error_text()`：把 `auth` / `rate_limit` / `timeout` / `network` / `upstream` / `init_error` / `invalid_response` 映射成人话原因与可执行建议（如「模型鉴权失败（401 / 403）（千问大模型/qwen-plus）。到「系统设置 → 大模型配置」检查 API Key 与 Base URL，重新点测试连通性」）。
+- 【新增】`get_llm_with_info(..., allow_reuse=True)` 与 `USAGE_REUSE = {"copy": ("analysis",)}`：文案用途没有独立配置时复用同一个文本模型，`model_info.resolved_from` 如实标注，不冒充独立配置；压缩重试链路同步复用。
+- 【修复】`blocked` 时跳过语义压缩与证据审计：空字段的证据结论不再掩盖「模型没跑成功」这个真正原因；`validation` 用 `blocked` 而不是 `invalid`，避免被读成「文案写得不合规」。
+- 【新增】只读自检端点 `GET /api/cw/model-status`：返回分析 / 文案 / 图片三类用途的生效配置、未就绪原因与「文案复用分析模型」标注。自检口径与 `providers._pick_config` 的实际调用行为对齐——工作坊硬门仍要求「测试通过」，创意工作台是既有链路，配置未测试时仍会被真实调用，因此不误报成「未就绪」。
+- 【新增】创意工作台结果区模型自检条（`cwb-model-alert`）：只提示与本次勾选素材类型相关的未就绪项，并给出直达「大模型配置」的入口；文案失败后自动刷新自检。
+- 【修复】逐平台失败原因进入文案工作区（`copyErrors` + `cwb-copy-blocked`），不再只在页面底部堆一句笼统提示；`generateCopy` / 批量生成 / 新一轮生成三处状态都同步该字段。
+- 【修复】文案缺失导致的图片任务状态由 `failed` 改为 `blocked`，结果区单列「以下图片未提交生成」并附真实原因；步骤条把 `blocked` 计入已完成，不再一直停在 running。
+- 【修复】`workshop.copy_view()` 优先读 `result.blocked.message`，素材工作坊与创意工作台展示同一份原因。
+- 【清理】删除 `backend/workshop.py` 中重复定义的第二份「文案整形」块（约 80 行），`group_targets` / `_first` / `copy_view` / `landing_payload` 各保留一份，避免后续改动只命中旧定义。
+**本次优化与更改的功能 / 模块**
+- 【修复】文案生成：`backend/media_ad.py`（`_copy_block_state`、异常保留、`blocked` 结果契约、压缩与审计跳过）
+- 【新增】模型路由：`backend/providers.py`（`USAGE_REUSE`、`allow_reuse`、`LLM_ERROR_TEXT` / `llm_error_text()`、`exception_type` 透出）
+- 【新增】只读自检：`backend/routers.py` 的 `GET /api/cw/model-status`；`backend/workshop.py` 的 `workbench_model_status()` 与重复函数块清理
+- 【修复】素材工作坊：`backend/workshop.py` 的 `copy_view()` 透出同一份 blocked 原因
+- 【修复】创意工作台：`frontend/src/pages/CreativeWorkbench.tsx`（`copyErrors`、模型自检条、逐平台原因、图片未提交区、步骤条计数）；`frontend/src/api.ts` 的 `cwModelStatus()`；`frontend/src/styles.css` 的 `.cwb-model-alert` / `.cwb-copy-blocked`
+- 【新增】专项回归 `tests/test_creative_copy_v4113.py`（9 项）；更新 `tests/test_analysis_contract_v4112.py` 的桩函数签名以适配 `allow_reuse`
+
+**影响范围**
+- 文案：模型配置正常时行为不变；失败时不再伪装成「文案不合规」，而是明确「模型没跑成功 + 具体原因 + 处理动作」。
+- 配置：只勾「分析」用途的环境现在能自动出文案；`model_info.resolved_from` 会标注复用，不产生额外费用。
+- 图片：文案失败时图片是「未提交」，不再误导用户去改尺寸 / 换平台；成功路径与计数口径不变。
+- 界面：结果区新增一条黄色模型自检条（仅在相关用途未就绪时出现）与红色失败原因区；其余布局、下拉路线、勾选、下载等行为不变。
+- **外部依赖（重要）**：若真实环境的 API Key 确实失效（401 / 403），代码无法代为修复，仍需在「系统设置 → 大模型配置」更新 Key / Base URL 并重新点「测试连通性」；本版保证的是「原因可见、可定位、可复用可用模型」，不是替用户改凭据。
+- 工作坊硬门口径未变（仍要求测试通过）；仅创意工作台的自检与其实际调用口径对齐。
+- 数据：本版不改动任何表结构与字段定义，历史已落库的方案 / 文案 / 任务数据无需迁移，可直接重试。
+- 兼容：`blocked` 是新增的返回字段，旧前端忽略即可；`get_llm_with_info` 新增的 `allow_reuse` 为可选关键字参数，其他调用方行为不变。
+
+**验证**
+- 新增 `test_creative_copy_v4113` 9/9：401 变「鉴权失败 + 去改 Key」、无配置变「没有可用的文案模型」、非 JSON 被点名、合法模型输出不被误判 blocked、工作坊文案卡同源、仅配分析模型时复用并标注、前端静态断言、未测试配置的自检口径一致性、`/api/cw/model-status` 端点 200 且返回三类用途。
+- 真实失败场景复现（本地真实模型配置 + 隔离库）：修复前 `model_info.source=mock / fallback=true` 但用户只看到「文案未生成成功」；修复后 `validation.status=blocked`，`message` 明确为「文案未生成：模型鉴权失败（401 / 403）（千问大模型/qwen-plus）。到「系统设置 → 大模型配置」检查 API Key 与 Base URL，重新点测试连通性」。
+- 全量回归 447 项 0 失败 / 0 错误 / 2 跳过；`npx tsc --noEmit` 0 错误；`npm run build` 通过；`python3 -m py_compile` 四个后端文件通过。
+- 真实付费文案 / 出图、真实环境 Key 有效性仍为外部验收项；模拟测试不能替代。
+
 ## V4.112 创意工作台生成修复——真实模型字段形态不再让文案与出图整体失败，10 条路线改为下拉
 
 **发布日期**：2026-11-19 17:05
