@@ -358,9 +358,20 @@ def build_visual_brief(concept: dict, analysis: dict, profile: dict,
     }
 
 
-def brief_prompt_block(brief: dict) -> str:
-    """把 VisualBrief 渲染成文生图提示词段落。概念不同 → 段落字面不同（T05）。"""
+def brief_prompt_block(brief: dict, overlay_mode: str = "") -> str:
+    """把 VisualBrief 渲染成文生图提示词段落。概念不同 → 段落字面不同（T05）。
+
+    V4.102 / C04：纯图片模式（overlay_mode=pure）禁止注入 LAYOUT_COMPOSITION 的
+    copy block / negative space / solid bottom panel 等旧版式指令——它们与 V4.88
+    零文字满版契约「不为未来文案预留大片空位」直接冲突。纯图模式改为一句满版无字
+    描述；叠加模式（图片+文字/按钮）保留原 composition 行为不变。
+    """
     b = brief or {}
+    if str(overlay_mode or "") == "pure":
+        composition_line = ("Composition: full-bleed scene extending to all four edges; "
+                            "no copy block, no reserved text zone, no bottom panel, no text overlay.")
+    else:
+        composition_line = "Composition: %s" % b.get("composition", "")
     lines = [
         "[VisualBrief / F03] concept_id=%s concept_key=%s layout=%s aspect=%s"
         % (b.get("concept_id", ""), b.get("concept_key", ""),
@@ -375,7 +386,7 @@ def brief_prompt_block(brief: dict) -> str:
         "Product facts / scene detail: %s" % (b.get("scene_detail") or "（页面未标注，不虚构）"),
         "Subject asset required: %s (%s)" % (b.get("subject_asset", ""), b.get("asset_requirement", "")),
         "Claim evidence: %s" % ("、".join(b.get("evidence_ids") or []) or "（该概念未绑定可定位原文）"),
-        "Composition: %s" % b.get("composition", ""),
+        composition_line,
         "Facts boundary: %s" % b.get("facts_boundary", ""),
     ]
     return "\n".join(x for x in lines if x.strip())

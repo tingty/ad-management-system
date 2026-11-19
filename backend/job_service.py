@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
-from models import GenerationJob, CreativeAsset, CreationHistory, utcnow
+from models import GenerationJob, CreativeAsset, CreationHistory, CreativeBatch, utcnow
 from schemas import MediaImageRequest
 from media_platforms import (validate_task_matrix, MediaRuleError, SPEC_VERSION)
 from industry_profiles import resolve_profile
@@ -270,6 +270,25 @@ def recover_interrupted() -> int:
         db.close()
 
 
+def _touch_batch_status(db: Session, batch_id: str | None) -> None:
+    """V4.102 / B01：图片任务终态后重算所属 CreativeBatch 状态。
+
+    图片任务（kind=images）由本模块执行，不经过 creative_tasks 的视频 worker，
+    因此其状态变化此前从不触发 _recount，批次滞留 queued。这里用函数内延迟导入
+    规避循环依赖（creative_tasks 顶层已 import 本模块）。重算失败不回滚任务终态，
+    仅记录，不吞掉主流程异常。
+    """
+    if not batch_id:
+        return
+    try:
+        from creative_tasks import _recount
+        batch = db.query(CreativeBatch).filter_by(batch_id=batch_id).first()
+        if batch:
+            _recount(db, batch, commit=True)
+    except Exception as e:  # 批次重算是聚合兜底，不得影响图片任务本身落地
+        db.rollback()
+
+
 async def _set_status(job_id: str, **fields) -> None:
     def _work():
         db = SessionLocal()
@@ -281,6 +300,9 @@ async def _set_status(job_id: str, **fields) -> None:
                 setattr(row, k, v)
             row.updated_at = utcnow()
             db.commit()
+            # V4.102 / B01：进入终态即重算批次，使列表 status / active_count 立即一致。
+            if str(fields.get("status") or "") in TERMINAL:
+                _touch_batch_status(db, row.batch_id)
         finally:
             db.close()
     await asyncio.to_thread(_work)
@@ -525,6 +547,9 @@ def cancel_job(db: Session, job: GenerationJob) -> dict:
         job.finished_at = utcnow()
     job.updated_at = utcnow()
     db.commit()
+    # V4.102 / B01：排队时取消即进入终态，同步重算批次，避免批次滞留 active。
+    if job.status == "canceled":
+        _touch_batch_status(db, job.batch_id)
     return {"ok": True, "job_id": job.job_id, "status": job.status,
             "message": "已请求取消；运行中的任务会在检查点停止并保留已生成素材"}
 

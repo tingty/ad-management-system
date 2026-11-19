@@ -339,6 +339,25 @@ def list_batches(db: Session, user, *, status: str = "", cursor: str = "",
             "active_count": active_count}
 
 
+def recount_all_batches(db: Session) -> int:
+    """V4.102 / B01：可重复执行的批次状态重算迁移。
+
+    历史图片批次在子任务成功后未触发 _recount，status 滞留 queued。本函数对所有批次
+    按当前子任务状态重算（幂等），供启动时调用修复历史数据；不影响正在执行的任务——
+    有 ACTIVE 子任务时 _recount 仍判 running/queued。返回重算了几个批次。
+    """
+    batches = db.query(CreativeBatch).all()
+    changed = 0
+    for batch in batches:
+        before = batch.status
+        _recount(db, batch, commit=False)
+        if batch.status != before:
+            changed += 1
+    if changed:
+        db.commit()
+    return changed
+
+
 def _jobs_of(db: Session, batch_ids: list[str]) -> dict[str, list[GenerationJob]]:
     if not batch_ids:
         return {}

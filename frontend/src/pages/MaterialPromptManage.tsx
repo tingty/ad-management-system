@@ -72,7 +72,9 @@ export default function MaterialPromptManage({ canEdit }: { canEdit: boolean }) 
       // 用当前工作区已保存的产品分析做匹配；无分析时用空对象，后端会给出基础层（行动收口）。
       let analysis: any = {}
       try {
-        const raw = sessionStorage.getItem('cw_session_v1')
+        // V4.102 / B06：与创意工作台实际使用的会话键保持一致（admb_cw_session_v1）。
+        // 旧键 cw_session_v1 已被工作台弃用，读它只会拿到空对象或残留产品。
+        const raw = sessionStorage.getItem('admb_cw_session_v1')
         if (raw) {
           const s = JSON.parse(raw)
           analysis = s?.analysis || s?.cwRes?.analysis || {}
@@ -101,7 +103,9 @@ export default function MaterialPromptManage({ canEdit }: { canEdit: boolean }) 
         psychological_layers: draft.layers.join(','),
       })
       setRows(prev => prev.map(r => r.key === updated.key ? updated : r))
-      setMsg('已保存，下一次生成相关提示词时生效')
+      // V4.102 / B05：三类管理模板仅作沉淀 / 复制，不替换真实生成链路的提示词。
+      // 保存成功只代表模板正文已持久化，不能声称会影响下一次出图出片，避免误导。
+      setMsg('模板已保存（供查阅 / 复制；当前生成链路不读取本模板，不会改变出图出片）')
     } catch (e: any) {
       setMsg('保存失败：' + (e?.message || '未知错误'))
     } finally { setSaving(false) }

@@ -1946,8 +1946,11 @@ async def create_generation_job(body: dict, db: Session = Depends(get_db),
 @router.get("/generation-jobs")
 def list_generation_jobs(history_id: int | None = None, limit: int = 50, offset: int = 0,
                          db: Session = Depends(get_db),
-                         _: User = Depends(require_roles(*CAN_EDIT))):
+                         user: User = Depends(require_roles(*CAN_EDIT))):
+    # V4.102 / S01：通用任务接口按归属过滤；admin 可跨账号，其他角色只看自己。
     q = db.query(GenerationJob)
+    if getattr(user, "role", "") != "admin":
+        q = q.filter(GenerationJob.owner_id == getattr(user, "id", None))
     if history_id is not None:
         q = q.filter(GenerationJob.history_id == history_id)
     lim = max(1, min(int(limit or 50), 200))
@@ -1959,32 +1962,37 @@ def list_generation_jobs(history_id: int | None = None, limit: int = 50, offset:
 
 @router.get("/generation-jobs/{job_id}")
 def get_generation_job(job_id: str, db: Session = Depends(get_db),
-                       _: User = Depends(require_roles(*CAN_EDIT))):
+                       user: User = Depends(require_roles(*CAN_EDIT))):
     """刷新 / 关闭浏览器后按 job_id 恢复：状态、逐项结果与归档信息都在这里。"""
+    return job_service.job_to_dict(_job_row(db, job_id, user), include_result=True)
+
+
+def _job_row(db: Session, job_id: str, user: User | None = None) -> GenerationJob:
+    """V4.102 / S01：详情 / 取消 / 重试统一带归属校验；admin 例外放行。
+
+    普通用户只能读改自己的任务，返回 404 不泄露他人任务是否存在；
+    user 为空时保持旧行为（仅供内部可信调用）。
+    """
     row = db.query(GenerationJob).filter_by(job_id=job_id).first()
     if not row:
         raise HTTPException(404, "生成任务不存在")
-    return job_service.job_to_dict(row, include_result=True)
-
-
-def _job_row(db: Session, job_id: str) -> GenerationJob:
-    row = db.query(GenerationJob).filter_by(job_id=job_id).first()
-    if not row:
+    if (user is not None and getattr(user, "role", "") != "admin"
+            and row.owner_id != getattr(user, "id", None)):
         raise HTTPException(404, "生成任务不存在")
     return row
 
 
 @router.post("/generation-jobs/{job_id}/cancel")
 def cancel_generation_job(job_id: str, db: Session = Depends(get_db),
-                          _: User = Depends(require_roles(*CAN_EDIT))):
-    return job_service.cancel_job(db, _job_row(db, job_id))
+                          user: User = Depends(require_roles(*CAN_EDIT))):
+    return job_service.cancel_job(db, _job_row(db, job_id, user))
 
 
 @router.post("/generation-jobs/{job_id}/retry", status_code=202)
 async def retry_generation_job(job_id: str, db: Session = Depends(get_db),
                                user: User = Depends(require_roles(*CAN_EDIT))):
     """只重试失败子任务：成功项不重复调用模型、不重复归档。"""
-    origin = _job_row(db, job_id)
+    origin = _job_row(db, job_id, user)
     job, message = job_service.retry_failed(db, origin, user)
     if job is None:
         raise HTTPException(409, detail={"message": message, "job_id": job_id})

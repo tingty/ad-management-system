@@ -6,3 +6,4 @@ httpx==0.27.2
 python-multipart==0.0.12
 pillow>=10.2
 fonttools>=4.38         # 精确字形覆盖检测，避免缺字字符被渲染成豆腐块
+imageio-ffmpeg>=0.5.1   # V4.102 / Q02：成片视觉复核抽帧依赖；Dockerfile 只装本文件，缺失会导致容器审核降级为 unavailable

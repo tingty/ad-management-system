@@ -717,7 +717,9 @@ def _media_image_prompt(analysis: dict, platform: str, config: dict,
         blocks.append(style_block.strip())
     if brief:
         # F03：先确定概念再写画面；同一 concept_key 跨尺寸保持承诺一致
-        blocks.append(brief_prompt_block(brief))
+        # V4.102 / C04：纯图模式传入 overlay_mode，避免 brief 里的旧版式 composition
+        # 与零文字满版契约互相打架。
+        blocks.append(brief_prompt_block(brief, overlay_mode=overlay_mode))
     # V4.88：文档提示词契约。纯图片追加无字 / 满版主模板；叠加模式只追加底线约束。
     contract = contract or build_prompt_contract(
         media_type="image", analysis=analysis, brief=brief,
@@ -1024,9 +1026,17 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 "concept_id", "concept_key", "layout", "subject", "action",
                 "setting", "core_promise", "evidence", "reference_mode",
                 "capability_note")}
+            # V4.102 / B03：逐图分支（成功 / 回退 / 文案超预算 / 渲染失败 / 内容拦截 /
+            # 任务异常）统一携带可定位字段与脱敏错误，避免 task_index=null 导致
+            # 预登记子任务永远停在 running、失败原因被 content_check 覆盖。
             common = {"size": t["size"], "placement": t["placement"],
                       "variant": t["vlabel"], "concept_id": meta["concept_id"],
                       "batch_id": batch_id, **meta,
+                      "task_index": t["idx"],
+                      "target_id": f"{t['placement']}::{t['size']}",
+                      "route_id": str((t.get("brief") or {}).get("route_key")
+                                      or meta.get("concept_id", "")),
+                      "stage": "image_render",
                       "visual_brief": brief_view,
                       "creative_config": cfg_snapshot}
             bg_path = None
@@ -1103,6 +1113,9 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                 return {"__skipped__": {
                     **common, "status": "needs_attention",
                     "reason": content_check.get("reason") or "检测到纯色 / 无画面图片，未交付",
+                    # V4.102 / B03：供应商失败与「兜底图被内容检查拒绝」分成两条原因，
+                    # 不互相覆盖；无供应商错误时留空，便于分项重试精确定位。
+                    "provider_error": provider_error,
                     "content_check": content_check,
                     "ai_background": ai_ok,
                     "fallback": not ai_ok,
@@ -1220,6 +1233,8 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             "file": "", "ai_background": False, "fallback": True,
             "error": s.get("reason", ""), "retries": s.get("retries", 0),
             "batch_id": batch_id, "task_index": s.get("task_index"),
+            "target_id": s.get("target_id", ""), "route_id": s.get("route_id", ""),
+            "stage": s.get("stage", ""), "provider_error": s.get("provider_error", ""),
             "layout": s.get("layout", ""), "prompt_hash": s.get("prompt_hash", ""),
             "creative_config_id": s.get("creative_config_id", ""),
         } for s in skipped] + [{

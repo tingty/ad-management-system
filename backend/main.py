@@ -252,6 +252,18 @@ def on_startup():
     n = recover_interrupted()
     if n:
         print(f"[jobs] 重启后回收 {n} 个中断任务（状态已标为 failed，可用分项重试）")
+    # V4.102 / B01：重算历史批次状态（修复子任务已 succeeded 但批次滞留 queued 的旧数据）。
+    # 必须在 recover_interrupted 之后执行；幂等，可重复安全运行。
+    from creative_tasks import recount_all_batches
+    _db = SessionLocal()
+    try:
+        fixed = recount_all_batches(_db)
+        if fixed:
+            print(f"[batches] 启动重算修正 {fixed} 个批次状态")
+    except Exception as e:
+        print(f"[batches] 批次重算跳过：{type(e).__name__}: {e}")
+    finally:
+        _db.close()
 
 
 @app.on_event("startup")
