@@ -43,9 +43,10 @@ from creation_plan_service import (
     create_plan, set_coverage, confirm_plan, attach_job, finalize,
     get_plan, plan_to_dict,
 )
-# V4.98：素材提示管理（三类通用模板 / 六层心理链条 / 变量来源）
+# V4.98 / V4.100：提示词管理（三类通用模板 / 六层心理链条 / 变量来源）
 from material_prompt_manage import (
-    MODULE as MATERIAL_PROMPT_MODULE, PROMPT_TYPES, PSYCHOLOGICAL_LAYERS,
+    MODULE as MATERIAL_PROMPT_MODULE, LEGACY_MODULE as MATERIAL_PROMPT_LEGACY_MODULE,
+    PROMPT_TYPES, PSYCHOLOGICAL_LAYERS,
     variables_of as material_variables_of, auto_match_layers,
 )
 from version import ENABLE_AUTO_CREATION_PLAN
@@ -2373,7 +2374,11 @@ def list_prompts(db: Session = Depends(get_db),
     out = []
     for item in PROMPT_REGISTRY:
         if module and item.get("module") != module:
-            continue
+            # V4.100：旧模块名「素材提示管理」等价于新模块名「提示词管理」，
+            # 兼容旧缓存 / 外部筛选调用；模板按 key 读写，用户已保存内容不受影响。
+            if not (module == MATERIAL_PROMPT_LEGACY_MODULE
+                    and item.get("module") == MATERIAL_PROMPT_MODULE):
+                continue
         if func_type and item.get("func_type") != func_type:
             continue
         if usage_type and item.get("usage_type") != usage_type:
@@ -2542,7 +2547,7 @@ def update_prompt(key: str, req: PromptUpdate, db: Session = Depends(get_db),
         row.func_type = req.func_type
     if req.usage_type is not None:
         row.usage_type = req.usage_type
-    # V4.98：素材提示管理的一句意图与六层心理链条
+    # V4.98 / V4.100：提示词管理的一句意图与六层心理链条
     if req.intent is not None:
         row.intent = req.intent
     if req.psychological_layers is not None:
@@ -2588,12 +2593,13 @@ def reset_prompt(key: str, db: Session = Depends(get_db),
     return row
 
 
-# ----------------------------- V4.98 素材提示管理 -----------------------------
+# ----------------------------- V4.98 / V4.100 提示词管理 -----------------------------
 @router.get("/settings/material-prompts/meta")
 def material_prompt_meta(_: User = Depends(require_roles(*ROLES))):
     """三类提示词类型、六层心理链条、以及每类模板的真实变量来源（供页面渲染，无需改代码即可展示）。"""
     return {
         "module": MATERIAL_PROMPT_MODULE,
+        "legacy_module": MATERIAL_PROMPT_LEGACY_MODULE,
         "types": PROMPT_TYPES,
         "layers": PSYCHOLOGICAL_LAYERS,
         "variables": {t["key"]: material_variables_of(t["key"]) for t in PROMPT_TYPES},

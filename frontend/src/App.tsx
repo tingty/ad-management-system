@@ -44,7 +44,7 @@ const GROUP_WORKBENCH: NavGroup = {
       desc: '分析 Meta / Google / Unity / Adsterra 等大媒体上最具创意与转化效果的素材，归类创意风格与类型，并产出可直接调用的图片 / 视频提示词模板。' },
     { key: 'speclibrary', label: '素材标准库', icon: 'tags',
       desc: '图片与视频素材规格的唯一标准来源，逐平台逐广告产品列出尺寸、比例、格式、大小、时长与伴随素材，并标注官方核验状态与来源；生成链路直接引用，展示与生成始终一致。' },
-    { key: 'materialprompts', label: '素材提示管理', icon: 'filetext',
+    { key: 'materialprompts', label: '提示词管理', icon: 'filetext',
       desc: '统一管理文案 / 图片 / 视频三类通用提示词：每条有一句话意图、可勾选的六层心理链条、带变量的中文模板；变量来自系统实际生成逻辑，可按产品分析自动匹配覆盖层级。' },
     { key: 'history', label: '素材历史', icon: 'history',
       desc: '归档已分析整理的网站、广告文案与推广图片；可放大查阅、单张或打包再下载，并支持批量删除历史信息' },
@@ -110,8 +110,9 @@ function tabFromHash(): Tab | null {
 
 function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
+  // V4.100：materialprompts 必须列入白名单，否则点击后被下方校验重定向回工作台。
   return [
-    ...(canEdit ? (['workbench', 'creativeanalysis', 'speclibrary', 'history'] as Tab[]) : []),
+    ...(canEdit ? (['workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history'] as Tab[]) : []),
     ...(user.role === 'admin' ? (['llm', 'accounts', 'logs'] as Tab[]) : []),
     // 「新版通知」对所有角色开放，方便用户随时查阅每次优化与变更的版本内容
     'releasenotes',

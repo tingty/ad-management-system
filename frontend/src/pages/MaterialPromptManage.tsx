@@ -3,7 +3,7 @@ import { api } from '../api'
 import type { PromptConfig, MaterialPromptMeta, LayerMatchResult } from '../api'
 
 /**
- * V4.98 · 素材提示管理（创意工作台二级菜单）
+ * V4.98 / V4.100 · 提示词管理（创意工作台二级菜单）
  *
  * 三类通用提示词模板：文案 / 图片 / 视频。每类展示：
  *   1. 一句话意图（intent）——这条提示词想表达什么；
@@ -11,7 +11,7 @@ import type { PromptConfig, MaterialPromptMeta, LayerMatchResult } from '../api'
  *      支持「按产品分析自动匹配」与「全选六层」；
  *   3. 中文带变量模板，变量严格对应系统真实生成逻辑（后端给变量来源说明，不臆造）。
  *
- * 数据来自后端 /api/settings/prompts?module=素材提示管理 + /material-prompts/meta，
+ * 数据来自后端 /api/settings/prompts?module=提示词管理 + /material-prompts/meta，
  * 与生成链路共用同一注册表；管理员编辑保存即生效（下一次进入页面读到新内容）。
  */
 const keyOfType: Record<string, string> = {
@@ -31,10 +31,10 @@ export default function MaterialPromptManage({ canEdit }: { canEdit: boolean }) 
 
   const load = async () => {
     try {
-      const [m, list] = await Promise.all([
-        api.materialPromptMeta(),
-        api.prompts('素材提示管理'),
-      ])
+      // V4.100：模块名从后端元数据读取，页面改名后不再依赖写死的字符串；
+      // 旧模块名仍由后端兼容查询，不影响已保存模板。
+      const m = await api.materialPromptMeta()
+      const list = await api.prompts(m.module)
       setMeta(m)
       setRows(list)
     } catch (e: any) {
@@ -134,7 +134,7 @@ export default function MaterialPromptManage({ canEdit }: { canEdit: boolean }) 
     <div className="mpm">
       <div className="mpm-head">
         <div>
-          <h2>素材提示管理</h2>
+          <h2>提示词管理</h2>
           <p className="muted">统一管理文案 / 图片 / 视频三类通用提示词：一句话意图、心理链条覆盖、带变量的中文模板。变量均来自系统实际生成逻辑。</p>
         </div>
       </div>

@@ -85,7 +85,7 @@ class TestMaterialPromptPure(unittest.TestCase):
         self.assertEqual(r2["layers"], ["cta"], "空分析只保留行动收口")
 
     def test_08_registry_integration(self):
-        keys = {p["key"] for p in PROMPT_REGISTRY if p.get("module") == "素材提示管理"}
+        keys = {p["key"] for p in PROMPT_REGISTRY if p.get("module") == "提示词管理"}
         self.assertEqual(keys, {"material_prompt_copy", "material_prompt_image", "material_prompt_video"})
         self.assertEqual(len(material_prompt_entries()), 3)
 
@@ -116,7 +116,7 @@ class TestMaterialPromptApi(unittest.TestCase):
         self.assertIn("copy", d["variables"])
 
     def test_10_prompts_by_module(self):
-        r = self.client.get("/api/settings/prompts?module=素材提示管理", headers=self.auth)
+        r = self.client.get("/api/settings/prompts?module=提示词管理", headers=self.auth)
         self.assertEqual(r.status_code, 200, r.text)
         d = r.json()
         self.assertEqual(len(d), 3)
@@ -133,7 +133,7 @@ class TestMaterialPromptApi(unittest.TestCase):
 
     def test_12_edit_intent_and_layers_persist(self):
         key = "material_prompt_copy"
-        before = self.client.get("/api/settings/prompts?module=素材提示管理", headers=self.auth).json()
+        before = self.client.get("/api/settings/prompts?module=提示词管理", headers=self.auth).json()
         row = next(x for x in before if x["key"] == key)
         r = self.client.put(f"/api/settings/prompts/{key}", headers=self.auth, json={
             "content": row["content"], "intent": "测试意图",

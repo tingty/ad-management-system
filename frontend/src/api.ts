@@ -134,12 +134,13 @@ export interface PromptConfig {
   updated_at?: string | null
 }
 
-/** V4.98 素材提示管理：类型 / 六层心理链条 / 变量来源 */
+/** V4.98 / V4.100 提示词管理：类型 / 六层心理链条 / 变量来源 */
 export interface PsychLayer { key: string; label: string; desc: string }
 export interface PromptTypeMeta { key: string; label: string; desc: string }
 export interface PromptVariable { name: string; source: string }
 export interface MaterialPromptMeta {
   module: string
+  legacy_module?: string
   types: PromptTypeMeta[]
   layers: PsychLayer[]
   variables: Record<string, PromptVariable[]>
@@ -1208,7 +1209,7 @@ export const api = {
     req<PromptConfig>(`/api/settings/prompts/${key}`, { method: 'PUT', body: JSON.stringify(payload) }),
   resetPrompt: (key: string) =>
     req<PromptConfig>(`/api/settings/prompts/${key}/reset`, { method: 'POST' }),
-  // V4.98 素材提示管理：元数据 + 心理链条自动匹配
+  // V4.98 / V4.100 提示词管理：元数据 + 心理链条自动匹配
   materialPromptMeta: () => req<MaterialPromptMeta>('/api/settings/material-prompts/meta'),
   matchLayers: (analysis: any) => req<LayerMatchResult>('/api/settings/material-prompts/match-layers',
     { method: 'POST', body: JSON.stringify({ analysis }) }),

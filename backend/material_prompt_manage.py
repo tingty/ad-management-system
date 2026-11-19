@@ -1,4 +1,4 @@
-"""V4.98「素材提示管理」：三类通用提示词模板 + 六层心理链条 + 变量来源。
+"""V4.98「提示词管理」：三类通用提示词模板 + 六层心理链条 + 变量来源。
 
 设计约束（需求硬要求）
 ----------------------
@@ -15,7 +15,7 @@
      PRODUCT / PROMOTION_GOAL / SELLING_POINTS / DURATION / ASPECT / SHOTS /
      EVIDENCE_CONTEXT / PROMPT_HINT（视频链路为结构化拼装，此处以 [[VAR]] 表达同一批字段）。
 
-三条模板注册进 PROMPT_REGISTRY（module=素材提示管理），走既有的编辑 / 保存即生效机制；
+三条模板注册进 PROMPT_REGISTRY（module=提示词管理），走既有的编辑 / 保存即生效机制；
 它们是「管理 / 沉淀 / 复制」用的通用模板，不替换现有生成链路的提示词（不改既有出图出片行为）。
 """
 from __future__ import annotations
@@ -103,7 +103,10 @@ VIDEO_TEMPLATE_CN = (
     "任何数字与承诺必须能在证据契约中定位，不编造；品牌字样不在画面绘制，由后期叠加。"
 )
 
-MODULE = "素材提示管理"
+MODULE = "提示词管理"
+# V4.100：旧模块名仅作查询兼容（老缓存 / 外部按旧名筛选仍能取到同一批模板），
+# 新数据与新菜单统一使用 MODULE；模板按 key 存储与更新，改名不丢用户已保存内容。
+LEGACY_MODULE = "素材提示管理"
 
 MATERIAL_PROMPTS: list[dict] = [
     {
@@ -111,7 +114,7 @@ MATERIAL_PROMPTS: list[dict] = [
         "category": "文案提示词", "func_type": "copy", "usage_type": "system",
         "intent": "用真实落地页结论和平台规则，生成可直接投放、字段与字数都合规的广告文案。",
         "psychological_layers": "desire,proof,attribution,decision,cta",
-        "description": "V4.98 通用中文模板；变量严格对应文案生成链路。可编辑，保存后在「素材提示管理」生效。",
+        "description": "V4.98 通用中文模板；变量严格对应文案生成链路。可编辑，保存后在「提示词管理」生效。",
         "content": COPY_TEMPLATE_CN,
     },
     {
@@ -119,7 +122,7 @@ MATERIAL_PROMPTS: list[dict] = [
         "category": "图片提示词", "func_type": "image", "usage_type": "system",
         "intent": "按产品分析与平台规格生成零文字、可叠加文案的广告背景视觉，用画面呈现产品价值。",
         "psychological_layers": "pain,desire,proof,attribution",
-        "description": "V4.98 通用中文模板；变量严格对应文生图链路。可编辑，保存后在「素材提示管理」生效。",
+        "description": "V4.98 通用中文模板；变量严格对应文生图链路。可编辑，保存后在「提示词管理」生效。",
         "content": IMAGE_TEMPLATE_CN,
     },
     {
@@ -127,7 +130,7 @@ MATERIAL_PROMPTS: list[dict] = [
         "category": "视频提示词", "func_type": "video", "usage_type": "system",
         "intent": "把分镜与证据契约编译成可直接出片的提示词，确保有真实动态、零画面文字与合规承诺。",
         "psychological_layers": "pain,desire,proof,cta",
-        "description": "V4.98 通用中文模板；变量对应视频请求构建函数的真实字段。可编辑，保存后在「素材提示管理」生效。",
+        "description": "V4.98 通用中文模板；变量对应视频请求构建函数的真实字段。可编辑，保存后在「提示词管理」生效。",
         "content": VIDEO_TEMPLATE_CN,
     },
 ]
