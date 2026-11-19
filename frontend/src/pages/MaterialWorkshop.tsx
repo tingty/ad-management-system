@@ -242,6 +242,9 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
 
   const models = opt?.models?.items || []
   const modelReady = (usage: string) => !!models.find(m => m.usage === usage)?.ready
+  // V4.109：未就绪要带上具体原因（未配置 / 已停用 / 要素不全 / 未测试 / 测试失败），
+  // 否则真实环境里「配了图片模型但没点测试」会被读成「系统看不到这条配置」。
+  const modelReason = (usage: string) => models.find(m => m.usage === usage)?.reason || ''
   const copyReady = modelReady('analysis') && modelReady('copy')
   const imageReady = modelReady('image')
   // 图片模型缺失时降级为「只出文案」：不阻断工作坊，也不假装出图
@@ -297,7 +300,10 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
 
         {opt && !copyReady && (
           <div className="ws-notice">
-            <span>{(opt.models.missing || []).join('、')} 未就绪</span>
+            <span>
+              {(opt.models.items || []).filter(m => !m.ready)
+                .map(m => `${m.label}未就绪（${m.reason}）`).join('；')}
+            </span>
             {canManageModels
               ? <button type="button" className="btn ghost small" onClick={onOpenModels}>大模型配置</button>
               : <span className="ws-muted">请联系管理员</span>}
@@ -305,7 +311,7 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
         )}
         {opt && copyReady && !imageReady && (
           <div className="ws-notice">
-            <span>图片模型未就绪，本次只出文案</span>
+            <span>图片模型未就绪（{modelReason('image') || '未配置'}），本次只出文案</span>
             {canManageModels
               ? <button type="button" className="btn ghost small" onClick={onOpenModels}>配置图片模型</button>
               : <span className="ws-muted">请联系管理员</span>}

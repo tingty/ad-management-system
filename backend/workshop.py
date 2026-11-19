@@ -68,27 +68,60 @@ def _cfg_view(cfg, usage: str, reason: str = "") -> dict:
     }
 
 
+def _rows_serving(db, usage: str) -> list:
+    """所有「勾了这个用途」的配置行（含停用 / 不完整的），仅用于给出准确原因。"""
+    from models import ModelConfig
+    from providers import _usages_of
+
+    return [c for c in db.query(ModelConfig).all() if usage in _usages_of(c)]
+
+
+def _reason_of(db, usage: str, cfg) -> str:
+    """未就绪的**具体**原因：区分「没配」「配了但停用」「配了但要素不全」「没测过」「测了没过」。
+
+    V4.109：原来只有一句「未配置」，真实环境里「已经配了图片模型、只是没点过测试」
+    会被误读成系统看不到这条配置。排查时最需要的正是这几句差别。
+    """
+    from providers import _usable
+
+    if cfg is None:
+        rows = _rows_serving(db, usage)
+        if not rows:
+            return "未配置"
+        active = [c for c in rows if c.is_active]
+        if not active:
+            return "已配置但已停用"
+        if not any(_usable(c) for c in active):
+            return "配置不完整（缺少 Key / 地址 / 模型）"
+        if all(c.last_test_ok is False for c in active):
+            return "最近一次连通测试未通过"
+        return "尚未测试通过"
+    if not _usable(cfg):
+        return "配置不完整（缺少 Key / 地址 / 模型）"
+    if cfg.last_test_ok is not True:
+        return "最近一次连通测试未通过" if cfg.last_test_ok is False else "尚未测试通过"
+    return ""
+
+
 def model_status(db) -> dict:
     """三种用途当前生效配置的「可用 / 未就绪」状态。
 
     `ready` 只有在「配置存在 + 三要素完整 + 最近一次连通测试成功」时才是 True；
     未测试（last_test_ok is None）同样按未就绪处理——工作坊不拿没验证过的模型跑真实费用。
+    未就绪时 `reason` 必须具体到「停用 / 要素不全 / 未测试 / 测试失败」，便于在真实
+    环境里一眼定位是配置问题还是测试问题；`candidates` 给出该用途被勾选的配置条数。
     """
-    from providers import _active_config, get_image, _usable
+    from providers import _active_config, get_image
 
     items = []
     for usage in ("analysis", "copy", "image"):
         cfg = _active_config(db, usage)
-        reason = ""
-        if cfg is None:
-            reason = "未配置"
-        elif not _usable(cfg):
-            reason = "配置不完整（缺少 Key / 地址 / 模型）"
-        elif cfg.last_test_ok is not True:
-            reason = "尚未测试通过"
-        elif usage == "image" and get_image(db) is None:
-            reason = "图片模型不可用"
-        items.append(_cfg_view(cfg, usage, reason))
+        reason = _reason_of(db, usage, cfg)
+        if not reason and usage == "image" and get_image(db) is None:
+            reason = "图片模型不可用（协议未识别）"
+        item = _cfg_view(cfg, usage, reason)
+        item["candidates"] = len(_rows_serving(db, usage))
+        items.append(item)
     missing = [i["label"] for i in items if not i["ready"]]
     return {"items": items, "ready": not missing, "missing": missing}
 

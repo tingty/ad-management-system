@@ -1715,13 +1715,25 @@ class DashScopeMaaSImageProvider(ImageProvider):
 
 # ----------------------------- 工厂（按用途返回激活 provider） -----------------------------
 def _usages_of(cfg) -> list:
-    """兼容新旧两种存储：新配置存 usages(JSON 数组)，旧配置存 usage(单字符串)。"""
-    u = cfg.usages if cfg.usages is not None else cfg.usage
-    if isinstance(u, list):
-        return [str(x) for x in u if x]
-    if u:
-        return [str(u)]
-    return []
+    """兼容新旧两种存储：新配置存 usages(JSON 数组)，旧配置存 usage(单字符串)。
+
+    V4.109：两列取**并集**，不再二选一。此前 `usages` 存在但为空数组（编辑时取消了
+    全部勾选、或历史迁移写入 `[]`）会盖掉仍有内容的 `usage` 列，真实环境里表现为
+    「明明配了图片模型，系统却按未配置处理」。
+    """
+    out: list[str] = []
+    for v in (getattr(cfg, "usages", None), getattr(cfg, "usage", None)):
+        if isinstance(v, list):
+            out.extend(str(x) for x in v if x)
+        elif v:
+            out.append(str(v))
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for u in out:
+        if u not in seen:
+            seen.add(u)
+            uniq.append(u)
+    return uniq
 
 def _usable(cfg) -> bool:
     """配置具备真实调用的最少三要素（缺任一项只能退回 Mock）。"""

@@ -821,6 +821,8 @@ export interface WorkshopModelStatus {
   model: string
   config_id: number | null
   last_test_at: string | null
+  /** V4.109：该用途被勾选的配置条数（0 = 真的没配，>0 = 配了但不可用） */
+  candidates?: number
 }
 export interface WorkshopSize {
   size: string; aspect: string; label: string
