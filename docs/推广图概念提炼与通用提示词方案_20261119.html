@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>推广图概念提炼与通用提示词方案（Homestyler 参考图 · 2026-11-19）</title>
+<style>
+  :root{
+    --ink:#141a22; --ink-2:#374151; --muted:#6b7280; --line:#e2e8f0;
+    --bg:#f5f7fa; --card:#fff; --brand:#1f5fa8; --brand-soft:#eaf2fb;
+    --amber:#b45309; --amber-soft:#fff7ed; --ok:#0f6e56; --ok-soft:#e1f5ee;
+    --bad:#b42318; --bad-soft:#fef3f2; --purple:#534ab7; --purple-soft:#eeedfe;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 22px 80px}
+  header.hero{background:linear-gradient(135deg,#2b2b2b,#4a3b1e 60%,#8a6a12);color:#fff;
+    border-radius:16px;padding:30px 32px;box-shadow:0 10px 28px rgba(20,20,20,.16)}
+  header.hero h1{margin:0 0 8px;font-size:25px;line-height:1.35}
+  header.hero .sub{color:#f0e2b8;font-size:13.5px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .meta span{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);
+    padding:4px 10px;border-radius:999px;font-size:12px;color:#fff}
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px;margin-top:20px}
+  h2{font-size:19px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line);color:#8a6a12}
+  h3{font-size:15.5px;margin:22px 0 8px;color:var(--ink)}
+  h4{font-size:14px;margin:16px 0 6px;color:var(--brand)}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0 8px 20px;padding:0}
+  li{margin:5px 0}
+  code{background:#f1f4f8;border:1px solid #e3e9f0;border-radius:5px;padding:1px 5px;font-size:12.5px;
+    overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#1d4ed8}
+  .lead{background:var(--amber-soft);border-left:4px solid var(--amber);border-radius:8px;padding:12px 16px;margin:12px 0}
+  .note{background:var(--brand-soft);border-left:4px solid var(--brand);border-radius:8px;padding:12px 16px;margin:12px 0}
+  .warn{background:var(--bad-soft);border-left:4px solid var(--bad);border-radius:8px;padding:12px 16px;margin:12px 0}
+  .good{background:var(--ok-soft);border-left:4px solid var(--ok);border-radius:8px;padding:12px 16px;margin:12px 0}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top;text-align:left;word-break:break-word;overflow-wrap:anywhere}
+  th{background:#f8fafc;font-weight:600;color:var(--ink-2)}
+  .steps{counter-reset:s;list-style:none;margin-left:0;padding-left:0}
+  .steps li{position:relative;padding-left:34px;margin:10px 0}
+  .steps li:before{counter-increment:s;content:counter(s);position:absolute;left:0;top:1px;width:24px;height:24px;
+    background:var(--brand-soft);color:var(--brand);border-radius:50%;font-size:12px;font-weight:600;text-align:center;line-height:24px}
+  .codebox{position:relative;background:#0f172a;color:#e2e8f0;border-radius:10px;padding:16px 18px;margin:10px 0;
+    font:12.5px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+  .codebox .cp{position:absolute;top:8px;right:8px;background:#334155;color:#e2e8f0;border:1px solid #475569;
+    border-radius:6px;padding:3px 9px;font-size:11px;cursor:pointer}
+  .codebox .cp:hover{background:#475569}
+  .tag{display:inline-block;font-size:11.5px;padding:2px 8px;border-radius:999px;margin:0 4px 4px 0}
+  .tag.b{background:var(--brand-soft);color:var(--brand)}
+  .tag.a{background:var(--amber-soft);color:var(--amber)}
+  .tag.g{background:var(--ok-soft);color:var(--ok)}
+  .tag.p{background:var(--purple-soft);color:var(--purple)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .mini{background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:14px}
+  .mini b{color:var(--brand)}
+  footer{color:var(--muted);font-size:12px;text-align:center;margin-top:26px}
+  @media print{body{background:#fff}header.hero{box-shadow:none}.codebox{background:#f4f6f9;color:#111;border:1px solid #ccc}.cp{display:none}section{break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>推广图概念提炼与通用提示词方案</h1>
+  <div class="sub">基于 Homestyler「Turn Any Room into Your Dream Space」参考图，沉淀可迁移到任意产品的「改变前后对比」素材骨架</div>
+  <div class="meta">
+    <span>参考图：HOMESTYLER 家居设计 App</span>
+    <span>核心概念：Transformation 改变可视化</span>
+    <span>产出日期：2026-11-19</span>
+    <span>用途：创意工作台 / 批量出图提示词</span>
+  </div>
+</header>
+
+<section>
+  <h2>一、这张图到底在表达什么</h2>
+  <div class="lead">
+    <b>一句话概念：</b>它不卖功能，卖「改变」。把空房间变成梦想客厅的落差本身当作证据——用户先看到结果，再被告诉「这个结果用我们的工具就能做到」。
+  </div>
+  <p>这条广告的心理链条是标准的效果广告结构，六层缺一不可：</p>
+  <ol class="steps">
+    <li><b>痛点识别</b>：Before 面板是一个空荡、冷调、没有生气的房间——用户立刻认出「这是我家/我空间的现状」。</li>
+    <li><b>渴望激发</b>：After 面板是暖光、绿植、精致陈设的理想客厅，主标题把渴望命名为 <code>Dream Space</code>，并用黄色高亮加下划线锁定视线。</li>
+    <li><b>可信证据</b>：斜切分割 + 黄色箭头把 Before 与 After 绑成一条因果线；中间的「落差」就是产品价值的视觉证明，不需要一句解释。</li>
+    <li><b>能力归因</b>：左下角笔记本里的 2D / 3D 界面，把「这个漂亮结果」归因到软件能力，而不是请了设计师——这是从「心动」到「可信」的关键一跳。</li>
+    <li><b>决策降本</b>：三个图标 + 短句（规划与设计 / 实时 3D / 高清渲染）把复杂产品压缩成三个可记住的理由。</li>
+    <li><b>行动收口</b>：黄色涂鸦标语 + 胶囊按钮 <code>Get Started Free →</code>，用「免费」消除最后一步风险。</li>
+  </ol>
+  <div class="note"><b>可迁移的本质：</b>「一个可视觉化的改变 + 一张证明能做到它的产品界面 + 三个理由 + 一个低风险行动」。任何有「前后状态差异」的产品都能套用：健身（体态）、教育（能力）、护肤（肤质）、修图（画面）、装修（空间）、汽车美容（车况）……</div>
+</section>
+
+<section>
+  <h2>二、通用提示词模板（英文 · 带变量）</h2>
+  <p>这是核心资产：<b>结构写死、内容留空</b>。把 <code>{{变量}}</code> 替换成具体产品信息即可复用。建议英文喂给模型，中文变量值一并给出也可。</p>
+
+  <h3>2.1 主提示词 · 完整版（画面含文字）</h3>
+  <div class="codebox"><button class="cp">复制</button>Square 1:1 promotional display ad for {{PRODUCT_CATEGORY}} app "{{BRAND_NAME}}".
+Photorealistic premium commercial advertising, cinematic warm lighting, 8k, octane render, ultra-detailed, shallow depth of field.
+
+COMPOSITION (layered depth, read top-to-bottom):
+1. Top-left: clean dark negative space reserved for the "{{BRAND_NAME}}" logotype (logo added later).
+2. Headline zone: a large bold two-line headline "{{HEADLINE_LINE_1}} {{HEADLINE_LINE_2}}"; render the key phrase "{{HIGHLIGHT_PHRASE}}" in {{ACCENT_COLOR}} with a hand-drawn brush underline.
+3. Center hero — a dramatic DIAGONAL SPLIT-SCREEN "BEFORE / AFTER" comparison:
+   - LEFT "BEFORE": {{BEFORE_STATE}}, dull flat cool light, slightly desaturated.
+   - RIGHT "AFTER": {{AFTER_STATE}}, vivid warm inviting aspirational, soft glow.
+   - A bold {{ACCENT_COLOR}} curved arrow sweeping from BEFORE to AFTER across the diagonal.
+4. Lower-left: a tilted laptop/device mockup showing the product UI — {{UI_INTERFACE}} with {{UI_DETAILS}}, clean and legible.
+5. Lower-right: three minimal line icons in a row, each with a short label: "{{BENEFIT_1}}", "{{BENEFIT_2}}", "{{BENEFIT_3}}".
+6. Bottom: a hand-painted {{ACCENT_COLOR}} brush-stroke banner carrying tagline "{{TAGLINE}}"; beneath it a rounded pill CTA button "{{CTA_TEXT}} →".
+
+COLOR &amp; LIGHT:
+Deep charcoal-to-warm gradient base, dark at upper-left, warm at lower-right. Accent {{ACCENT_COLOR}} used ONLY on highlight, arrow, banner and CTA. Warm ambient glow on the AFTER side; soft green foliage with bokeh in foreground corners for depth. High dynamic range, soft shadows, commercial retouching.
+
+STYLE: photorealistic advertising photography, editorial quality, aspirational, clean, high-contrast, brand-safe.</div>
+
+  <h3>2.2 主提示词 · 画面零文字版（推荐，配合后期叠加）</h3>
+  <div class="warn"><b>为什么推荐这一版：</b>品牌名与文案交给图像模型直接绘制，极易出现错拼、缺笔、糊字（本项目 V4.93 已实测确认）。专业做法是让模型只画画面、预留干净的文字区，品牌字样与文案用设计工具 / DOM 层精确叠加，原图零文字、可复用、可改字。这与本项目「三道防线」一致。</div>
+  <div class="codebox"><button class="cp">复制</button>Square 1:1 promotional ad BACKGROUND for {{PRODUCT_CATEGORY}} brand "{{BRAND_NAME}}".
+Photorealistic premium commercial advertising, cinematic warm lighting, 8k, octane render, ultra-detailed.
+
+NO TEXT ANYWHERE — do NOT render any letters, words, numbers, logos, captions or UI text. Keep every label zone clean and empty for later overlay.
+
+COMPOSITION (text-free, layout only):
+1. Upper-left: clean dark negative space for later logo placement.
+2. Upper band: open dark area with enough breathing room for a large two-line headline overlay.
+3. Center: dramatic DIAGONAL SPLIT-SCREEN — LEFT panel {{BEFORE_STATE}} dull cool flat; RIGHT panel {{AFTER_STATE}} vivid warm aspirational; a bold {{ACCENT_COLOR}} curved shape/arrow pointing left-to-right across the diagonal (graphic shape only, no label text).
+4. Lower-left: a tilted laptop/device mockup, its screen showing an abstract clean UI layout with blank panels (no text, no words).
+5. Lower-right: three simple line icons, unlabeled.
+6. Bottom: a hand-painted {{ACCENT_COLOR}} brush-stroke band (empty), and below it a blank rounded pill shape for a CTA button.
+
+COLOR &amp; LIGHT: deep charcoal-to-warm gradient base; {{ACCENT_COLOR}} only on arrow, brush band and pill; warm glow on AFTER side; soft green foliage bokeh in foreground corners; high-contrast, commercial retouching.
+
+STYLE: photorealistic advertising photography, editorial, aspirational, brand-safe, clean.</div>
+
+  <h3>2.3 负面提示词（Negative Prompt · 两版通用）</h3>
+  <div class="codebox"><button class="cp">复制</button>blurry, low resolution, jpeg artifacts, distorted or misspelled text, gibberish letters, random words, watermark, signatures, duplicate logos, extra limbs, deformed people, cluttered composition, oversaturated colors, flat dull lighting, cartoon, 3d cartoon, illustration, toy-like, messy, unbalanced layout, harsh shadows, copyright characters</div>
+</section>
+
+<section>
+  <h2>三、变量字典（怎么把模板套到别的产品）</h2>
+  <p>模板能否复用，取决于变量填得是否具体。<code>BEFORE_STATE</code> / <code>AFTER_STATE</code> 必须能被「一眼看出差别」，否则视觉锤失效。</p>
+  <table>
+    <thead><tr><th>变量</th><th>含义与填法要点</th><th>本图（Homestyler）填值</th></tr></thead>
+    <tbody>
+      <tr><td><code>PRODUCT_CATEGORY</code></td><td>品类，决定整体场景语义</td><td>home interior design</td></tr>
+      <tr><td><code>BRAND_NAME</code></td><td>品牌名；建议只用于预留区，由后期叠加</td><td>Homestyler</td></tr>
+      <tr><td><code>HEADLINE_LINE_1/2</code></td><td>价值主张主标题，两句、口语化、含「任何→理想」结构</td><td>Turn Any Room into / Your Dream Space</td></tr>
+      <tr><td><code>HIGHLIGHT_PHRASE</code></td><td>被高亮的关键词，必须是用户最想要的结果</td><td>Dream Space</td></tr>
+      <tr><td><code>ACCENT_COLOR</code></td><td>强调色，同时用于高亮/箭头/横幅/CTA，全图只用一个</td><td>golden yellow</td></tr>
+      <tr><td><code>BEFORE_STATE</code></td><td>改变前：冷调、杂乱、缺生气，要「可辨认的差」</td><td>an empty bare room with plain walls and bare floor</td></tr>
+      <tr><td><code>AFTER_STATE</code></td><td>改变后：暖光、有生活气息、精致陈设，与 Before 同机位</td><td>a cozy stylish living room with soft sofa, warm lamp, plants, wall art, rug</td></tr>
+      <tr><td><code>UI_INTERFACE</code></td><td>产品界面载体，证明「结果出自工具」</td><td>a 2D floor-plan editor beside a 3D room render</td></tr>
+      <tr><td><code>UI_DETAILS</code></td><td>界面里最能证明能力的一处细节</td><td>floor plan with a highlighted room and 2D/3D toggle</td></tr>
+      <tr><td><code>BENEFIT_1/2/3</code></td><td>三个卖点，各 3–5 词，覆盖「能做 / 快 / 好」</td><td>Plan &amp; Design Your Space / 3D Visualization in Real Time / High-Quality Renderings</td></tr>
+      <tr><td><code>TAGLINE</code></td><td>横幅标语，主标题的简短回扣</td><td>Create Stunning Interior Designs with Homestyler</td></tr>
+      <tr><td><code>CTA_TEXT</code></td><td>行动文案，尽量低风险（免费 / 试用 / 立即）</td><td>Get Started Free</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>四、三个跨品类迁移示例（同一骨架，只换变量）</h2>
+  <div class="grid2">
+    <div class="mini">
+      <b>示例 A · 健身 App「FitLife」</b>
+      <p><span class="tag b">BEFORE</span> a tired slouched person in loose clothes, dull cool light</p>
+      <p><span class="tag g">AFTER</span> the same person confident and fit in athletic wear, warm gym light</p>
+      <p><span class="tag a">HEADLINE</span> Turn Any Body into Your Strongest Self</p>
+      <p><span class="tag p">卖点</span> 定制训练计划 / AI 动作纠正 / 进度可视化</p>
+      <p>UI 换成「训练日历 + 动作示范」面板，强调色改用 energetic orange。</p>
+    </div>
+    <div class="mini">
+      <b>示例 B · 语言学习 App「LingoGo」</b>
+      <p><span class="tag b">BEFORE</span> a traveler confused by a foreign menu, cold tone</p>
+      <p><span class="tag g">AFTER</span> the same traveler chatting confidently with a local, warm café light</p>
+      <p><span class="tag a">HEADLINE</span> From Zero to Fluent, Anywhere</p>
+      <p><span class="tag p">卖点</span> 每天 15 分钟 / AI 陪练 / 实景对话</p>
+      <p>UI 换成「课程进度 + 单词卡」，强调色用 fresh green，Before/After 同为咖啡馆机位。</p>
+    </div>
+    <div class="mini">
+      <b>示例 C · 护肤品牌「GlowLab」</b>
+      <p><span class="tag b">BEFORE</span> dull uneven skin under flat light, close-up portrait</p>
+      <p><span class="tag g">AFTER</span> the same person with luminous healthy skin, soft rim light</p>
+      <p><span class="tag a">HEADLINE</span> Wake Up Your Skin's Natural Glow</p>
+      <p><span class="tag p">卖点</span> 温和配方 / 28 天见效 / 临床验证</p>
+      <p>无产品 UI 时，用「产品瓶身 + 使用前后对照卡」替代第三层，强调色用 rose gold。</p>
+    </div>
+    <div class="mini">
+      <b>迁移成败的三个检查点</b>
+      <p>① Before / After 是否<b>同场景、同机位</b>？否则对比感断裂。</p>
+      <p>② 「改变后」是否<b>一眼可辨且令人向往</b>？模糊的差异等于没说。</p>
+      <p>③ UI / 产品证据是否<b>真的能解释这个结果</b>？证据与承诺错位会被识破。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>五、落地到创意工作台的建议</h2>
+  <div class="good"><b>与现有能力对齐：</b>本模板可直接作为「图片创意规划」的一条固定路线沉淀，配合 V4.96 的统一提示词规则使用。</div>
+  <ul>
+    <li><b>文字走叠加，不进画面</b>：优先用 2.2 零文字版出背景；品牌名 / 标题 / 卖点 / CTA 用播放层或设计工具叠加，避免错拼，也方便一图多文案复用。</li>
+    <li><b>品牌名取黄金词典</b>：若 Vand 在图上出现品牌字样，只从已确认的品牌词典取值，禁止用户自由输入直接绘制。</li>
+    <li><b>数字与承诺过 D0 证据门</b>：卖点里的数字（如「28 天见效」「15 分钟」）必须能在产品分析证据里定位，否则拦截，避免虚假承诺。</li>
+    <li><b>绑定素材标准库</b>：出图尺寸按所选媒体平台（Meta / Google / TikTok …）的标准库目标自动适配，比例与像素随平台走。</li>
+    <li><b>参考图若用于本模板</b>：按 V4.97，参考图只学习配色 / 质感，不把原图贴进画面——正好适合把「某品牌广告的调性」迁移到新产品。</li>
+  </ul>
+  <div class="note"><b>参数建议：</b>尺寸 1:1（1080×1080）为主，可派生 4:5、9:16；每张图固定随机种子便于同系列复现；每变量组合出 2–4 张择优；强调色全图只用一种，避免视觉噪音。</div>
+</section>
+
+<footer>Homestyler 参考图概念提炼与通用提示词方案 · 生成于 2026-11-19 · 单文件 HTML，可离线查看与打印</footer>
+
+</div>
+<script>
+document.querySelectorAll('.cp').forEach(function(b){
+  b.addEventListener('click',function(){
+    var box=b.parentElement;
+    var txt=box.childNodes[1] && box.childNodes[1].nodeType===3 ? box.childNodes[1].nodeValue : box.textContent;
+    txt=txt.replace(/^复制\s*/,'').trim();
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(function(){b.textContent='已复制';setTimeout(function(){b.textContent='复制'},1500)});
+    }else{
+      var ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();
+      try{document.execCommand('copy');b.textContent='已复制';setTimeout(function(){b.textContent='复制'},1500)}catch(e){}
+      document.body.removeChild(ta);
+    }
+  });
+});
+</script>
+</body>
+</html>

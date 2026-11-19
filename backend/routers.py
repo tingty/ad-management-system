@@ -10,7 +10,7 @@ from models import (ModelConfig, User, AuditLog, LoginLog, PromptConfig, SystemS
                     CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, CreativePlan, CwLibrary, utcnow)
 from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LoginRequest, UserOut, UserCreate, UserUpdate,
-                     PromptOut, PromptUpdate, PromptDefaultIn,
+                     PromptOut, PromptUpdate, PromptDefaultIn, LayerMatchIn,
                      LandingAnalysisRequest, LandingAnalysis, MediaCopyRequest, MediaImageRequest,
                      CreativeAnalysisRequest, CreativeAnalysisResult,
                      CreativePlanRequest, CreativePlanResult, CreativeRoute,
@@ -42,6 +42,11 @@ from industry_profiles import resolve_profile
 from creation_plan_service import (
     create_plan, set_coverage, confirm_plan, attach_job, finalize,
     get_plan, plan_to_dict,
+)
+# V4.98：素材提示管理（三类通用模板 / 六层心理链条 / 变量来源）
+from material_prompt_manage import (
+    MODULE as MATERIAL_PROMPT_MODULE, PROMPT_TYPES, PSYCHOLOGICAL_LAYERS,
+    variables_of as material_variables_of, auto_match_layers,
 )
 from version import ENABLE_AUTO_CREATION_PLAN
 # V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
@@ -2380,6 +2385,8 @@ def list_prompts(db: Session = Depends(get_db),
             out.append(PromptConfig(id=0, key=item["key"], name=item["name"], module=item["module"],
                                     category=item.get("category"),
                                     func_type=item.get("func_type"), usage_type=item.get("usage_type"),
+                                    intent=item.get("intent"),
+                                    psychological_layers=item.get("psychological_layers"),
                                     description=item["description"],
                                     content=item["content"], is_active=True, updated_at=None))
     return out
@@ -2535,6 +2542,11 @@ def update_prompt(key: str, req: PromptUpdate, db: Session = Depends(get_db),
         row.func_type = req.func_type
     if req.usage_type is not None:
         row.usage_type = req.usage_type
+    # V4.98：素材提示管理的一句意图与六层心理链条
+    if req.intent is not None:
+        row.intent = req.intent
+    if req.psychological_layers is not None:
+        row.psychological_layers = req.psychological_layers
     if req.is_active is not None:
         row.is_active = req.is_active
     db.commit(); db.refresh(row)
@@ -2554,6 +2566,7 @@ def reset_prompt(key: str, db: Session = Depends(get_db),
         row = PromptConfig(key=key, name=reg["name"], module=reg["module"],
                            category=reg.get("category"), func_type=reg.get("func_type"),
                            usage_type=reg.get("usage_type"),
+                           intent=reg.get("intent"), psychological_layers=reg.get("psychological_layers"),
                            description=reg["description"], content=reg["content"], is_active=True)
         db.add(row)
     else:
@@ -2563,6 +2576,8 @@ def reset_prompt(key: str, db: Session = Depends(get_db),
         row.category = reg.get("category")
         row.func_type = reg.get("func_type")
         row.usage_type = reg.get("usage_type")
+        row.intent = reg.get("intent")
+        row.psychological_layers = reg.get("psychological_layers")
         row.is_active = True
     # 恢复内置默认时，一并清除总结库里该类提示词的默认选择标记
     for kind in KINDS:
@@ -2571,6 +2586,25 @@ def reset_prompt(key: str, db: Session = Depends(get_db),
     db.commit(); db.refresh(row)
     _audit(db, admin, "prompt.reset", key, {"name": row.name})
     return row
+
+
+# ----------------------------- V4.98 素材提示管理 -----------------------------
+@router.get("/settings/material-prompts/meta")
+def material_prompt_meta(_: User = Depends(require_roles(*ROLES))):
+    """三类提示词类型、六层心理链条、以及每类模板的真实变量来源（供页面渲染，无需改代码即可展示）。"""
+    return {
+        "module": MATERIAL_PROMPT_MODULE,
+        "types": PROMPT_TYPES,
+        "layers": PSYCHOLOGICAL_LAYERS,
+        "variables": {t["key"]: material_variables_of(t["key"]) for t in PROMPT_TYPES},
+    }
+
+
+@router.post("/settings/material-prompts/match-layers")
+def material_prompt_match_layers(req: LayerMatchIn,
+                                 _: User = Depends(require_roles(*ROLES))):
+    """按产品分析内容自动匹配心理链条覆盖层；用户仍可手动改为全部六层。"""
+    return auto_match_layers(req.analysis or {})
 
 
 # ----------------------------- 登录 / 用户 / 审计 -----------------------------

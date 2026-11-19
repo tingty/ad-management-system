@@ -2166,3 +2166,50 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 /* V4.82：视频分镜证据 / 素材缺口拦截提示 */
 .cwb-plan-warn { margin: 10px 0 2px; padding: 9px 12px; border-radius: 9px;
   background: #fff4e6; border: 1px solid #f2d4a8; color: #8a4b08; font-size: 12px; line-height: 1.6; }
+
+/* ==================== V4.98 素材提示管理 ==================== */
+.mpm { max-width: 980px; }
+.mpm-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.mpm-head h2 { font-size: 22px; margin: 4px 0 4px; color: var(--text); }
+.mpm-head p { margin: 0; font-size: 13px; line-height: 1.6; }
+.mpm-tabs { display: flex; gap: 6px; margin: 18px 0 14px; border-bottom: 1px solid var(--border); }
+.mpm-tab { background: none; border: none; border-bottom: 2px solid transparent; padding: 9px 16px;
+  font-size: 14px; color: var(--muted); cursor: pointer; font-family: inherit; }
+.mpm-tab:hover { color: var(--text); }
+.mpm-tab.on { color: var(--primary, #1f5fa8); border-bottom-color: var(--primary, #1f5fa8); font-weight: 600; }
+.mpm-box { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 18px 20px; margin-bottom: 14px; }
+.mpm-box h3 { font-size: 15px; margin: 0 0 12px; color: var(--text); }
+.mpm-row-between { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mpm-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.mpm-btn { border: 1px solid var(--border); background: var(--card); color: var(--text);
+  border-radius: 7px; padding: 6px 12px; font-size: 12.5px; cursor: pointer; font-family: inherit; }
+.mpm-btn:hover { border-color: var(--primary, #1f5fa8); }
+.mpm-btn:disabled { opacity: .55; cursor: not-allowed; }
+.mpm-btn.primary { background: var(--primary, #1f5fa8); color: #fff; border-color: var(--primary, #1f5fa8); }
+.mpm-btn.ghost { background: transparent; }
+.mpm-input { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px;
+  font-size: 13px; font-family: inherit; color: var(--text); background: var(--card); }
+.mpm-layers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+.mpm-layer { display: flex; gap: 9px; align-items: flex-start; text-align: left; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--card); cursor: pointer;
+  font-family: inherit; color: var(--text); }
+.mpm-layer:disabled { cursor: default; opacity: .9; }
+.mpm-layer.on { border-color: var(--primary, #1f5fa8); background: var(--info-soft, #eaf2fb); }
+.mpm-layer b { display: block; font-size: 13px; font-weight: 600; }
+.mpm-layer small { display: block; font-size: 11px; color: var(--muted); line-height: 1.45; margin-top: 2px; }
+.mpm-check { width: 15px; height: 15px; border: 1.5px solid var(--border); border-radius: 4px;
+  flex: 0 0 15px; margin-top: 2px; position: relative; }
+.mpm-check.on { background: var(--primary, #1f5fa8); border-color: var(--primary, #1f5fa8); }
+.mpm-check.on::after { content: ''; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px;
+  border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.mpm-template { width: 100%; min-height: 240px; border: 1px solid var(--border); border-radius: 9px;
+  padding: 12px 14px; font-size: 12.5px; line-height: 1.7; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text); background: var(--bg); resize: vertical; }
+.mpm-table { width: 100%; border-collapse: collapse; }
+.mpm-table th, .mpm-table td { border-bottom: 1px solid var(--border); }
+.mpm-table code { background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+  padding: 1px 6px; font-size: 12px; color: var(--primary, #1f5fa8); }
+.mpm-msg { margin-top: 10px; padding: 9px 12px; border-radius: 8px; font-size: 12.5px;
+  background: var(--info-soft, #eaf2fb); color: var(--primary, #1f5fa8); }
+@media (max-width: 760px){ .mpm-layers { grid-template-columns: repeat(2, 1fr); } }

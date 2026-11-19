@@ -44,6 +44,10 @@ class PromptConfig(Base):
     # V4.35「素材提示词」两套分类维度：功能类型（落在哪个生成环节）/ 使用类型（提示词如何被使用）
     func_type = Column(String(64), nullable=True)
     usage_type = Column(String(64), nullable=True)
+    # V4.98「素材提示管理」：一句话意图 + 六层心理链条（可多选，逗号分隔 key）。
+    # 二者由「素材提示管理」页维护，与生成链路的 content 一起存，不改旧字段语义。
+    intent = Column(Text, nullable=True)                 # 这条提示词想表达什么（一句话概括）
+    psychological_layers = Column(String(256), nullable=True)  # 六层心理链条 key，逗号分隔
     description = Column(Text, nullable=True)            # 用途与编辑注意事项
     content = Column(Text)                               # 提示词正文（系统提示词）
     is_active = Column(Boolean, default=True)            # 停用后回退内置默认

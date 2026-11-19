@@ -71,6 +71,8 @@ class PromptOut(BaseModel):
     category: Optional[str] = None
     func_type: Optional[str] = None
     usage_type: Optional[str] = None
+    intent: Optional[str] = None
+    psychological_layers: Optional[str] = None
     description: Optional[str] = None
     content: str
     is_active: bool = True
@@ -85,12 +87,19 @@ class PromptUpdate(BaseModel):
     category: Optional[str] = None
     func_type: Optional[str] = None
     usage_type: Optional[str] = None
+    intent: Optional[str] = None
+    psychological_layers: Optional[str] = None
     is_active: Optional[bool] = None
 
 class PromptDefaultIn(BaseModel):
     """V4.35：把总结库里的一条优秀提示词设为系统默认（id 为空 = 恢复系统内置默认）。"""
     kind: str                       # ad_copy / ad_image
     id: Optional[str] = None
+
+
+class LayerMatchIn(BaseModel):
+    """V4.98：按产品分析内容自动匹配心理链条的请求体。"""
+    analysis: dict = {}
 
 # ----------------------------- 素材创作：落地页分析（8 字段 LLM 推理） -----------------------------
 class LandingAnalysisRequest(BaseModel):

@@ -126,11 +126,25 @@ export interface PromptConfig {
   category?: string | null
   func_type?: string | null
   usage_type?: string | null
+  intent?: string | null
+  psychological_layers?: string | null
   description?: string
   content: string
   is_active: boolean
   updated_at?: string | null
 }
+
+/** V4.98 素材提示管理：类型 / 六层心理链条 / 变量来源 */
+export interface PsychLayer { key: string; label: string; desc: string }
+export interface PromptTypeMeta { key: string; label: string; desc: string }
+export interface PromptVariable { name: string; source: string }
+export interface MaterialPromptMeta {
+  module: string
+  types: PromptTypeMeta[]
+  layers: PsychLayer[]
+  variables: Record<string, PromptVariable[]>
+}
+export interface LayerMatchResult { layers: string[]; labels: string[]; reason: string }
 
 /** V4.35 素材提示词：分类维度（功能类型 / 使用类型） */
 export interface PromptTaxonomyItem {
@@ -1189,10 +1203,15 @@ export const api = {
     return req<PromptConfig[]>(`/api/settings/prompts${qs(o)}`)
   },
   updatePrompt: (key: string, payload: { content: string; name?: string; description?: string;
-    category?: string; func_type?: string; usage_type?: string; is_active?: boolean }) =>
+    category?: string; func_type?: string; usage_type?: string;
+    intent?: string; psychological_layers?: string; is_active?: boolean }) =>
     req<PromptConfig>(`/api/settings/prompts/${key}`, { method: 'PUT', body: JSON.stringify(payload) }),
   resetPrompt: (key: string) =>
     req<PromptConfig>(`/api/settings/prompts/${key}/reset`, { method: 'POST' }),
+  // V4.98 素材提示管理：元数据 + 心理链条自动匹配
+  materialPromptMeta: () => req<MaterialPromptMeta>('/api/settings/material-prompts/meta'),
+  matchLayers: (analysis: any) => req<LayerMatchResult>('/api/settings/material-prompts/match-layers',
+    { method: 'POST', body: JSON.stringify({ analysis }) }),
   // V4.35 分类维度 / 优秀提示词总结库 / 系统默认
   promptTaxonomy: () => req<PromptTaxonomy>('/api/settings/prompt-taxonomy'),
   promptLibrary: (f?: PromptLibraryFilters) =>

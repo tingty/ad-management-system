@@ -133,6 +133,7 @@ PROMPT_REGISTRY = PROMPT_REGISTRY + LANDING_PROMPTS
 #   3) 合入三大预设库 D/S/C 共 62 条提示词片段（此前页面完全看不到，编辑后可回写生效）。
 # 这样「素材创作」涉及的全部提示词都在同一注册表里，「素材提示词」页一次展示、统一编辑。
 from prompt_catalog import PROMPT_META, EXTRA_PROMPTS, preset_prompt_entries
+from material_prompt_manage import material_prompt_entries
 
 
 def _normalize_prompt_registry(items: list) -> list:
@@ -150,8 +151,9 @@ def _normalize_prompt_registry(items: list) -> list:
     return out
 
 
+# V4.98：合入「素材提示管理」三类通用模板（文案 / 图片 / 视频），带 intent 与心理链条字段。
 PROMPT_REGISTRY = _normalize_prompt_registry(
-    PROMPT_REGISTRY + EXTRA_PROMPTS + preset_prompt_entries()
+    PROMPT_REGISTRY + EXTRA_PROMPTS + preset_prompt_entries() + material_prompt_entries()
 )
 
 _PROMPT_FALLBACK = {p["key"]: p["content"] for p in PROMPT_REGISTRY}
