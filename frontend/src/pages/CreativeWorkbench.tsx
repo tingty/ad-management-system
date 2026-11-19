@@ -224,6 +224,23 @@ export default function CreativeWorkbench() {
   type MaterialKind = 'copy' | 'image' | 'video'
   const [materialTypes, setMaterialTypes] = useState<MaterialKind[]>(['image', 'video'])
   const [mtOpen, setMtOpen] = useState(false)   // 多选下拉展开状态
+  // V4.99：点击下拉外部 / Esc 收起选项；多选时保持展开，选完点空白处即关闭。
+  const mtRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!mtOpen) return
+    const closeOnOutside = (e: MouseEvent | TouchEvent) => {
+      if (mtRef.current && !mtRef.current.contains(e.target as Node)) setMtOpen(false)
+    }
+    const closeOnEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setMtOpen(false) }
+    document.addEventListener('mousedown', closeOnOutside)
+    document.addEventListener('touchstart', closeOnOutside)
+    document.addEventListener('keydown', closeOnEsc)
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutside)
+      document.removeEventListener('touchstart', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEsc)
+    }
+  }, [mtOpen])
   const hasCopy = materialTypes.includes('copy')
   const hasImage = materialTypes.includes('image')
   const hasVideo = materialTypes.includes('video')
@@ -1077,7 +1094,7 @@ export default function CreativeWorkbench() {
               {/* V4.92 素材类型：多选下拉（文案 / 图片 / 视频），可任意组合，逐一勾选 */}
               <div className="cwb-form-row">
                 <label className="cwb-field-label" id="cwb-mt-label">素材类型</label>
-                <div className="cwb-mt">
+                <div className="cwb-mt" ref={mtRef}>
                   <button type="button" id="cwb-mt" className="cwb-mt-trigger" aria-haspopup="listbox"
                     aria-expanded={mtOpen} aria-labelledby="cwb-mt-label" onClick={() => setMtOpen(o => !o)}>
                     <span className="cwb-mt-values">
@@ -1096,7 +1113,7 @@ export default function CreativeWorkbench() {
                           <span>{materialLabel[k]}</span>
                         </label>
                       ))}
-                      <div className="cwb-mt-hint">可多选；按所选择生成对应内容</div>
+                      <div className="cwb-mt-hint">可多选；按所选择生成对应内容，点击空白处收起</div>
                     </div>
                   )}
                 </div>
@@ -1117,20 +1134,23 @@ export default function CreativeWorkbench() {
                 </div>
               </div>
               {/* 参考图（upload / URL）：仅用于学习风格与配色，不直接使用原图 */}
+              {/* V4.99：说明文字必须放在控件列内，否则作为表单网格的第三个子元素会掉进 84px 标签列被折成窄条，撑高整行 */}
               <div className="cwb-form-row">
                 <label className="cwb-field-label">参考图</label>
-                <div className="cwb-ref-row cwb-ref-row2">
-                  <label className="cwb-ref-upload" title="上传风格参考图：AI 只学习配色与画面质感，生成全新推广图，不会直接使用或合成原图">
-                    <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onRefFile} disabled={refUploading} />
-                    <span>{refUploading ? '处理中…' : (referenceImage ? '更换图片' : '上传图片')}</span>
-                  </label>
-                  {referenceImage && <span className="cwb-ref-name" title={referenceImage}>{referenceName || '已上传'}</span>}
-                  {referenceImage && <button className="cwb-ref-clear" onClick={() => { setReferenceImage(''); setReferenceName('') }} title="移除参考图">移除</button>}
-                  <input className="cwb-ref-url" value={referenceImage.startsWith('http') ? referenceImage : ''}
-                    onChange={e => { setReferenceImage(e.target.value.trim()); setReferenceName('') }}
-                    placeholder="或粘贴图片 URL（自动下载）" disabled={refUploading} />
+                <div className="cwb-ov-col">
+                  <div className="cwb-ref-row cwb-ref-row2">
+                    <label className="cwb-ref-upload" title="上传风格参考图：AI 只学习配色与画面质感，生成全新推广图，不会直接使用或合成原图">
+                      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onRefFile} disabled={refUploading} />
+                      <span>{refUploading ? '处理中…' : (referenceImage ? '更换图片' : '上传图片')}</span>
+                    </label>
+                    {referenceImage && <span className="cwb-ref-name" title={referenceImage}>{referenceName || '已上传'}</span>}
+                    {referenceImage && <button className="cwb-ref-clear" onClick={() => { setReferenceImage(''); setReferenceName('') }} title="移除参考图">移除</button>}
+                    <input className="cwb-ref-url" value={referenceImage.startsWith('http') ? referenceImage : ''}
+                      onChange={e => { setReferenceImage(e.target.value.trim()); setReferenceName('') }}
+                      placeholder="或粘贴图片 URL（自动下载）" disabled={refUploading} />
+                  </div>
+                  <span className="cwb-field-hint">仅学习配色与画面质感，AI 生成全新画面；原图主体 / 文字 / Logo 不会出现在素材中</span>
                 </div>
-                <span className="cwb-field-hint">仅学习配色与画面质感，AI 生成全新画面；原图主体 / 文字 / Logo 不会出现在素材中</span>
               </div>
               {/* 品牌：输入框 + 右侧 Logo 上传按钮；上传后 Logo 预览显示在品牌标题下方 */}
               <div className="cwb-form-row">
