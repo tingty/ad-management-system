@@ -327,6 +327,10 @@ export default function CreativeWorkbench() {
   const [analysisValid, setAnalysisValid] = useState(false)  // V4.70 自检 5.1：分析框架完整性
 
   const [assets, setAssets] = useState<any[]>([])
+  // V4.107 / 方案F：图片结果按 asset_id 从批次详情回填，并按「请求 / 合格 / 待处理」如实计数
+  const [imgTally, setImgTally] = useState<{ requested: number; ok: number; failed: number
+    pending: number; issues: Array<{ size?: string; status?: string; reason?: string }> } | null>(null)
+  const [imgPendingNote, setImgPendingNote] = useState('')
   const [jobs, setJobs] = useState<JobState[]>([])   // 内部用于进度与归档，UI 仅展示聚合进度
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [historyId, setHistoryId] = useState<number | null>(null)
@@ -469,6 +473,36 @@ export default function CreativeWorkbench() {
         }))
         if (!hadApplied && vids.length) showToast(`视频已生成 ${vids.length} 个（可在结果区预览下载）`)
         else if (!hadApplied && fail) showToast(`视频未出片（${fail.code}）—— 点顶部「任务」查看原因与处理建议`)
+      }
+      // V4.107 / 方案F：图片子任务同样从批次详情回填（按 asset_id 去重），
+      // 超过轮询窗口、刷新页面、短断网后仍能展示已产出的素材与逐尺寸原因。
+      const imgSubs: any[] = (d.subtasks || []).filter((s: any) => s.kind === 'images')
+      if (imgSubs.length) {
+        const arrived = imgSubs.flatMap((s: any) => (s.assets || []).filter((a: any) => a.url)
+          .map((a: any) => ({
+            file: fileOf(a), url: a.url, size: a.size || '', placement: a.caption || '',
+            __platform: a.caption || '', __fromBatch: true,
+          })))
+        if (arrived.length) {
+          setAssets(prev => {
+            const seen = new Set(prev.map((x: any) => String(x.file || x.url || '')))
+            const add = arrived.filter((a: any) => !seen.has(String(a.file || a.url || '')))
+            return add.length ? [...prev, ...add] : prev
+          })
+        }
+        const t = imgSubs.reduce((acc: any, s: any) => {
+          const tt = s.tally || {}
+          acc.requested += Number(tt.requested || 0)
+          acc.ok += Number(tt.ok || 0)
+          acc.failed += Number(tt.failed || 0)
+          acc.pending += Number(tt.pending || 0)
+          for (const i of (tt.issues || [])) acc.issues.push(i)
+          if (!tt.requested && ['queued', 'running', 'submitted', 'processing'].includes(String(s.status || ''))) acc.pending += 1
+          return acc
+        }, { requested: 0, ok: 0, failed: 0, pending: 0, issues: [] as any[] })
+        setImgTally(t)
+        // 超时 / 刷新后仍在跑：明确「仍在处理中」，不判失败
+        setImgPendingNote(t.pending > 0 ? `仍有 ${t.pending} 张在后台处理中，可稍后在「任务」里查看，不会计为失败` : '')
       }
       // 保持 pendingBatch：刷新后仍按 ID 追踪；终态也维持低频轮询以反映抽屉里的继续查询 / 重新生成。
       timer = window.setTimeout(() => { void apply(false) }, first ? 2500 : 5000)
@@ -785,7 +819,7 @@ export default function CreativeWorkbench() {
     } finally { setRunning(false) }
   }
 
-  async function generateImages(hid: number | null, batchId = '', prebuilt?: Awaited<ReturnType<typeof buildCopies>>): Promise<{ okImages: number; anyFailed: boolean; errs: string[] }> {
+  async function generateImages(hid: number | null, batchId = '', prebuilt?: Awaited<ReturnType<typeof buildCopies>>): Promise<{ okImages: number; anyFailed: boolean; errs: string[]; pending: number }> {
     const errs: string[] = []
     // V4.60 / B3：归一化为合法 LandingAnalysis（channels 转成 [{platform,reason}]），否则文案 / 出图端点会 422。
     const analysis = currentAnalysis()
@@ -807,6 +841,7 @@ export default function CreativeWorkbench() {
     const collected: any[] = []
     const finalStates: string[] = []
     const capturedErrors: string[] = []
+    let pendingJobs = 0   // V4.107：轮询窗口结束仍在后台处理的任务数（不按失败计）
     const targets = selected   // V4.92：重构文案 helper 后补回，图片任务矩阵仍按选中平台生成
     const totalJobs = targets.length * Math.max(1, activeRoutes.length)
     let done = 0
@@ -903,6 +938,14 @@ export default function CreativeWorkbench() {
             setJobs(j => j.map(x => x.platform === p && x.route === route ? { ...x, status: st?.status || x.status, progress: st?.progress ?? x.progress, error: st?.error || x.error } : x))
             if (['succeeded', 'partial_success', 'failed', 'canceled'].includes(st?.status)) break
           }
+          // V4.107 / 方案F：轮询窗口结束但任务未到终态 → 只是「仍在处理中」，不判失败。
+          const TERMINAL = ['succeeded', 'partial_success', 'failed', 'canceled']
+          const stillRunning = !TERMINAL.includes(String(st?.status || ''))
+          if (stillRunning) {
+            pendingJobs++
+            setJobs(j => j.map(x => x.platform === p && x.route === route
+              ? { ...x, status: 'processing', error: '' } : x))
+          }
           let imgs: any[] = (st?.result?.images || []).slice()
           if (st?.status === 'failed' && st?.error) capturedErrors.push(`${p}${route?.name ? '·' + route.name : ''}：${st.error}`)
           if (!imgs.length) { try { const got: any = await api.creativeAssets({ job_id: jobId }); imgs = (got?.items || []).slice() } catch { /* 兜底 */ } }
@@ -934,7 +977,9 @@ export default function CreativeWorkbench() {
     const uniqErrs = capturedErrors.filter(Boolean).filter(e => { const k = e.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true })
     if (uniqErrs.length) errs.push(...uniqErrs)
     else if (!okImages && anyFailed) errs.push('部分平台未返回素材，请调整媒体或重试')
-    return { okImages, anyFailed, errs }
+    // V4.107：仍在后台的任务既不算成功也不算失败，交给批次回填继续更新
+    if (pendingJobs) setImgPendingNote(`仍有 ${pendingJobs} 个图片任务在后台处理中，结果会在完成后自动回填，不会计为失败`)
+    return { okImages, anyFailed, errs, pending: pendingJobs }
   }
 
   /** V4.83 / C02：所有视频入口（批量生成 / 单独生成 / 微调）唯一提交实现。 */
@@ -1023,6 +1068,7 @@ export default function CreativeWorkbench() {
     if (creativeBriefDraft && !creativeBriefConfirmed) { setError('请先在「创意提示词方案」中确认补全后的提示词，再开始生成'); return }
     setError(''); setView('generating'); setAssets([]); setJobs([]); setChecked({}); setCopiesByPlatform({}); setProgressPct(0); setProgressText('正在创建素材任务…')
     cwTaskReset()   // V4.77：新一轮生成，任务常驻浮窗重新出现（此前手动关闭的抑制解除）
+    setImgTally(null); setImgPendingNote('')   // V4.107：新一轮生成重置「请求 / 合格 / 待处理」计数
     let hid: number | null = null
     try { const h: any = await api.createCreationHistory({ analysis: cw?.analysis || {}, platform: selected[0] || '', lang: 'en' }).catch(() => null); hid = h?.id ?? null; setHistoryId(hid) } catch { /* 历史可选 */ }
     if (planId) await api.updateCreativePlan(planId, { status: 'generating', history_id: hid ?? undefined }).catch(() => {})
@@ -1039,7 +1085,10 @@ export default function CreativeWorkbench() {
       batchId = bh?.batch_id || ''
       if (batchId) {
         setSubmittedBatch(batchId)
-        saveCwSession({ draftId, pendingBatch: pendingBatch || batchId, submittedBatch: batchId })
+        // V4.107 / 方案F：建批次即订阅——图片与视频都按 batch_id 从服务端回填，
+        // 不再只依赖浏览器 120s 轮询窗口。
+        setPendingBatch(batchId)
+        saveCwSession({ draftId, pendingBatch: batchId, submittedBatch: batchId })
       }
     }
     const analysis = currentAnalysis()
@@ -1054,7 +1103,7 @@ export default function CreativeWorkbench() {
       copyOk = cr.okCount; copyErrs.push(...cr.errs); copyData = cr.data
       setProgressPct(doImg ? 25 : 60)
     }
-    const imgRes = doImg ? await generateImages(hid, batchId, copyData) : { okImages: 0, anyFailed: false, errs: [] }
+    const imgRes = doImg ? await generateImages(hid, batchId, copyData) : { okImages: 0, anyFailed: false, errs: [], pending: 0 }
     setProgressPct(70)
     const vid = doVid ? await generateVideo(hid, batchId) : { ok: true, fail: null }
     const vidOk = doVid && !!vid.ok        // 提交成功 ≠ 出片成功：成片与否只认服务端任务结果
@@ -1075,6 +1124,11 @@ export default function CreativeWorkbench() {
     } else if (vidQueued && copyOk === 0 && imgRes.okImages === 0) {
       // 只有视频且已转入后台：不是失败，是「还没出片」，交给任务抽屉呈现真实阶段
       setError('')
+      setView('result')
+    } else if (imgRes.pending > 0 && !copyErrs.length && !imgRes.errs.length) {
+      // V4.107 / 方案F：还没出图但任务仍在后台跑 —— 不判失败，进结果区等回填
+      setError('')
+      setProgressText('图片仍在后台处理中，完成后会自动回填到结果区')
       setView('result')
     } else {
       const msgs = [...copyErrs, ...imgRes.errs]
@@ -1723,6 +1777,25 @@ export default function CreativeWorkbench() {
                   </div>
                 )}
 
+                {/* V4.107 / 方案F：请求 N / 合格 M / 待处理 K —— 成功数只按可用资产计 */}
+                {hasImage && (imgTally || imgPendingNote) && (
+                  <div className="cwb-tally">
+                    {imgTally && (
+                      <span className="cwb-tally-main">
+                        请求 {imgTally.requested} / 合格 {imgTally.ok} / 待处理 {imgTally.pending || 0}
+                        {imgTally.failed > 0 && <em className="warn"> · 待核实 {imgTally.failed}</em>}
+                      </span>
+                    )}
+                    {imgPendingNote && <span className="cwb-tally-note">{imgPendingNote}</span>}
+                  </div>
+                )}
+                {hasImage && imgTally && imgTally.issues.length > 0 && (
+                  <div className="cwb-tally-issues">
+                    {imgTally.issues.slice(0, 6).map((i, k) => (
+                      <p key={k}>{i.size ? `${i.size}：` : ''}{i.reason || `未产出（${i.status || '未知'}）`}</p>
+                    ))}
+                  </div>
+                )}
                 <div className="cwb-grid">
                   {assets.map((a, i) => {
                     const sp = specOf(a); const rt = a.__route; const cp = copyOf(a); const vid = isVideo(a)

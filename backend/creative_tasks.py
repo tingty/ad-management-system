@@ -227,6 +227,23 @@ def job_to_task(job: GenerationJob) -> dict:
                    "caption": a.get("placement") or "", "kind": "image",
                    "size": a.get("size") or ""}
                   for a in (result.get("images") or []) if isinstance(a, dict)]
+    # V4.107 / 方案F（B04 部分成功口径）：逐尺寸任务结果是服务端唯一事实，
+    # 请求多少 / 合格多少 / 待处理多少按它统计；前端不再用「有没有图」猜成功与否。
+    tally: dict = {}
+    _tr = [x for x in (result.get("task_results") or []) if isinstance(x, dict)]
+    if not is_video and _tr:
+        _ok = ("ok", "succeeded")
+        _bad = ("failed", "needs_attention", "needs_revision")
+        tally = {
+            "requested": len(_tr),
+            "ok": sum(1 for x in _tr if str(x.get("status") or "") in _ok),
+            "failed": sum(1 for x in _tr if str(x.get("status") or "") in _bad),
+            "pending": sum(1 for x in _tr if str(x.get("status") or "")
+                           in ("queued", "running", "submitted", "processing")),
+            "issues": [{"size": x.get("size") or "", "status": str(x.get("status") or ""),
+                        "reason": x.get("error") or ""}
+                       for x in _tr if str(x.get("status") or "") not in _ok][:12],
+        }
     # V4.83 / C04：终态以 status 为准，杜绝「succeeded 却显示下载校验中」。
     # stage 仍是执行轨迹（供排查），但面向用户的标签在终态一律取终态语义。
     task_status = job.status or ""
@@ -262,6 +279,7 @@ def job_to_task(job: GenerationJob) -> dict:
         "can_redownload": bool((result.get("media") or {}).get("url")
                                or (result.get("media") or {}).get("b64")),
         "assets": assets,
+        "tally": tally,
         "duration_sec": result.get("duration_sec") or 0,
         "duration_source": result.get("duration_source") or "",
         "requested_duration": result.get("requested_duration") or 0,
