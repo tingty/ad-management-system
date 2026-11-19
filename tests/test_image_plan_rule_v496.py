@@ -21,6 +21,8 @@ FRONTEND = BACKEND.parent / "frontend" / "src"
 
 class TestImagePlanRuleV496(unittest.TestCase):
     def test_01_rule_merges_routes_and_supplement(self):
+        # V4.104 / 方案B：废弃多路线融合——即使误传多条，也只取本组第一条独立路线，
+        # 不再把其余路线当「辅助修饰」混入画面。
         rule = build_image_prompt_rule(
             routes=[
                 {"key": "A", "name": "痛点对比", "angle": "前后对比", "description": "强对比", "tags": ["转化"]},
@@ -30,9 +32,9 @@ class TestImagePlanRuleV496(unittest.TestCase):
             platform="Meta",
         )
         text = render_image_prompt_rule(rule)
-        self.assertIn("主干路线 A", text)
-        self.assertIn("辅助路线", text)
-        self.assertIn("C「续航自由」", text)
+        self.assertIn("本组独立路线 A", text)
+        self.assertNotIn("辅助路线", text)
+        self.assertNotIn("C「续航自由」", text)
         self.assertIn("强调续航卖点", text)
         self.assertIn("优先级最高", text)
         self.assertIn("Meta", text)

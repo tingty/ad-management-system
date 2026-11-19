@@ -10,7 +10,7 @@ from models import (ModelConfig, User, AuditLog, LoginLog, PromptConfig, SystemS
                     CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, CreativePlan, CwLibrary, utcnow)
 from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LoginRequest, UserOut, UserCreate, UserUpdate,
-                     PromptOut, PromptUpdate, PromptDefaultIn, LayerMatchIn,
+                     PromptOut, PromptUpdate, PromptDefaultIn, LayerMatchIn, ImageQualityAuditIn,
                      LandingAnalysisRequest, LandingAnalysis, MediaCopyRequest, MediaImageRequest,
                      CreativeBriefPreviewIn,
                      CreativeAnalysisRequest, CreativeAnalysisResult,
@@ -2763,6 +2763,27 @@ def set_prompt_default(req: PromptDefaultIn, db: Session = Depends(get_db),
     _audit(db, admin, "prompt.default", target_key, {"kind": req.kind, "id": req.id or "builtin"})
     return {"ok": True, "kind": req.kind, "target_key": target_key,
             "id": req.id or None, "name": label, "defaults": _prompt_defaults(db)}
+
+
+# ----------------------------- V4.104 / 方案E：图片质检开关 -----------------------------
+@router.get("/settings/image-quality-audit")
+def get_image_quality_audit(db: Session = Depends(get_db),
+                            _: User = Depends(require_roles(*ROLES))):
+    """图片质量扩展质检开关；缺行时默认打开（不 seed 即默认 true）。"""
+    import app_settings
+    return {"enabled": app_settings.get_bool(db, app_settings.IMAGE_QUALITY_AUDIT_ENABLED, True)}
+
+
+@router.put("/settings/image-quality-audit")
+def put_image_quality_audit(req: ImageQualityAuditIn, db: Session = Depends(get_db),
+                            admin: User = Depends(require_roles("admin"))):
+    """系统设置：打开 / 关闭图片质量扩展质检（纯色检查始终保留）。"""
+    import app_settings
+    app_settings.set_bool(db, app_settings.IMAGE_QUALITY_AUDIT_ENABLED, bool(req.enabled))
+    db.commit()
+    _audit(db, admin, "settings.image_quality_audit", app_settings.IMAGE_QUALITY_AUDIT_ENABLED,
+           {"enabled": bool(req.enabled)})
+    return {"ok": True, "enabled": bool(req.enabled)}
 
 
 @router.put("/settings/prompts/{key}", response_model=PromptOut)

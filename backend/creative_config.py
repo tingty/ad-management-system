@@ -229,14 +229,22 @@ def _claim_refs(variant_text: str, analysis: dict) -> tuple[list[dict], list[str
     return refs[:6], sorted(set(ids))[:12]
 
 
-def build_concept(variant: dict, index: int, analysis: dict, profile: dict) -> dict:
+def build_concept(variant: dict, index: int, analysis: dict, profile: dict,
+                  route: dict | None = None) -> dict:
     """F03 / V4.44 N01：由用户勾选的一条文案组合构造 `CreativeConcept`。
 
     不调用大模型、不编造事实：受众来自落地页分析，购买阻力只从文案里显式出现
     的限定词推断；`evidence` 只表示文案副标（不是已验证证据），真正的事实引用
     放在 `claim_refs` / `evidence_ids`，且与证据快照中的 `[E###]` 强绑定。
+
+    V4.104 / 方案B：新增可选 `route`，把概念绑定到具体创意路线。每条路线独立
+    生成，concept_id / concept_key 纳入 route.key，且路线的价值切入（angle/hook/
+    visual_hook/proof）注入承诺与画面语义——不同路线即使复用同一条文案，也会
+    得到不同的概念主键与画面表达，不再跨路线共享 concept_key。
     """
     v = variant if isinstance(variant, dict) else {}
+    r = route if isinstance(route, dict) else {}
+    rk = _clean(r.get("key"))
     headline = _clean(v.get("headline"))
     sub = _clean(v.get("sub"))
     cta = _clean(v.get("cta"))
@@ -248,16 +256,32 @@ def build_concept(variant: dict, index: int, analysis: dict, profile: dict) -> d
         text)
     friction = ("、".join(sorted({b.lower() for b in barriers}))[:120]
                 if barriers else "文案未明示购买阻力（不虚构）")
-    key = _sha("|".join((headline, sub, cta)))
+    # V4.104：路线标识进入哈希与 ID，确保不同路线的概念主键不共享。
+    key = _sha("|".join((rk, headline, sub, cta)))
     refs, evidence_ids = _claim_refs(text, analysis or {})
+    # V4.104：路线价值切入注入承诺 / 证据 / 画面钩子；为空时回退原行为。
+    route_hook = _clean(r.get("hook"))
+    route_angle = _clean(r.get("angle"))
+    route_visual = _clean(r.get("visual_hook"))
+    route_proof = _clean(r.get("proof"))
+    core_promise = headline or sub or "（用户未选定可用文案）"
+    if route_hook or route_angle:
+        core_promise = "；".join(x for x in (core_promise, route_angle, route_hook) if x)
+    evidence = sub or "（该概念未提供证据副标）"
+    if route_proof:
+        evidence = "；".join(x for x in (evidence, "路线证据表达：" + route_proof) if x)
     return {
-        "concept_id": _clean(v.get("concept_id")) or f"C{index + 1}",
+        "concept_id": _clean(v.get("concept_id")) or (f"{rk}{index + 1}" if rk else f"C{index + 1}"),
         "concept_key": "ck_" + key,
-        "label": _clean(v.get("label")) or f"组合 {index + 1}",
+        "route_key": rk,
+        "route_name": _clean(r.get("name")),
+        "route_visual_hook": route_visual,
+        "route_framework": _clean(r.get("framework")),
+        "label": _clean(r.get("name")) or _clean(v.get("label")) or f"组合 {index + 1}",
         "audience_scenario": audience or "落地页未标注受众（不虚构）",
         "purchase_friction": friction,
-        "core_promise": headline or sub or "（用户未选定可用文案）",
-        "evidence": sub or "（该概念未提供证据副标）",
+        "core_promise": core_promise,
+        "evidence": evidence,
         # 明确区分「文案副标」与「可定位原文证据」
         "evidence_kind": "copy_subhead_not_verified",
         "claim_refs": refs,
@@ -309,8 +333,16 @@ def build_visual_brief(concept: dict, analysis: dict, profile: dict,
     entity = pol["entity_type"]
     facts = [str(x).strip() for x in (a.get("facts") or []) if str(x or "").strip()][:3]
     claim_refs = list((concept or {}).get("claim_refs") or [])
-    scene_detail = "；".join(facts + [str(r.get("claim") or "") for r in claim_refs[:2]
-                                     if r.get("claim")]).strip("；")[:400]
+    # V4.104 / 方案B：路线视觉钩子进入场景细节与主体表达，不同路线画面不再雷同。
+    route_visual = _clean((concept or {}).get("route_visual_hook"))
+    scene_parts = list(facts) + [str(r.get("claim") or "") for r in claim_refs[:2]
+                                 if r.get("claim")]
+    if route_visual:
+        scene_parts.append("本路线视觉切入点：" + route_visual)
+    scene_detail = "；".join(x for x in scene_parts if x).strip("；")[:400]
+    subject = _clean((profile or {}).get("visual_subject")) or "与页面真实内容一致的中性主视觉"
+    if route_visual:
+        subject = subject + "（画面切入：" + route_visual + "）"
     forbidden = list(pol["forbidden_inferences"])
     if entity == "software":
         boundary = ("不得虚构商品外观、标签、规格、价格、评价与效果数据；"
@@ -323,11 +355,15 @@ def build_visual_brief(concept: dict, analysis: dict, profile: dict,
     return {
         "concept_id": concept.get("concept_id", ""),
         "concept_key": concept.get("concept_key", ""),
+        # V4.104 / 方案B：路线身份贯穿到 brief，供 route_id 精确取用（不再 fallback concept_id）。
+        "route_key": _clean((concept or {}).get("route_key")),
+        "route_name": _clean((concept or {}).get("route_name")),
+        "route_visual_hook": route_visual,
         "layout": layout,
         "aspect": f"{int(w)}x{int(h)}",
         "placement": placement,
         "ad_product": ad_product,
-        "subject": _clean((profile or {}).get("visual_subject")) or "与页面真实内容一致的中性主视觉",
+        "subject": subject,
         "action": pol["default_action"],
         "setting": pol["default_setting"],
         "composition": LAYOUT_COMPOSITION[layout],

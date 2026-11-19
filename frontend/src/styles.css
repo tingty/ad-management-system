@@ -1972,6 +1972,9 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .vs-video-bad { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: #b42318; background: #fdecec; }
 /* V4.94：视觉复核工具不可用时的诚实标注，不冒充"已通过" */
 .vs-video-warn { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: #b54708; background: #fff4e5; }
+/* V4.104 / 方案E：图片质量状态标签（unverified 橙 / fail 红，与视频复核标签同视觉语言） */
+.cw-quality-unverified { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: #b54708; background: #fff4e5; }
+.cw-quality-fail { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; color: #b42318; background: #fdecec; }
 .vs-video-dl { display: inline-block; font-size: 12px; color: var(--primary2); text-decoration: none; margin: 0 2px 4px; }
 .vs-video-dl:hover { text-decoration: underline; }
 

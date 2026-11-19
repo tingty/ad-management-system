@@ -208,3 +208,82 @@ async def audit_video_vision(video_path: str, lexicon: Optional[dict] = None,
         "note": ("成片画面发现未经批准文字 / 疑似品牌错拼，已阻断标记待核实；原片保留可下载核对。"
                  if violations else "抽帧视觉复核通过：画面未发现文字。"),
     }
+
+
+# ---------------------------------------------------------------------------
+# V4.104 / 方案E：图片质量扩展检查（复用同一视觉模型通道，不走 Mock/Fallback）
+# ---------------------------------------------------------------------------
+_IMAGE_QUALITY_SYSTEM = (
+    "你是广告素材质量审查员。根据画面判断以下四个维度，只输出严格 JSON，不要解释或 Markdown："
+    "{\"product_presence\":{\"status\":\"ok|fail|unverified\",\"detail\":\"...\"},"
+    "\"value_visibility\":{\"status\":\"ok|fail|unverified\",\"detail\":\"...\"},"
+    "\"visual_conflict\":{\"status\":\"ok|fail|unverified\",\"detail\":\"...\"},"
+    "\"ocr\":{\"status\":\"ok|fail|unverified\",\"detail\":\"...\"}}。"
+    "product_presence=画面是否有清晰可辨的产品/主体；value_visibility=核心价值主张是否能被看见；"
+    "visual_conflict=是否有明显视觉错误/拼接冲突/残缺；ocr=是否出现异常或错误文字。"
+    "无法判断的维度填 unverified，不猜测。"
+)
+_IMAGE_QUALITY_USER = "审查这张推广图的四个质量维度，按系统要求的 JSON 结构输出。"
+_IMAGE_QUALITY_DIMS = ("product_presence", "value_visibility", "visual_conflict", "ocr")
+
+
+async def audit_image_quality(image_bytes: bytes, model_cfg: Optional[dict]) -> dict:
+    """用真实视觉模型对单张推广图做四维质量检查。
+
+    与 recognize_frames 同源：无配置 / 非 OpenAI 协议 / 调用失败一律 unavailable，
+    绝不走 MockLLM/FallbackLLM，也不冒充已通过。调用方据此标 unverified。
+    返回 {"status": "ok"|"unavailable", "checks": {...}, "reason": ...}。
+    """
+    cfg = model_cfg if isinstance(model_cfg, dict) else {}
+    missing = [k for k in ("api_key", "base_url", "model") if not str(cfg.get(k) or "").strip()]
+    if missing:
+        return {"status": "unavailable", "checks": {},
+                "reason": "未配置可用的视觉模型：" + "/".join(missing)}
+    try:
+        from llm_catalog import _resolve_protocol
+        if _resolve_protocol(str(cfg.get("provider") or "")) != "openai":
+            return {"status": "unavailable", "checks": {},
+                    "reason": "视觉质检仅支持 OpenAI 兼容协议"}
+    except Exception:
+        return {"status": "unavailable", "checks": {}, "reason": "视觉协议识别失败"}
+
+    payload = {
+        "model": cfg["model"],
+        "messages": [
+            {"role": "system", "content": _IMAGE_QUALITY_SYSTEM},
+            {"role": "user", "content": [
+                {"type": "text", "text": _IMAGE_QUALITY_USER},
+                {"type": "image_url", "image_url": {
+                    "url": "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode("ascii")}},
+            ]},
+        ],
+        "temperature": 0,
+        "max_tokens": 512,
+    }
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=90) as c:
+            r = await c.post(str(cfg["base_url"]).rstrip("/") + "/chat/completions",
+                             headers={"Authorization": "Bearer " + str(cfg["api_key"]),
+                                      "Content-Type": "application/json"},
+                             json=payload)
+            r.raise_for_status()
+            raw = r.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return {"status": "unavailable", "checks": {},
+                "reason": "视觉质检调用失败：" + type(e).__name__ + ": " + str(e)[:120]}
+    try:
+        cleaned = re.sub(r"^```json\s*|\s*```$", "", str(raw or "").strip(), flags=re.I)
+        data = json.loads(cleaned)
+    except Exception:
+        return {"status": "unavailable", "checks": {}, "reason": "视觉质检返回不可解析 JSON"}
+    checks: dict = {}
+    for dim in _IMAGE_QUALITY_DIMS:
+        row = data.get(dim) if isinstance(data, dict) else None
+        st = str((row or {}).get("status") or "unverified") if isinstance(row, dict) else "unverified"
+        if st not in ("ok", "fail", "unverified"):
+            st = "unverified"
+        checks[dim] = {"status": st, "detail": str((row or {}).get("detail") or "")[:200]}
+    statuses = [v["status"] for v in checks.values()]
+    status = "fail" if "fail" in statuses else ("ok" if all(s == "ok" for s in statuses) else "unverified")
+    return {"status": status, "checks": checks, "model": str(cfg["model"])}

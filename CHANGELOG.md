@@ -2,6 +2,39 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.104 路线独立生成与图片四维质检——废弃多路线融合、质检开关可关
+
+**发布日期**：2026-11-19 15:20
+**变更类型**：优化 / 新增
+**涉及模块**：素材创作平台 / 创意工作台（图片生成、结果卡与资产区）、系统设置、大模型配置（视觉质检模型复用）、后端接口与生成链路、数据模型 schemas、视觉复核模块、图片内容体检、提示词规则、前端样式、回归测试、发版流程、系统版本
+**变更摘要**：按用户对诊断报告 9 类优化方案的决策，第二批实施方案 B（路线成为独立生成概念）与方案 E（质检从「有画面」扩展为「有效素材」）。B：此前多条创意路线只被当作同一概念的「辅助修饰」，同一文案概念被路线词缀反复叠加，路线差别最终落不到画面上；本版删除融合修饰语义，每条路线按 route_key 独立构造概念与视觉简报，concept_key / config_id 随路线变化，前端按路线逐条下单，提示词规则改为「本组独立路线」。E：此前质检只判断图片是否有画面（纯色拦截），无法回答「这张图能不能投」；本版在系统设置新增质检开关（默认打开、可关闭，持久化到 SystemState KV，无需 seed），开启时对每张合格图调用真实视觉模型做四维质检（主体 / 文案可读 / 品牌一致性 / 投放可用），结果写入 quality_status / quality_checks，视觉模型不可用时如实标 unverified 且不影响交付。本版不涉及意图打通、参考图编辑、服务端恢复、提示词管理接线与投放对照实验。
+**更新要点**
+- 【优化】删除「多路线融合修饰」：`image_prompt_rule.py` 规则升到 v3，去掉「辅助路线 / 多路线融合」表述，改为「本组独立路线」，同批图片不再被路线词缀污染。
+- 【优化】`build_concept(..., route=None)` 把路线键绑入 concept_key 与承诺语，`build_visual_brief(..., route=None)` 写入 route_key / route_visual_hook；不传 route 时行为与旧版一致（向后兼容）。
+- 【优化】`media_ad.generate_media_images` 用 route_by_key 建索引，按 slot 的 route_key 取单条路线构造概念与视觉简报，不再跨路线共享概念。
+- 【优化】前端每条创意路线单独下单，slots 携带 route_key；结果卡按资产 meta 的 spec_library 展示真实规格，资产区新增「质量未核验 / 质检异常」标签。
+- 【新增】`app_settings` 布尔配置（get_bool / set_bool，基于 SystemState KV），质检开关默认打开、可关闭，无需数据迁移。
+- 【新增】`video_vision_audit.audit_image_quality()` 四维视觉质检：OpenAI 兼容真实视觉模型，未配置 / 调用失败 / 返回不可解析一律 unavailable，绝不走 Mock 或 Fallback 冒充通过。
+- 【新增】`/settings/image-quality-audit` GET / PUT 接口与系统设置卡片开关，前端可即时关闭质检以节省视觉调用成本。
+- 【优化】`image_content_guard.inspect_image_content(path, extended_check)` 保留旧 ok / verdict / metrics 字段，新增 quality_status / checks；未传扩展结论标 unverified，纯色拦截同时标 quality_status=fail。
+- 【验证】专项 test_route_independent_v4104 7/7、test_quality_audit_v4104 9/9；全量回归 377 项 0 失败 / 0 错误 / 2 跳过；tsc 0 错误；npm run build 通过；发版校验通过。
+**本次优化与更改的功能 / 模块**
+- 【优化】创意工作台 / 图片生成：每条路线完全独立生成，概念键与视觉简报随路线区分
+- 【新增】系统设置 / 图片质检开关：默认打开、可关闭，持久化到 SystemState
+- 【新增】视觉复核 / 四维质检：audit_image_quality 真实视觉模型，不可用标 unavailable
+- 【优化】资产结果卡 / 质量标签：quality_status 与 quality_checks 透出，未核验如实标注
+- 【优化】提示词规则 / image_prompt_rule v3：删除多路线融合表述，改为本组独立路线
+
+**影响范围**
+- 同一批图片的路线差别现在真正体现在概念与画面上，不再出现「同一句主标题 + 不同修饰词」的近似图；路线数量与下单方式不变，用户交互无需改变。
+- 质检开关默认打开，开启时每张合格图会多一次视觉模型调用（产生额外调用成本与耗时）；可在系统设置关闭，关闭后仅保留纯色拦截。
+- 视觉模型未配置或调用失败时，图片仍正常交付，仅质量状态标 unverified，不会被误判为不合格而重发已计费的调用。
+
+**验证**
+- 专项 test_route_independent_v4104 7/7、test_quality_audit_v4104 9/9
+- 全量回归 377 项 0 失败 / 0 错误 / 2 跳过；tsc 0 错误；npm run build 通过；prepare_release --check 通过
+- 真实付费出片 / 真实视觉质检抽检 / 品牌方确认 / 投放效果为外部验收项，模拟测试不可替代
+
 ## V4.103 证据硬门与规格统一引用——真实抓取无证据阻断生成、spec_id 稳定下发
 
 **发布日期**：2026-11-19 14:40

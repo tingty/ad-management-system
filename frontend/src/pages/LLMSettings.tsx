@@ -399,6 +399,7 @@ export default function LLMSettings() {
 
   return (
     <div>
+      <ImageQualitySetting />
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h2>已配置模型（{list.length}）</h2>
@@ -702,6 +703,43 @@ export default function LLMSettings() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// V4.104 / 方案E：图片质量扩展质检开关（系统设置卡片，默认打开、可关闭）。
+function ImageQualitySetting() {
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  useEffect(() => {
+    api.imageQualityAudit().then((r: any) => setEnabled(!!r?.enabled)).catch(() => setEnabled(true))
+  }, [])
+  const toggle = async (next: boolean) => {
+    setEnabled(next); setSaving(true); setMsg('')
+    try {
+      await api.setImageQualityAudit(next)
+      setMsg('已保存')
+    } catch (e: any) {
+      setEnabled(!next)
+      setMsg('保存失败：' + (e?.message || '未知错误'))
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <h2>图片质量质检</h2>
+      <p className="muted" style={{ fontSize: 12, margin: '6px 0 10px' }}>
+        开启后，每张合格推广图会用真实视觉模型复核「产品主体 / 价值可见 / 视觉冲突 / 文字异常」四个维度；
+        模型不可用时标注「质量未核验」，正常交付、不冒充通过。低成本纯色拦截始终保留，不受此开关影响。
+      </p>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input type="checkbox" disabled={enabled === null || saving}
+          checked={!!enabled} onChange={e => toggle(e.target.checked)} />
+        <span>启用图片质量扩展质检（默认打开，关闭后只做纯色检查）</span>
+      </label>
+      {msg && <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>{msg}</span>}
     </div>
   )
 }

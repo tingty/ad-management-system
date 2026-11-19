@@ -97,6 +97,11 @@ class PromptDefaultIn(BaseModel):
     id: Optional[str] = None
 
 
+class ImageQualityAuditIn(BaseModel):
+    """V4.104 / 方案E：图片质量扩展质检开关（系统设置，默认打开）。"""
+    enabled: bool
+
+
 class LayerMatchIn(BaseModel):
     """V4.98：按产品分析内容自动匹配心理链条的请求体。"""
     analysis: dict = {}
@@ -216,6 +221,7 @@ class MediaImageSlot(BaseModel):
     concept_index: Optional[int] = None   # 本任务使用的创意文案组合下标（旧调用为空 → 顺序轮换）
     concept_id: str = ""         # 前端可展示的概念标识（不参与服务端解析）
     spec_id: str = ""            # V4.103 / 方案H：服务端下发的稳定规格 ID，优先于展示名解析
+    route_key: str = ""          # V4.104 / 方案B：本组创意路线标识，用于绑定独立 concept
 
 class MediaCopyVariant(BaseModel):
     """V4.38：一条被用户勾选的「创意文案组合」，作为一张推广图的叠加文案。"""

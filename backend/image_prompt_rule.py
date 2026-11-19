@@ -5,8 +5,8 @@
 
 1. 唯一实现：规则只在后端生成，前端只传结构化数据（routes + supplement），
    不各自拼提示词，避免前后端漂移。
-2. 主干 + 修饰：第一勾选路线为主干（决定画面主体与情绪），其余勾选路线只做
-   构图 / 情绪 / 场景修饰；每条路线各出一组图，规则文本一致。
+2. V4.104 起每条路线完全独立：每条勾选路线各自出一组图，画面主体、情绪与
+   价值切入只由本组路线决定；不再把其余候选路线当「辅助修饰」混入同一张画面。
 3. 补充指令优先级最高，但仅限视觉表达（构图 / 光线 / 色调 / 场景 / 镜头语言），
    不得据此编造商品事实、价格、评分或效果数据（V4.96 确认：只做硬约束，不接审查模型）。
 4. 零文字兜底：规则自带「画面不绘制任何文字」硬约束，并与 V4.88 图片零文字契约
@@ -19,7 +19,7 @@ import re
 
 from creative_brief import build_image_brief_block
 
-RULE_VERSION = "2"
+RULE_VERSION = "3"
 MAX_ROUTES = 10
 MAX_SUPPLEMENT = 500
 
@@ -75,8 +75,10 @@ def build_image_prompt_rule(*, routes=None, supplement: str = "", platform: str 
 
     lines: list[str] = ["[CreativePlanRule v%s] 本次出图的唯一创意规则（已合并所选创意规划与补充指令，按优先级执行）：" % RULE_VERSION]
     if items:
+        # V4.104 / 方案B：每条路线独立成图，本组只应有一条路线；即使历史调用
+        # 误传多条也只取本组第一条，绝不把其余路线当「辅助修饰」混进画面。
         head = items[0]
-        lines.append("主干路线 %s「%s」：切入角度=%s；视觉表达=%s；标签=%s。" % (
+        lines.append("本组独立路线 %s「%s」：切入角度=%s；视觉表达=%s；标签=%s。" % (
             head["key"], head["name"], head["angle"] or "未指定",
             head["description"] or "未指定", "、".join(head["tags"]) or "无"))
         lines.append("主干转化框架：%s；钩子=%s；证据表达=%s；视觉钩子=%s；收口意图=%s。" % (
@@ -84,14 +86,8 @@ def build_image_prompt_rule(*, routes=None, supplement: str = "", platform: str 
             head["hook"] or "首屏结果或反差", head["proof"] or "真实功能演示，不写数字",
             head["visual_hook"] or "主体与场景形成可观察变化",
             head["cta_role"] or "叠加位收口，不绘制文字"))
-        if len(items) > 1:
-            others = []
-            for r in items[1:]:
-                others.append("%s「%s」(%s)" % (
-                    r["key"], r["name"], r["angle"] or r["description"] or "视觉修饰"))
-            lines.append("辅助路线（只做构图 / 情绪 / 场景修饰，不改主体）：" + "；".join(others) + "。")
     else:
-        lines.append("主干路线：未勾选创意规划，仅按补充指令调整视觉表达。")
+        lines.append("独立路线：未勾选创意规划，仅按补充指令调整视觉表达。")
 
     if supp:
         lines.append("用户补充指令（仅调整视觉表达，优先级最高）：" + supp + "。")
@@ -99,14 +95,14 @@ def build_image_prompt_rule(*, routes=None, supplement: str = "", platform: str 
         lines.append(brief_block)
 
     constraints = [
-        "以主干路线决定画面主体与情绪基调，辅助路线只做修饰，禁止多主题拼贴或逐个路线各画一遍",
+        "本组只有一条独立路线，画面主体、情绪与价值切入只由该路线决定，禁止混入其它候选路线的主体或价值主张",
         "补充指令与路线冲突时以补充指令为准，但仅限构图 / 光线 / 色调 / 场景 / 镜头语言等视觉表达",
         "不得据此编造商品事实、价格、折扣、评分、用户数或效果数据，也不得改写已确认信息",
         "画面内不绘制任何文字（含品牌名、标语、按钮、字母与数字），文字由播放层 / 合成层另行处理",
     ]
     if plat:
         constraints.insert(3, "遵循 %s 平台素材规格与版位要求" % plat)
-    lines.append("融合硬约束：" + "；".join("%d) %s" % (i, c) for i, c in enumerate(constraints, 1)) + "。")
+    lines.append("独立路线硬约束：" + "；".join("%d) %s" % (i, c) for i, c in enumerate(constraints, 1)) + "。")
     if mode != "pure":
         lines.append("叠加模式=%s：文字 / 按钮 / logo 由合成层绘制，生成画面仍保持零文字。" % mode)
 

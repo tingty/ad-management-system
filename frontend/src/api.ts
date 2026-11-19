@@ -627,6 +627,9 @@ export interface MediaImageItem {
   copy?: { headline: string; sub: string; cta: string }
   /** V4.40 / F11：逐图状态，不再用批次级 ai_used 掩盖模板回退 */
   status?: 'ok' | 'fallback'
+  /** V4.104 / 方案E：质量状态独立于文件生成状态；unverified 正常交付但如实标注 */
+  quality_status?: 'ok' | 'fail' | 'unverified'
+  quality_checks?: Record<string, { status: string; detail?: string }>
   ai_background?: boolean
   fallback?: boolean
   fallback_reason?: string
@@ -1259,6 +1262,12 @@ export const api = {
     req<{ ok: boolean; kind: string; target_key: string; id: string | null; name: string;
           defaults: Record<string, PromptDefaultInfo> }>(
       '/api/settings/prompt-defaults', { method: 'PUT', body: JSON.stringify({ kind, id }) }),
+  // V4.104 / 方案E：图片质量扩展质检开关（系统设置，默认打开）
+  imageQualityAudit: () =>
+    req<{ enabled: boolean }>('/api/settings/image-quality-audit'),
+  setImageQualityAudit: (enabled: boolean) =>
+    req<{ ok: boolean; enabled: boolean }>('/api/settings/image-quality-audit',
+      { method: 'PUT', body: JSON.stringify({ enabled }) }),
   fileUrl: (filePath?: string) => {
     if (!filePath) return ''
     const rel = filePath.includes('/uploads/') ? filePath.split('/uploads/')[1] : filePath.split('/').pop()

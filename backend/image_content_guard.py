@@ -92,10 +92,15 @@ def _metrics(img: "Image.Image") -> dict:
 _THRESHOLDS = {"grad_lt": GRAD_MAX, "std_lt": STD_MAX, "uniq_lt": UNIQ_MAX}
 
 
-def inspect_image_content(path: str | None) -> dict:
-    """体检一张图片是否为纯色 / 无画面。
+def inspect_image_content(path: str | None, extended_check: dict | None = None) -> dict:
+    """体检一张图片是否为纯色 / 无画面（V4.91），并承载 V4.104 扩展质检结论。
 
-    返回结构稳定；任何异常都降级为 ok=True 并附 reason，避免体检 bug 阻断出图。
+    - 旧字段 ok / verdict / metrics / thresholds 语义完全不变：纯色仍硬拦截（fail-open
+      仍保留 has_content），不破坏已锁定该行为的测试。
+    - V4.104 / 方案E：新增 quality_status（ok / fail / unverified）与 checks。
+      `extended_check` 是调用方异步算好传入的扩展检查结论（产品参与 / 价值可见 /
+      视觉冲突 / OCR）。未传、模型不可用或检查缺失时，扩展维度标 unverified——
+      **不冒充已通过**，也不因工具缺失阻断交付（质量状态独立于文件生成状态）。
     """
     base = {
         "ok": True,
@@ -103,7 +108,11 @@ def inspect_image_content(path: str | None) -> dict:
         "reason": "",
         "metrics": {},
         "thresholds": dict(_THRESHOLDS),
+        # V4.104：默认「扩展质量未核验」，只有调用方传入明确结论才升级为 ok/fail。
+        "quality_status": "unverified",
+        "checks": {},
     }
+    _apply_extended(base, extended_check)
     if not path or not os.path.isfile(path):
         base["reason"] = "文件不存在，跳过体检（不误判）"
         return base
@@ -121,9 +130,31 @@ def inspect_image_content(path: str | None) -> dict:
     if blank:
         base["ok"] = False
         base["verdict"] = "blank"
+        base["quality_status"] = "fail"
         base["reason"] = (
             f"检测到纯色 / 无画面图片（grad={grad} < {GRAD_MAX}, "
             f"std={std} < {STD_MAX}, uniq={uniq} < {UNIQ_MAX}）；"
             "未交付，避免使用无内容的纯色素材"
         )
     return base
+
+
+def _apply_extended(base: dict, extended_check: dict | None) -> None:
+    """把调用方传入的扩展质检结论并入结果，缺失一律保持 unverified。"""
+    ec = extended_check if isinstance(extended_check, dict) else {}
+    checks = ec.get("checks") if isinstance(ec.get("checks"), dict) else {}
+    base["checks"] = dict(checks)
+    if not ec or not checks:
+        base["checks"] = {
+            dim: {"status": "unverified", "detail": "未执行扩展质检（开关关闭或模型不可用）"}
+            for dim in ("product_presence", "value_visibility", "visual_conflict", "ocr")
+        }
+        return
+    statuses = [str((v or {}).get("status") or "") for v in checks.values() if isinstance(v, dict)]
+    ec_status = str(ec.get("status") or "")
+    if "fail" in statuses or ec_status == "fail":
+        base["quality_status"] = "fail"
+    elif all(s == "ok" for s in statuses) and ec_status in ("ok", ""):
+        base["quality_status"] = "ok"
+    else:
+        base["quality_status"] = "unverified"

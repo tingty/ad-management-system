@@ -52,6 +52,7 @@ from media_spec_library import (image_targets as spec_image_targets,
 from prompt_contract import build_prompt_contract, render_image_contract_block
 from image_prompt_rule import render_image_prompt_rule
 from image_content_guard import inspect_image_content
+import app_settings  # V4.104 / 方案E：系统级质检开关（默认开、可关）
 from reference_image import analyze_reference_style, render_reference_style_block
 from batch_workspace import BatchWorkspace
 # V4.42 / F06：供应商尺寸能力目录、按比例构图与主体保护
@@ -810,6 +811,21 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
     # 编辑过的预设文本、调色板与版式都从这里进入文案与画面。
     config = resolve_creative_config(style_opts, lang=lang,
                                      overrides=load_preset_overrides(db))
+    # V4.104 / 方案B：按 route_key 建立路线索引，概念构造时按本组路线取用，
+    # 每条路线独立成概念，不再跨路线共享 concept_key。
+    _cp = style_opts.get("creative_plan") if isinstance(style_opts.get("creative_plan"), dict) else {}
+    route_by_key = {str(r.get("key") or ""): r for r in (_cp.get("routes") or [])
+                    if isinstance(r, dict)}
+    # V4.104 / 方案E：系统设置开关（默认开、可关）。关闭时只跑纯色检查；
+    # 打开时对每张合格图做四维视觉质检，模型不可用标 unverified 不冒充通过。
+    quality_audit_enabled = app_settings.get_bool(db, app_settings.IMAGE_QUALITY_AUDIT_ENABLED, True)
+    vision_cfg = None
+    if quality_audit_enabled:
+        try:
+            from creative_tasks import _vision_model_cfg
+            vision_cfg = _vision_model_cfg(db)
+        except Exception:
+            vision_cfg = None
     cfg_snapshot = config_snapshot(config)
     palette = dict(config["visual"].get("palette") or {})
     dim_ratio = float(config["visual"].get("dim_ratio") or 0.28)
@@ -907,17 +923,19 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             # V4.41 / F03：顺序修正 —— 先选文案概念，再构造视觉简报与背景提示词。
             # V4.40 是先算 bg_prompt 再选文案，导致所有概念共用同一画面描述。
             ci = slot.get("concept_index")
+            rk = str(slot.get("route_key") or "")
+            route = route_by_key.get(rk) if rk else None
             if variants:
                 use_idx = ci if isinstance(ci, int) and 0 <= ci < len(variants) else idx % len(variants)
                 v = variants[use_idx]
                 headline, sub, cta = v["headline"], v["sub"], v["cta"]
                 vlabel = v["label"] or f"组合 {use_idx + 1}"
-                concept = build_concept(v, use_idx, analysis, profile)
+                concept = build_concept(v, use_idx, analysis, profile, route=route)
             else:
                 use_idx = None
                 headline, sub, cta = base_headline, base_sub, base_cta
                 concept = build_concept({"headline": headline, "sub": sub, "cta": cta},
-                                        idx, analysis, profile)
+                                        idx, analysis, profile, route=route)
                 vlabel = ""
             concept_id = concept["concept_id"]
             layout = choose_layout(concept, config, w, h)
@@ -1119,7 +1137,24 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
             # V4.91：内容体检门。纯色 / 无画面图（无论来自 AI 供应商还是本地渐变兜底）
             # 都不作为合格素材交付，标记 needs_attention 并写明原因。
             # 注意：已计费的模型调用绝不因体检重发；体检只对已渲染的文件做只读判断。
-            content_check = await asyncio.to_thread(inspect_image_content, t["out"])
+            # V4.104 / 方案E：扩展视觉质检（默认开、系统设置可关）。视觉模型不可用时
+            # 返回 unavailable → 该图质量标 unverified，仍正常交付，不误判为不合格。
+            extended_check = None
+            if quality_audit_enabled:
+                try:
+                    from video_vision_audit import audit_image_quality
+                    from PIL import Image as _PILImage
+                    import io as _io
+                    with _PILImage.open(t["out"]) as _im:
+                        _im.load()
+                        _buf = _io.BytesIO()
+                        _im.convert("RGB").save(_buf, format="JPEG", quality=80)
+                    qa = await audit_image_quality(_buf.getvalue(), vision_cfg)
+                    if qa.get("status") != "unavailable":
+                        extended_check = {"status": qa.get("status"), "checks": qa.get("checks") or {}}
+                except Exception:
+                    extended_check = None  # 视觉质检异常 → 保持 unverified，不影响交付
+            content_check = await asyncio.to_thread(inspect_image_content, t["out"], extended_check)
             if not content_check.get("ok"):
                 return {"__skipped__": {
                     **common, "status": "needs_attention",
@@ -1159,6 +1194,9 @@ async def generate_media_images(db, analysis: dict, platform: str, lang: str,
                     "mode": "gradient", "crop": None, "protected": True,
                     "requested_size": [t["w"], t["h"]], "returned_size": returned_size,
                 },
+                # V4.104 / 方案E：质量状态独立于文件生成状态；unverified 正常交付但如实标注。
+                "quality_status": content_check.get("quality_status") or "unverified",
+                "quality_checks": content_check.get("checks") or {},
                 **meta,
             }}
 

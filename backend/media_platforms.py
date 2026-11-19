@@ -592,6 +592,7 @@ def validate_task_matrix(platform: str, slots: list, total_pixels: int | None = 
             "os": pl.get("os") or "unknown",
             "spec_version": SPEC_VERSION,
             "spec_id": spec_id_out,
+            "route_key": str(slot.get("route_key") or ""),  # V4.104 / 方案B：路线绑定透传
             "w": w, "h": h,
         }
         if ci is None and dedupe_key in seen:

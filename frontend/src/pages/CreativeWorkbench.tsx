@@ -779,16 +779,18 @@ export default function CreativeWorkbench() {
             finalStates.push('failed'); done++; setProgressPct(Math.round(done / totalJobs * 100)); continue
           }
           setProgressText(`正在为 ${p} · ${route?.name || '默认'} 生成推广图片…`)
-          const slots = sizes.map(size => ({ size, placement: p, spec_id: specIdFor(p, size) }))
-          // V4.96：不再把路线拆散塞进 creative_direction / content_style，
-          // 改为把「当前主干路线 + 其余勾选路线 + 图片补充指令」交给后端统一生成唯一规则。
+          // V4.104 / 方案B：每条路线完全独立生成——slots 携带本组路线标识，
+          // 供后端把 concept_id/concept_key 绑定到该路线，不再跨路线共享概念。
+          const slots = sizes.map(size => ({ size, placement: p, spec_id: specIdFor(p, size),
+            route_key: route?.key || '' }))
+          // V4.104 / 方案B：废弃「主干 + 其余路线做修饰」的多路线融合，
+          // 每组只传当前路线一条，价值切入 / 主体 / 证据互不混用。
           const style_opts: any = {
             creative_direction: '',
             content_style: '',
             color_scheme: '',
             creative_plan: {
-              // 当前路线置首 = 本组主干，其余勾选路线作为修饰（每条路线各出一组）
-              routes: ([route, ...activeRoutes.filter(r => r !== route)].filter(Boolean) as any[]).map(r => ({
+              routes: (route ? [route] : []).map(r => ({
                 key: r.key, name: r.name, angle: r.angle,
                 description: r.description, tags: r.tags || [],
                 framework: r.framework || '', framework_label: r.framework_label || '',
@@ -1613,6 +1615,10 @@ export default function CreativeWorkbench() {
                           <div className="cwb-asset-meta">
                             <span>{brandOf(a.__platform, a.placement)}</span>
                             <span className="cwb-type">{vid ? '视频' : '图片'}</span>
+                            {!vid && a.quality_status === 'unverified' &&
+                              <span className="cw-quality-unverified" title="视觉模型不可用或未执行，未做质量核验">质量未核验</span>}
+                            {!vid && a.quality_status === 'fail' &&
+                              <span className="cw-quality-fail" title="扩展质检发现明显质量问题">质量待核实</span>}
                           </div>
                           <div className="cwb-asset-spec">
                             <span>推荐尺寸 {sp.dim}</span><span>画面比例 {sp.ratio}</span><span>{sp.fmt}</span>
