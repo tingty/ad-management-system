@@ -36,7 +36,11 @@ class TestPromptManageRenameStatic(unittest.TestCase):
         self.assertNotIn("label: '素材提示管理'", src)
         allowed = src[src.index("function allowedTabs"):src.index("function readCollapsed")]
         self.assertIn("'materialprompts'", allowed)
-        self.assertIn("['workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history']", allowed)
+        # V4.108：新增一级模块「素材工作坊」后，编辑角色可访问的页面集合随之扩展；
+        # 这条断言只保护「materialprompts 仍在白名单内」，不锁死全部页面清单。
+        self.assertIn("'creativeanalysis'", allowed)
+        self.assertIn("'speclibrary'", allowed)
+        self.assertIn("'history'", allowed)
 
     def test_02_page_title_and_dynamic_module(self):
         src = (FRONTEND / "pages" / "MaterialPromptManage.tsx").read_text(encoding="utf-8")

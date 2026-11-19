@@ -11,18 +11,19 @@ import CreativeWorkbench from './pages/CreativeWorkbench'
 import CreativeAnalysis from './pages/CreativeAnalysis'
 import SpecLibrary from './pages/SpecLibrary'
 import MaterialPromptManage from './pages/MaterialPromptManage'
+import MaterialWorkshop from './pages/MaterialWorkshop'
 import CwTaskDock from './CwTaskDock'
 
 /* V4.75：移除「素材创作平台」（素材创作 / 素材提示词）两个子模块及其独占代码，
    「素材历史」迁移为「创意工作台」的最后一个二级菜单；系统设置保留。 */
-type Tab = 'workbench' | 'creativeanalysis' | 'speclibrary' | 'materialprompts' | 'history'
+type Tab = 'workshop' | 'workbench' | 'creativeanalysis' | 'speclibrary' | 'materialprompts' | 'history'
   | 'llm' | 'accounts' | 'logs' | 'releasenotes'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
-const TABS: Tab[] = ['workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history',
+const TABS: Tab[] = ['workshop', 'workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history',
   'llm', 'accounts', 'logs', 'releasenotes']
 const SB_KEY = 'admb_sidebar'
 
@@ -48,6 +49,18 @@ const GROUP_WORKBENCH: NavGroup = {
       desc: '统一管理文案 / 图片 / 视频三类通用提示词：每条有一句话意图、可勾选的六层心理链条、带变量的中文模板；变量来自系统实际生成逻辑，可按产品分析自动匹配覆盖层级。' },
     { key: 'history', label: '素材历史', icon: 'history',
       desc: '归档已分析整理的网站、广告文案与推广图片；可放大查阅、单张或打包再下载，并支持批量删除历史信息' },
+  ],
+}
+
+/* V4.108 素材工作坊：独立一级模块。
+   只有一件事——把链接或产品描述变成可预览、可下载的文案与图片；
+   专业参数（路线、brief、版位矩阵）留在创意工作台，不进这个入口。 */
+const GROUP_WORKSHOP: NavGroup = {
+  name: '素材工作坊',
+  icon: 'wand',
+  items: [
+    // V4.108：本模块按产品要求隐藏说明行，desc 留空，页头只保留标题。
+    { key: 'workshop', label: '素材工作坊', icon: 'wand', desc: '' },
   ],
 }
 
@@ -112,7 +125,7 @@ function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   // V4.100：materialprompts 必须列入白名单，否则点击后被下方校验重定向回工作台。
   return [
-    ...(canEdit ? (['workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history'] as Tab[]) : []),
+    ...(canEdit ? (['workshop', 'workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history'] as Tab[]) : []),
     ...(user.role === 'admin' ? (['llm', 'accounts', 'logs'] as Tab[]) : []),
     // 「新版通知」对所有角色开放，方便用户随时查阅每次优化与变更的版本内容
     'releasenotes',
@@ -221,11 +234,12 @@ export default function App() {
   const isEditor = !!user && ['admin', 'manager', 'editor'].includes(user.role)
   const isAdmin = user?.role === 'admin'
 
-  const visibleGroups: NavGroup[] = [GROUP_WORKBENCH, GROUP_SYSTEM]
+  const visibleGroups: NavGroup[] = [GROUP_WORKSHOP, GROUP_WORKBENCH, GROUP_SYSTEM]
     .map(g => ({
       ...g,
       items: g.items.filter(it =>
-        it.key === 'releasenotes' ? true : (g === GROUP_WORKBENCH ? isEditor : isAdmin)),
+        it.key === 'releasenotes' ? true
+          : (g === GROUP_SYSTEM ? isAdmin : isEditor)),
     }))
     .filter(g => g.items.length > 0)
   const allItems: NavItem[] = visibleGroups.flatMap(g => g.items)
@@ -288,6 +302,24 @@ export default function App() {
           {visibleGroups.map((g, i) => {
             // 注意：visibleGroups 经过 map 生成新对象，不能用 g === GROUP_WORKBENCH 判断
             // （那样两个分组都会落到 'system'，触发重复 key 且折叠状态互相串联）。
+            // V4.108：只有一个条目的分组直接渲染成一级入口（如「素材工作坊」），
+            // 不再套一层「分组标题 + 唯一子项」的重复层级。
+            if (g.items.length === 1) {
+              const it = g.items[0]
+              return (
+                <Fragment key={it.key}>
+                  {i > 0 && <div className="sb-sep" />}
+                  <button
+                    className={`sb-item ${tab === it.key ? 'active' : ''}`}
+                    onClick={() => go(it.key)}
+                    title={collapsed ? g.name : undefined}
+                  >
+                    <Icon name={g.icon} size={18} />
+                    {!collapsed && <span className="sb-label">{g.name}</span>}
+                  </button>
+                </Fragment>
+              )
+            }
             const openKey = g.name === GROUP_WORKBENCH.name ? 'workbench' : 'system'
             return (
               <Fragment key={openKey}>
@@ -332,7 +364,7 @@ export default function App() {
             <div className="ph-left">
               <div className="page-kicker">{curGroup?.name || '广告管理系统'}</div>
               <h1 className="page-title">{cur.label}</h1>
-              <p className="page-desc">{cur.desc}</p>
+              {cur.desc && <p className="page-desc">{cur.desc}</p>}
             </div>
             <div className="ph-right">
               {!isEditor && <span className="pill off">只读账号</span>}
@@ -352,6 +384,9 @@ export default function App() {
             <div style={{ display: tab === 'workbench' ? undefined : 'none' }}>
               <CreativeWorkbench />
             </div>
+          )}
+          {tab === 'workshop' && isEditor && (
+            <MaterialWorkshop canManageModels={isAdmin} onOpenModels={() => go('llm')} />
           )}
           {tab === 'creativeanalysis' && isEditor && <CreativeAnalysis />}
           {tab === 'speclibrary' && isEditor && <SpecLibrary />}

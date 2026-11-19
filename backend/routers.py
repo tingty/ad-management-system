@@ -19,7 +19,9 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      CWIntentParseRequest, CWIntentParseResult,
                      ProductSnapshot, CwLibraryOut, CwLibraryCreate,
                      CWVideoPlanRequest, CWVideoPlanResult, CWVideoGenerateRequest, CWVideoGenerateResult,
-                     CWVideoAsset, CWVideoJobOut, ModelInfo)
+                     CWVideoAsset, CWVideoJobOut, ModelInfo,
+                     WorkshopAnalyzeRequest, WorkshopGenerateRequest,
+                     MediaImageSlot, MediaCopyVariant)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import (get_llm_with_info, finalize_invocation, parse_json, get_video,
@@ -58,6 +60,7 @@ from creative_brief import (
 )
 # V4.105 / 方案C：结构化创作意图（分析前确认创作要求，三类素材共用）
 import creative_intent as cw_intent
+import workshop as cw_workshop
 from reference_image import (normalize_role as reference_role,
                             reference_requirement)
 from version import ENABLE_AUTO_CREATION_PLAN
@@ -843,6 +846,16 @@ async def api_cw_intent_parse(req: CWIntentParseRequest,
 @router.post("/cw/analyze", response_model=CWAnalysisResult)
 async def api_cw_analyze(req: CWAnalyzeRequest, db: Session = Depends(get_db),
                          user: User = Depends(require_roles(*CAN_EDIT))):
+    """创意工作台·产品分析的 HTTP 入口。
+
+    V4.108：核心逻辑抽到 `_cw_analyze_core`，素材工作坊复用同一份分析链路，
+    避免两个入口各写一套抓取 / 证据 / 意图逻辑而结论不一致。
+    """
+    return await _cw_analyze_core(req, db, user)
+
+
+async def _cw_analyze_core(req: CWAnalyzeRequest, db: Session,
+                           user: User) -> CWAnalysisResult:
     """创意工作台·产品分析：产品链接/文本 + 平台 → 大模型产出定位 + 4 分析盒 + 项目简报；落库为创意方案草稿。
 
     V4.59 / B1（P0#2：消除「只传 URL 不抓取」）：
@@ -3347,3 +3360,174 @@ def api_plan_finalize(plan_id: str, body: dict, db: Session = Depends(get_db),
     job_results = body.get("job_results") if isinstance(body.get("job_results"), list) else []
     plan = finalize(db, plan_id, job_results)
     return {**plan_to_dict(plan), "message": "计划已质检并归档"}
+
+
+# ----------------------------- V4.108 素材工作坊（独立一级模块） -----------------------------
+@router.get("/workshop/options")
+def api_workshop_options(db: Session = Depends(get_db),
+                         _: User = Depends(require_roles(*CAN_EDIT))):
+    """素材工作坊启动参数：模型就绪状态 + 标准库尺寸选项。
+
+    前端只用这份数据渲染，不在界面上写任何尺寸或模型名，避免与标准库 / 配置页漂移。
+    """
+    return {
+        "models": cw_workshop.model_status(db),
+        "platforms": cw_workshop.platform_options(),
+        "limits": {"max_images": cw_workshop.MAX_IMAGES},
+    }
+
+
+@router.post("/workshop/analyze")
+async def api_workshop_analyze(req: WorkshopAnalyzeRequest, db: Session = Depends(get_db),
+                               user: User = Depends(require_roles(*CAN_EDIT))):
+    """素材工作坊·第一步：链接或产品描述 → 统一分析结论。
+
+    与分析接口共用 `_cw_analyze_core`：抓取、证据包、创作意图完全一致，
+    工作坊只是不展示中间结构。未测试通过的分析模型在调用前直接阻断。
+    """
+    missing = cw_workshop.missing_models(db, ["analysis"])
+    if missing:
+        raise HTTPException(422, detail={
+            "message": "分析模型未就绪：请先在「系统设置 → 大模型配置」完成测试并通过",
+            "models": missing, "blocked": "model_not_ready",
+        })
+    url, text = cw_workshop.split_input(req.input)
+    if not url and not text:
+        raise HTTPException(400, "请提供落地页链接或产品描述")
+    platforms = [str(p).strip() for p in (req.platforms or []) if str(p).strip()] or ["Meta"]
+    res = await _cw_analyze_core(CWAnalyzeRequest(
+        url=url, text=text, platforms=platforms, demo_mode=bool(req.demo_mode),
+        creative_intent=req.creative_intent or {}, intent_text=req.intent_text or "",
+    ), db, user)
+    info = res.model_info
+    # 分析模型失败时 get_llm_with_info 会回退 MockLLM，产出的是样例文案。
+    # 工作坊不交付模拟内容：直接报错，让用户去修配置，而不是拿假结论继续出图。
+    if info.fallback or str(info.source) in ("mock", "local"):
+        raise HTTPException(502, detail={
+            "message": "分析模型未返回有效结果，已阻止使用本地模拟内容",
+            "blocked": "model_failed",
+            "models": cw_workshop.model_status(db)["items"],
+        })
+    return {
+        "plan_id": res.id,
+        "title": res.title,
+        "summary": res.summary,
+        "analysis": res.analysis,
+        "brief": res.brief,
+        "snapshot": res.snapshot.model_dump(),
+        "intent_summary": res.intent_summary,
+        "source": res.source,
+        "models": [i for i in cw_workshop.model_status(db)["items"]
+                   if i["usage"] == "analysis"],
+    }
+
+
+@router.post("/workshop/generate")
+async def api_workshop_generate(req: WorkshopGenerateRequest, db: Session = Depends(get_db),
+                                user: User = Depends(require_roles(*CAN_EDIT))):
+    """素材工作坊·第二步：逐个平台生成文案，并按所选尺寸建出图任务。
+
+    文案与出图都是真实调用：文案失败（模型回退 Mock）的平台不出图，避免用样例文案
+    叠到图上；出图任务走 `generation_jobs`，刷新 / 关页后仍可按 job_id 取回结果。
+    """
+    analysis = req.analysis if isinstance(req.analysis, dict) else {}
+    if not analysis:
+        raise HTTPException(400, "缺少分析结果，请先解析产品")
+
+    # 文案平台：以请求里的平台为准（只出文案时尺寸可以为空）；
+    # 尺寸任务：由标准库复核后的 targets 决定。
+    known = {o["platform"] for o in cw_workshop.platform_options()}
+    copy_platforms: list[str] = []
+    for t in (req.targets or []):
+        p = str(getattr(t, "platform", "") or "").strip()
+        if not p:
+            continue
+        if p not in known:
+            raise HTTPException(422, detail={"message": "尺寸选择未通过标准库校验",
+                                             "errors": [f"未登记的平台：{p}"]})
+        if p not in copy_platforms:
+            copy_platforms.append(p)
+
+    targets, errors = cw_workshop.resolve_targets([t.model_dump() for t in (req.targets or [])])
+    if errors:
+        raise HTTPException(422, detail={"message": "尺寸选择未通过标准库校验", "errors": errors})
+    if len(targets) > cw_workshop.MAX_IMAGES:
+        raise HTTPException(422, detail={
+            "message": f"一次最多生成 {cw_workshop.MAX_IMAGES} 张图，请减少尺寸后重试"})
+
+    # 文案模型是硬前提；图片模型缺失时降级为「只出文案」，不阻断、也不假装出图。
+    missing_copy = cw_workshop.missing_models(db, ["copy"])
+    if missing_copy:
+        raise HTTPException(422, detail={
+            "message": "文案模型未就绪：请先在「系统设置 → 大模型配置」完成测试并通过",
+            "models": missing_copy, "blocked": "model_not_ready",
+        })
+    missing_image = cw_workshop.missing_models(db, ["image"])
+    image_ready = not missing_image
+    if image_ready and not targets:
+        raise HTTPException(400, "请至少选择一个平台与尺寸")
+    if not image_ready and not copy_platforms:
+        raise HTTPException(400, "请至少选择一个平台")
+    _enforce_evidence_gate(analysis)
+
+    copies: list[dict] = []
+    image_jobs: list[dict] = []
+    warnings: list[str] = []
+    if not image_ready:
+        warnings.append("图片模型未就绪，本次只生成文案（不调用文生图、不产生图片费用）")
+
+    # ① 文案：按用户选中的平台逐个生成（图片模型缺失时这就是全部交付）
+    copy_by_platform: dict[str, dict] = {}
+    copy_status: dict[str, str] = {}
+    for platform in copy_platforms:
+        copy_res = await generate_media_copy(
+            db, analysis, platform, req.lang or "en",
+            style_opts={}, brief=(analysis.get("brief") or {}))
+        item = cw_workshop.copy_view(platform, copy_res)
+        copies.append(item)
+        copy_by_platform[platform] = copy_res
+        copy_status[platform] = item["status"]
+        if item["status"] == "failed":
+            warnings.append(f"{platform}：{item['reason']}，已跳过该平台出图")
+
+    # ② 图片：仅在有可用文案时按平台建任务；文案回退 Mock 的平台不出图，
+    #    避免把模拟文案叠到真实图片上冒充交付物。
+    if image_ready:
+        for platform, rows in cw_workshop.group_targets(targets).items():
+            copy_res = copy_by_platform.get(platform) or {}
+            if copy_status.get(platform) == "failed":
+                continue
+            if not copy_res:
+                warnings.append(f"{platform}：缺少可用文案，已跳过该平台出图")
+                continue
+            try:
+                slots = [MediaImageSlot(size=r["size"], spec_id=r.get("spec_id") or "")
+                         for r in rows]
+                i_req = MediaImageRequest(
+                    analysis=LandingAnalysis(**cw_workshop.landing_payload(analysis)),
+                    platform=platform, lang=req.lang or "en",
+                    copy_fields=copy_res.get("fields") or {},
+                    copy_variants=[MediaCopyVariant(
+                        **cw_workshop.overlay_variant(copy_res, analysis))],
+                    style_opts={}, slots=slots,
+                )
+                job, created = job_service.create_job(
+                    db, {"images_request": i_req.model_dump(), "archive": {}}, user,
+                    idempotency_key="", kind="images")
+            except Exception as e:
+                warnings.append(f"{platform}：出图任务未创建（{type(e).__name__}）")
+                continue
+            job_service.spawn_job(job.job_id)
+            image_jobs.append({
+                "platform": platform,
+                "job_id": job.job_id,
+                "created": created,
+                "sizes": [{"size": r["size"], "label": r["label"], "aspect": r["aspect"]}
+                          for r in rows],
+                "poll_url": f"/api/generation-jobs/{job.job_id}",
+            })
+
+    return {"copies": copies, "image_jobs": image_jobs, "warnings": warnings,
+            "images_skipped": (not image_ready),
+            "plan_id": req.plan_id,
+            "models": cw_workshop.model_status(db)["items"]}

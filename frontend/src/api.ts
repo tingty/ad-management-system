@@ -810,6 +810,65 @@ export interface GenerationJob {
   message?: string
 }
 
+/** V4.108 素材工作坊 —— 只用「大模型配置」里当前生效且测试通过的模型 */
+export interface WorkshopModelStatus {
+  usage: 'analysis' | 'copy' | 'image'
+  label: string
+  ready: boolean
+  reason: string
+  name: string
+  provider: string
+  model: string
+  config_id: number | null
+  last_test_at: string | null
+}
+export interface WorkshopSize {
+  size: string; aspect: string; label: string
+  spec_id: string; ad_product: string; verification: string
+}
+export interface WorkshopPlatform { platform: string; sizes: WorkshopSize[] }
+export interface WorkshopOptions {
+  models: { items: WorkshopModelStatus[]; ready: boolean; missing: string[] }
+  platforms: WorkshopPlatform[]
+  limits: { max_images: number }
+}
+export interface WorkshopAnalyzeResult {
+  plan_id: number | null
+  title: string
+  summary: string
+  analysis: any
+  brief: any
+  snapshot: any
+  intent_summary: string
+  source: string
+  models: WorkshopModelStatus[]
+}
+export interface WorkshopCopyRow { key: string; label: string; max: number; values: string[] }
+export interface WorkshopCopy {
+  platform: string
+  status: 'ok' | 'review' | 'failed'
+  reason: string
+  rows: WorkshopCopyRow[]
+  text: string
+  model: { provider: string; model: string; config_id: number | null }
+}
+export interface WorkshopImageJob {
+  platform: string
+  job_id: string
+  created: boolean
+  sizes: Array<{ size: string; label: string; aspect: string }>
+  poll_url: string
+}
+export interface WorkshopGenerateResult {
+  copies: WorkshopCopy[]
+  image_jobs: WorkshopImageJob[]
+  warnings: string[]
+  /** 图片模型未就绪时后端降级为「只出文案」，不假装出图 */
+  images_skipped: boolean
+  plan_id: number | null
+  models: WorkshopModelStatus[]
+}
+
 export interface CreativeAsset {
   asset_id: string
   job_id: string | null
@@ -1091,6 +1150,15 @@ export const api = {
   previewCreativeBrief: (payload: { raw_input: string; analysis?: any; platform?: string;
     framework?: string; layers?: string[] }) =>
     req<CreativeBrief>('/api/creative-brief/preview', { method: 'POST', body: JSON.stringify(payload) }),
+  // V4.108 素材工作坊：链接/描述 → 文案 + 图片，模型只用「大模型配置」里已验证的配置
+  workshopOptions: () =>
+    req<WorkshopOptions>('/api/workshop/options'),
+  workshopAnalyze: (payload: { input: string; platforms: string[]
+    creative_intent?: Record<string, any>; intent_text?: string; demo_mode?: boolean }) =>
+    req<WorkshopAnalyzeResult>('/api/workshop/analyze', { method: 'POST', body: JSON.stringify(payload) }),
+  workshopGenerate: (payload: { analysis: any; plan_id?: number | null
+    targets: Array<{ platform: string; sizes: string[] }>; lang?: string }) =>
+    req<WorkshopGenerateResult>('/api/workshop/generate', { method: 'POST', body: JSON.stringify(payload) }),
   // 基于「勾选的创意文案组合」+ 落地页分析结论 + 风格/样式/颜色，生成推广图片
   mediaImages: (payload: MediaImagePayload) =>
     req<MediaImageResult>('/api/media-campaign/images', { method: 'POST', body: JSON.stringify(payload) }),

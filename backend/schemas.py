@@ -180,6 +180,10 @@ class LandingAnalysis(BaseModel):
     evidence_invalid_ids: List[str] = []
     evidence_ref_audit: dict = {}
     sections_index: List[Any] = []
+    # V4.108：创作意图必须随分析一起进到出图任务里。此前只在 _build_cw_result 的
+    # analysis 字典上写 creative_intent，而 MediaImageRequest.analysis 是强类型模型，
+    # 序列化时会被裁掉 → 图片提示词拿不到受众 / 禁止项。这里显式落成正式字段。
+    creative_intent: dict = {}
     class Config:
         from_attributes = True
         protected_namespaces = ()   # 允许字段名 model_info 不被 "model_" 保护前缀拦截
@@ -250,6 +254,30 @@ class MediaImageRequest(BaseModel):
     #   "text"         — 图片 + 文字（标题/副标/品牌）+ logo，无按钮
     #   "text_button"  — 图片 + 文字 + 按钮 + logo（默认，保持旧行为向后兼容）
     overlay_mode: str = "text_button"
+
+# ----------------------------- V4.108 素材工作坊（独立一级模块） -----------------------------
+class WorkshopAnalyzeRequest(BaseModel):
+    """素材工作坊·解析：一个链接或一段产品描述 → 统一分析结论（复用工作台同一份分析）。"""
+    input: str = ""                  # 落地页链接（整行）或产品描述文本
+    platforms: List[str] = []        # 目标平台（用于平台推荐，不参与尺寸决定）
+    creative_intent: dict = {}
+    intent_text: str = ""
+    demo_mode: bool = False
+
+
+class WorkshopTarget(BaseModel):
+    """一个平台的尺寸选择；尺寸一律由服务端标准库复核后才出图。"""
+    platform: str = ""
+    sizes: List[str] = []
+
+
+class WorkshopGenerateRequest(BaseModel):
+    """素材工作坊·生成：基于工作坊自己产出的分析，逐个平台生成文案并按尺寸出图。"""
+    analysis: dict = {}
+    plan_id: Optional[int] = None
+    targets: List[WorkshopTarget] = []
+    lang: str = "en"
+
 
 # ----------------------------- V4.50 创意工作台：全球创意分析 -----------------------------
 class CreativeAnalysisRequest(BaseModel):

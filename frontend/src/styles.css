@@ -2258,3 +2258,90 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .cwb-tally-issues { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px;
   background: rgba(245, 158, 11, .10); font-size: 12px; line-height: 1.6; }
 .cwb-tally-issues p { margin: 0; }
+
+/* ==================== V4.108 素材工作坊（独立一级模块） ====================
+   界面约定：单列自上而下；同类控件统一高度（chip 30 / 主按钮 38 / 小按钮 26）；
+   说明性文字默认不出现，只有需要用户处理时才用一行提示。 */
+.ws { display: flex; flex-direction: column; gap: 12px; max-width: 1100px; }
+.ws-input-card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; margin: 0; }
+.ws-input {
+  /* 全局 textarea 有 min-height:110px，工作坊要求组件统一高度，这里显式压回 58px */
+  width: 100%; height: 58px; min-height: 58px; resize: none;
+  font: inherit; font-size: 13.5px; line-height: 1.55;
+  color: var(--text); background: #fbfdff; border: 1px solid var(--border);
+  border-radius: 10px; padding: 9px 12px;
+}
+.ws-input:focus { outline: none; border-color: var(--primary2); background: #fff;
+  box-shadow: 0 0 0 3px rgba(46,117,182,.10); }
+.ws-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ws-chips .chip { height: 30px; padding: 0 12px; font-size: 12.5px; }
+.ws-chips-size .chip { height: 30px; font-size: 12px; padding: 0 11px; }
+.ws-notice { display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+  border-radius: 8px; background: rgba(245,158,11,.10); color: #b45309; font-size: 12.5px; }
+.ws-notice .btn { height: 26px; padding: 0 10px; font-size: 12px; }
+.ws-muted { color: var(--muted); font-size: 12px; }
+.ws-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ws-models { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11.5px; color: var(--muted); }
+.ws-dot::before { content: ''; display: inline-block; width: 6px; height: 6px;
+  border-radius: 50%; margin-right: 5px; vertical-align: middle; background: #c9d3de; }
+.ws-dot.ok::before { background: #2f9e44; }
+.ws-dot.bad::before { background: #e8590c; }
+.ws-run { height: 38px; min-width: 168px; padding: 0 18px; border-radius: 9px; font-size: 13.5px; }
+
+.ws-steps { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.ws-step { position: relative; padding-left: 14px; }
+.ws-step::before { content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 7px; height: 7px; border-radius: 50%; background: #d6dee8; }
+.ws-step.now { color: var(--primary); font-weight: 600; }
+.ws-step.now::before { background: var(--primary2); box-shadow: 0 0 0 3px rgba(46,117,182,.14); }
+.ws-step.done::before { background: #2f9e44; }
+
+.ws-error { padding: 9px 12px; border-radius: 8px; background: #ffe9e9; color: #b42318; font-size: 12.5px; }
+.ws-toast { position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%); z-index: 90;
+  padding: 9px 16px; border-radius: 999px; background: rgba(15,36,56,.92); color: #fff; font-size: 12.5px; }
+
+.ws-block { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.ws-block-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.ws-block-head h2 { margin: 0; font-size: 15px; color: var(--primary); }
+.ws-count { font-size: 12px; color: var(--muted); }
+.ws-group + .ws-group { margin-top: 14px; }
+.ws-group-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12.5px; }
+.ws-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.ws-card { margin: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; }
+.ws-thumb { display: block; width: 100%; padding: 0; border: none; background: #eef2f7; cursor: zoom-in;
+  position: relative; aspect-ratio: 1 / 1; }
+.ws-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ws-flag { position: absolute; left: 8px; top: 8px; padding: 2px 7px; border-radius: 999px;
+  background: rgba(232,89,12,.92); color: #fff; font-size: 11px; }
+.ws-card figcaption { display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 7px 9px; font-size: 12px; }
+.ws-size { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-actions { display: inline-flex; gap: 8px; flex-shrink: 0; }
+.ws-actions button { border: none; background: none; padding: 0; height: 20px; cursor: pointer;
+  color: var(--primary2); font-size: 12px; font-family: inherit; }
+.ws-actions button:hover { text-decoration: underline; }
+
+.ws-copies { display: flex; flex-direction: column; gap: 10px; }
+.ws-copy { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.ws-copy-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12.5px; }
+.ws-copy-head b { color: var(--primary); font-size: 13px; }
+.ws-copy-head .ws-actions { margin-left: auto; }
+.ws-copy-head .ws-flag { position: static; }
+.ws-line { display: flex; gap: 10px; padding: 3px 0; font-size: 12.5px; line-height: 1.6; }
+.ws-line-label { flex: 0 0 76px; color: var(--muted); }
+.ws-line-value { flex: 1; color: var(--text); word-break: break-word; }
+
+.ws-lightbox { position: fixed; inset: 0; z-index: 100; background: rgba(10,22,34,.72);
+  display: flex; align-items: center; justify-content: center; padding: 32px; }
+.ws-lightbox-inner { max-width: min(880px, 92vw); max-height: 90vh; background: #fff;
+  border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+.ws-lightbox-inner img { max-width: 100%; max-height: calc(90vh - 56px); object-fit: contain; background: #0f2438; }
+.ws-lightbox-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; font-size: 12.5px; color: var(--text); }
+.ws-lightbox-bar .btn { height: 28px; padding: 0 12px; font-size: 12.5px; }
+
+@media (max-width: 720px) {
+  .ws-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .ws-foot { flex-direction: column; align-items: stretch; }
+  .ws-run { width: 100%; }
+}
