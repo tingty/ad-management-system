@@ -2,6 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# V4.118：网页链接自动截图需要 headless chromium（素材创意模板库导入方式之一）。
+# 用 Debian 官方 chromium 包，可执行文件路径 /usr/bin/chromium 由 web_screenshot 自动探测。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium fonts-liberation fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
 # 先装依赖（利用层缓存，依赖不变时不重复安装）
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

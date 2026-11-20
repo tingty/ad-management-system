@@ -2,6 +2,39 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.118 素材创意模板库 V2：三态素材导入 + 图片解构引擎（真实视觉模型 + 诚实不可用）
+
+**发布日期**：2026-11-20 14:25
+**变更类型**：新增 / 优化 / 安全加固
+**涉及模块**：素材创意模板库（导入 + 解构工作台）、后端解构引擎（新模块）、后端 SSRF 防护（新模块）、后端网页截图（新模块）、后端路由与契约、前端解构页、前端 API、前端样式、后端 Dockerfile、回归测试、发版数据、发版流程、系统版本
+**变更摘要**：承接 V4.117 数据骨架，本版为素材创意模板库接入「导入 → 解构 → 沉淀」的前两步。导入支持三种方式：本地上传（图片/视频）、图片 URL、网页链接自动截图；视频按 Q1/Q7 只归档 + 封面帧，解构留 V4.121。图片解构新建独立引擎 `asset_deconstruct.py`，按版本化维度字典 `asset-deconstruct/1.0`（布局3+视觉3+信息4+分类2=12 项）调用**真实视觉模型**产出结构化 JSON，含布局/视觉/信息/效果/分类与模板归属建议，并按 Q6 口径计算框架完整度。解构严守诚实交付红线：无视觉配置 / 非 OpenAI 协议 / 调用失败 / 无有效维度一律落 `status=unavailable` 且 `dims_json` 为空，绝不走 Mock/Fallback、绝不臆造；效果层只做创意推断并标注「非真实投放数据」（Q3）。外网 URL 访问新增统一 SSRF 闸门 `ssrf_guard.py`（scheme 白名单、本地主机名拦截、DNS 解析后复检内网/回环/私有/CGNAT、逐跳校验重定向、流式大小限制），图片 URL 与截图接口均接入。网页截图用 headless chromium 命令行实现，服务端未装浏览器时诚实返回 unavailable；Dockerfile 预装 chromium 作为部署前置。
+**更新要点**
+- 【新增】`backend/asset_deconstruct.py`：图片解构引擎。`FRAMEWORK_VERSION=asset-deconstruct/1.0`，12 类主分类轴 + 推广目的/钩子/证据标签口径来自冻结的 Q4；复用 `creative_tasks._vision_model_cfg(db)` 取真实视觉配置，base64 data URL 直连 OpenAI 兼容 `/chat/completions`，与 `video_vision_audit` 同源但绝不 import MockLLM/FallbackLLM。`compute_completeness()` 按 Q6「有值且 conf≥0.6 占比 / 12」计分。effect 每维附 caveat「创意推断，非真实投放数据」。`_normalize()` 把模型输出白名单化，未归类的主分类标 `in_taxonomy=false` 供人工确认；全空结果降级为 unavailable。
+- 【新增】`backend/ssrf_guard.py`：`validate_url()`（仅 http(s)、禁 userinfo、禁非 80/443 端口、禁 localhost/*.internal/云元数据主机名、IP 字面量直达判定、域名 DNS 复检全部 A/AAAA）、`fetch_remote_bytes()`（逐跳校验 302/301/307/308 重定向、流式累加限 12MB）、`is_public_ip()`（拒绝私有/回环/链路本地/保留/组播/CGNAT/未指定）。修复测试暴露的关键漏洞：`SSRFError` 继承 `ValueError`，原用 `except ValueError` 做 IP 字面量判断会吞掉自身抛出的拦截异常，导致 127.0.0.1/169.254.169.254 被放行——改为标志位控制流。
+- 【新增】`backend/web_screenshot.py`：headless chromium 命令行截图，`find_chromium()` 按 CHROMIUM_PATH → Playwright 缓存 headless shell → 系统/Docker 路径探测；`screenshot()` 输出 PNG 字节并校验魔数/大小，缺浏览器或失败返回 unavailable + 原因，不假装成功。
+- 【新增】路由：`POST /api/assets/screenshot`（SSRF 准入 + 截图 + 内容完整性诚实标注）、`POST /api/assets/upload-video`（视频容器校验 + ffmpeg 抽首帧封面 + 时长，无效视频拒绝）、`POST /api/template-library/import`（文件落盘后统一登记，screenshot 的完整性标注写入 rights_note）、`POST /api/template-library/analyze/{asset_id}`（图片解构落库 + 回写素材状态；视频在 V4.121 前返回 400）。`fetch-url` 改为接入统一 SSRF 闸门。
+- 【优化】`schemas.py`：`AssetAnalysisCreate` 补 `model_info` 字段（归因真实视觉模型，不含密钥）；新增 `AssetImportRequest`。
+- 【优化】前端 `CreativeAnalysis.tsx` 扩展为「素材库 · 导入与解构」工作台：三态导入 Tab（本地上传含视频 / 图片 URL / 网页截图）、素材卡片列表（缩略图/来源/状态/版权/删除）、解构触发与按维度分区的结果展示（布局/视觉/信息/效果/分类/模板建议/完整度/置信度/模型归因）、unavailable 诚实提示；保留原「文本快速分析」Tab 作为兜底。
+- 【新增】前端 `api.ts`：`tlImport/tlAnalyze/screenshotAsset/uploadVideoAsset` 四个方法；`styles.css` 补 V4.118 工作台样式。
+- 【新增】`backend/Dockerfile` 预装 chromium + 字体，作为网页截图的部署前置（镜像增大约 150MB）。
+- 【新增】专项测试 `tests/test_deconstruct_v4118.py`（14 项）：解构 unavailable 四路径、黄金样例命中预期（前后对比/暖光/三理由/低风险 CTA 维度与完整度≥0.9）、effect caveat、完整度评分、未归类标记、SSRF 内网/回环/元数据/file/非标端口/DNS 复检/CGNAT 拦截、截图与 fetch-url 的 SSRF 接口级拦截、前端静态断言、Dockerfile chromium。
+**本次优化与更改的功能 / 模块**
+- 【新增】素材创意模板库 V2：三态导入（本地上传/图片 URL/网页截图）+ 视频归档 + 图片解构引擎 + 解构结果工作台。
+- 【新增】外网 URL 安全闸门：图片 URL 与网页截图统一走 SSRF 防护，补齐 DNS 复检与重定向逐跳校验。
+- 【优化】解构链路：真实视觉模型产出版本化维度 JSON，完整度可量化，不可用诚实标注不臆造、不冒充。
+
+**影响范围**
+- 新增能力：素材导入与解构全链路；网页截图（依赖服务端 chromium，真实环境需随镜像部署）；视频仅归档不解构（V4.121）。
+- 安全：`fetch-url` 接入 SSRF 防护（此前仅有弱校验），内网/云元数据地址将被拒绝；截图同源防护。
+- 兼容：原「文本快速分析」入口保留为独立 Tab；V4.117 三表与 CRUD 不变；创意工作台 / 素材工作坊默认创作流程不受影响。
+- 部署：backend 镜像新增 chromium 依赖，真实环境需 `docker compose up -d --build` 重建镜像；若运行在 DNS 劫持到保留地址段（如 198.18.x.x）的代理环境，截图会被 SSRF 正确拦截，需直连外网或放宽为受信代理出口。
+
+**验证**
+- 专项 14/14 通过（解构引擎 + 黄金样例 + 完整度 + SSRF 单元与接口级 + 前端静态断言）；`tsc --noEmit` 0 错误；`npm run build` 成功。
+- 真实浏览器冒烟：新页渲染正常（单主标题「素材创意模板库」、三态导入、素材库区、两 Tab），无 console/page 错误；隔离库端到端上传→导入→解构（无视觉模型）正确落 unavailable 且维度为空。
+- 截图函数本机 headless chromium 实测输出有效 PNG；SSRF 在当前 DNS 劫持环境正确拦截保留地址。真实付费视觉模型解构效果为外部验收项。
+- 发版数据由 `prepare_release --sync` 生成，独立进程 `--check` 通过。
+
 ## V4.117 素材创意模板库 V1：全球创意分析改名并入素材工作坊 + 三层数据模型与基础 CRUD
 
 **发布日期**：2026-11-20 12:10

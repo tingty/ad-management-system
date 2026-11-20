@@ -24,7 +24,7 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      WorkshopAnalyzeRequest, WorkshopGenerateRequest,
                      MediaImageSlot, MediaCopyVariant,
                      AssetSourceOut, AssetSourceCreate, AssetAnalysisOut, AssetAnalysisCreate,
-                     TemplateOut, TemplateCreate, TemplateUpdate)
+                     AssetImportRequest, TemplateOut, TemplateCreate, TemplateUpdate)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import (get_llm_with_info, finalize_invocation, parse_json, get_video,
@@ -2482,36 +2482,114 @@ async def fetch_asset_url(body: dict, user: User = Depends(require_roles(*CAN_ED
     仅支持 http(s)；校验响应 content-type 为图片、限大小（12MB），避免把非图片 / 超大资源
     当作商品参考图塞进文生图链路。下载失败 / 非图片一律 400，不静默假装成功。
     """
+    import ssrf_guard
     url = str((body or {}).get("url") or "").strip()
-    if not url.startswith(("http://", "https://")):
-        raise HTTPException(400, "仅支持 http(s) 链接")
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            async with client.stream("GET", url) as resp:
-                if resp.status_code != 200:
-                    raise HTTPException(400, f"无法获取图片（HTTP {resp.status_code}）")
-                ctype = (resp.headers.get("content-type") or "").lower()
-                if not ctype.startswith("image/"):
-                    raise HTTPException(400, f"链接内容不是图片（content-type={ctype or '未知'}）")
-                ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
-                       "image/gif": ".gif"}.get(ctype, ".img")
-                name = f"ref_{int(time.time() * 1000)}{ext}"
-                path = os.path.join(UPLOAD_DIR, name)
-                total = 0
-                MAX = 12 * 1024 * 1024
-                with open(path, "wb") as f:
-                    async for chunk in resp.aiter_bytes(1024 * 64):
-                        total += len(chunk)
-                        if total > MAX:
-                            f.close(); os.remove(path)
-                            raise HTTPException(400, "图片超过 12MB 限制")
-                        f.write(chunk)
-    except HTTPException:
-        raise
+        # V4.118：接入统一 SSRF 闸门——禁内网/回环/私有 IP、DNS 复检、逐跳校验重定向。
+        got = await ssrf_guard.fetch_remote_bytes(url, max_bytes=12 * 1024 * 1024)
+    except ssrf_guard.SSRFError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(400, f"下载参考图失败：{str(e)[:160]}")
+    ctype = got["content_type"]
+    if not ctype.startswith("image/"):
+        raise HTTPException(400, f"链接内容不是图片（content-type={ctype or '未知'}）")
+    ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
+           "image/gif": ".gif"}.get(ctype, ".img")
+    name = f"ref_{int(time.time() * 1000)}{ext}"
+    path = os.path.join(UPLOAD_DIR, name)
+    with open(path, "wb") as f:
+        f.write(got["content"])
     return {"path": path, "url": f"/files/{name}", "name": url}
+
+
+@router.post("/assets/screenshot")
+async def screenshot_asset(body: dict, user: User = Depends(require_roles(*CAN_EDIT))):
+    """V4.118：对网页链接自动截图，落盘返回 /files/<name>。
+
+    安全：先走 ssrf_guard 统一准入（禁内网 / DNS 复检 / 逐跳校验重定向），确认目标可访问；
+    再用 headless chromium 命令行截图。诚实标注：截到的内容可能受登录墙 / 验证码 / 动态渲染
+    影响而不完整，返回 integrity_note 供素材库标注，绝不冒充有效素材。
+    """
+    import io
+    import ssrf_guard
+    import web_screenshot
+    url = str((body or {}).get("url") or "").strip()
+    mode = "fullpage" if str((body or {}).get("mode") or "viewport").lower() == "fullpage" else "viewport"
+    try:
+        # 先做 SSRF 准入 + 确认目标可达（不下载整页，只校验首屏响应头）。
+        ssrf_guard.validate_url(url)
+    except ssrf_guard.SSRFError as e:
+        raise HTTPException(400, str(e))
+    shot = web_screenshot.screenshot(url, mode=mode)
+    if shot.get("status") != "ok":
+        return {"path": None, "url": None, "name": url, "status": "unavailable",
+                "reason": shot.get("reason") or "截图不可用",
+                "integrity_note": "网页截图 · 内容完整性未保证"}
+    from PIL import Image
+    name = f"shot_{int(time.time() * 1000)}.png"
+    path = os.path.join(UPLOAD_DIR, name)
+    png = shot["png"]
+    w = h = None
+    try:
+        im = Image.open(io.BytesIO(png)); w, h = im.size
+    except Exception:
+        pass
+    with open(path, "wb") as f:
+        f.write(png)
+    return {"path": path, "url": f"/files/{name}", "name": url, "status": "ok",
+            "width": w, "height": h,
+            "integrity_note": "网页截图 · 内容完整性未保证（登录墙 / 验证码 / 动态渲染可能不完整）"}
+
+
+@router.post("/assets/upload-video")
+async def upload_video_asset(file: UploadFile = File(...),
+                             user: User = Depends(require_roles(*CAN_EDIT))):
+    """V4.118：上传素材视频（仅归档 + 封面帧，解构放 V4.121）。
+
+    落盘后用 verify_video_file 校验容器（无效视频拒绝），用 ffmpeg 抽首帧做封面，
+    返回 duration_sec / 封面 URL。诚实交付：校验不可用标 status=unavailable，不冒充有效。
+    """
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".mp4", ".mov", ".webm", ".m4v"):
+        raise HTTPException(400, "仅支持 MP4 / MOV / WEBM 视频")
+    name = f"vim_{int(time.time() * 1000)}{ext}"
+    path = os.path.join(UPLOAD_DIR, name)
+    total = 0
+    MAX = 200 * 1024 * 1024  # 视频上限 200MB
+    with open(path, "wb") as f:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX:
+                f.close(); os.remove(path)
+                raise HTTPException(400, "视频超过 200MB 限制")
+            f.write(chunk)
+    from providers import verify_video_file
+    verdict = verify_video_file(path)
+    if not verdict.get("ok", False):
+        os.remove(path)
+        raise HTTPException(400, "无效视频文件：" + str(verdict.get("reason") or "容器校验失败")[:120])
+    # 抽首帧做封面帧（失败不阻断归档，但如实标注）。
+    thumb_url = None
+    duration = verdict.get("duration") or None
+    try:
+        import video_vision_audit as vva
+        frames, finfo = vva.extract_frames(path, 0, count=1)
+        if frames:
+            tname = f"vthumb_{int(time.time() * 1000)}.jpg"
+            with open(os.path.join(UPLOAD_DIR, tname), "wb") as tf:
+                tf.write(frames[0])
+            thumb_url = f"/files/{tname}"
+    except Exception:
+        pass
+    return {"path": path, "url": f"/files/{name}", "name": file.filename,
+            "thumb": thumb_url, "duration_sec": duration,
+            "status": "ok", "note": "视频仅归档 + 封面帧，解构将在 V4.121 提供"}
+
+
 @router.get("/settings/creative-presets")
 def creative_presets():
     """返回「素材创作」三大提示词库：创意方向（D01-D20）/ 内容风格（S01-S26）/ 配色（C01-C16）。
@@ -3720,3 +3798,91 @@ async def tl_delete_template(tid: int, db: Session = Depends(get_db),
         raise HTTPException(404, "模板不存在或无权删除")
     db.delete(r); db.commit()
     return {"ok": True}
+
+
+# ===========================================================================
+# V4.118 素材创意模板库：导入登记 + 图片解构（接入 asset_deconstruct 引擎）
+# ===========================================================================
+@router.post("/template-library/import", response_model=AssetSourceOut)
+async def tl_import_asset(body: AssetImportRequest, db: Session = Depends(get_db),
+                          user: User = Depends(require_roles(*CAN_EDIT))):
+    """V4.118：把已落盘的文件（upload/url/screenshot/video）登记为素材条目。
+
+    前置：文件已由 /assets/upload、/assets/fetch-url、/assets/screenshot 或
+    /assets/upload-video 落到 /files/*。本接口只做登记 + 元信息校验，不重复下载。
+    """
+    kind = (body.media_kind or "image").strip().lower()
+    if kind not in ("image", "video"):
+        raise HTTPException(400, "media_kind 仅支持 image / video")
+    st = (body.source_type or "upload").strip().lower()
+    if st not in ("upload", "url", "screenshot", "video"):
+        raise HTTPException(400, "source_type 仅支持 upload / url / screenshot / video")
+    file_val = (body.file or "").strip()
+    if file_val and not (file_val.startswith("/files/") or os.path.isabs(file_val)):
+        raise HTTPException(400, "file 必须是 /files/<name> 或绝对路径")
+    rights = body.rights_note or ""
+    if st == "screenshot" and body.note:
+        rights = (rights + "｜" if rights else "") + body.note[:120]
+    r = CreativeAssetSource(
+        owner_id=user.id, owner_name=user.username, title=(body.title or "")[:255],
+        source_type=st, file=file_val or None, thumb=body.thumb, source_url=body.source_url,
+        platform=body.platform, media_kind=kind, width=body.width, height=body.height,
+        duration_sec=body.duration_sec, rights_note=rights[:255] or None, status="imported")
+    db.add(r); db.commit(); db.refresh(r)
+    return _asset_source_out(r)
+
+
+@router.post("/template-library/analyze/{asset_id}", response_model=AssetAnalysisOut)
+async def tl_analyze_asset(asset_id: int, db: Session = Depends(get_db),
+                           user: User = Depends(require_roles(*CAN_EDIT))):
+    """V4.118：对一张图片素材执行解构（真实视觉模型），落一条分析记录。
+
+    视频素材在 V4.121 前不解构，直接 400 并说明。视觉模型不可用 → 落 status=unavailable
+    记录（不臆造维度），不抛 500。分析完成回写素材状态。
+    """
+    import asset_deconstruct as ad
+    import creative_tasks
+    asset = db.query(CreativeAssetSource).filter_by(id=asset_id, owner_id=user.id).first()
+    if not asset:
+        raise HTTPException(404, "素材不存在或无权分析")
+    if (asset.media_kind or "image") != "image":
+        raise HTTPException(400, "视频解构将在 V4.121 提供，当前仅支持图片")
+    if not asset.file:
+        raise HTTPException(400, "素材没有可用的图片文件")
+    # 定位本地图片字节（/files/<name> → uploads/<name>）。
+    fname = os.path.basename(asset.file)
+    fpath = os.path.join(UPLOAD_DIR, fname)
+    if not os.path.isfile(fpath):
+        raise HTTPException(400, "图片文件不存在或已被清理")
+    with open(fpath, "rb") as f:
+        image_bytes = f.read()
+    # 统一图片格式：解构引擎按 JPEG base64 传入，非 JPEG 用 PIL 转码。
+    from PIL import Image
+    import io
+    try:
+        im = Image.open(io.BytesIO(image_bytes))
+        if im.format != "JPEG":
+            buf = io.BytesIO();
+            im.convert("RGB").save(buf, format="JPEG", quality=90)
+            image_bytes = buf.getvalue()
+    except Exception:
+        raise HTTPException(400, "图片无法解码，可能不是有效图片")
+
+    asset.status = "analyzing"
+    db.commit()
+    cfg = creative_tasks._vision_model_cfg(db)
+    result = await ad.deconstruct_image(image_bytes, cfg)
+    st = result.get("status", "unavailable")
+    if st not in ("analyzed", "unavailable", "low_confidence"):
+        st = "unavailable"
+    r = CreativeAssetAnalysis(
+        asset_id=asset.id, owner_id=user.id,
+        framework_version=result.get("framework_version") or ad.FRAMEWORK_VERSION,
+        model_info=result.get("model_info") or {},
+        dims_json=result.get("dims_json") or {}, category_json=result.get("category_json") or {},
+        template_guess=result.get("template_guess") or {},
+        completeness=result.get("completeness"), confidence=result.get("confidence"), status=st)
+    db.add(r); db.commit(); db.refresh(r)
+    asset.status = st if st != "unavailable" else "unavailable"
+    db.commit()
+    return _asset_analysis_out(r)

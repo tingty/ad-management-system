@@ -1221,6 +1221,11 @@ export const api = {
     req<any>(`/api/template-library/templates/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   tlDeleteTemplate: (id: number) =>
     req<any>(`/api/template-library/templates/${id}`, { method: 'DELETE' }),
+  // V4.118 素材创意模板库：统一导入登记 + 图片解构
+  tlImport: (payload: any) =>
+    req<any>('/api/template-library/import', { method: 'POST', body: JSON.stringify(payload) }),
+  tlAnalyze: (assetId: number) =>
+    req<any>(`/api/template-library/analyze/${assetId}`, { method: 'POST' }),
   // V4.52 创意工作台 · 创意策略 / 路线规划 + 历史库
   creativePlan: (payload: { title?: string; analysis: any; platforms: string[]; gen_image?: boolean; gen_video?: boolean }) =>
     req<any>('/api/creative-plan', { method: 'POST', body: JSON.stringify(payload) }),
@@ -1334,6 +1339,28 @@ export const api = {
   fetchAssetUrl: (url: string) =>
     req<{ path: string; url: string; name: string }>('/api/assets/fetch-url',
       { method: 'POST', body: JSON.stringify({ url }) }),
+  // V4.118：网页链接自动截图（服务端 headless chromium + SSRF 防护）
+  screenshotAsset: (url: string, mode: 'viewport' | 'fullpage' = 'viewport') =>
+    req<{ path: string | null; url: string | null; status: string; reason?: string;
+          width?: number; height?: number; integrity_note?: string }>('/api/assets/screenshot',
+      { method: 'POST', body: JSON.stringify({ url, mode }) }),
+  // V4.118：素材视频上传（归档 + 封面帧；解构在 V4.121）
+  uploadVideoAsset: async (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const token = getToken()
+    const res = await fetch(API_BASE + '/api/assets/upload-video', {
+      method: 'POST', body: fd,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!res.ok) {
+      let msg = `上传失败 ${res.status}`
+      try { msg = (await res.json()).detail || msg } catch { /* ignore */ }
+      throw new Error(msg)
+    }
+    return res.json() as Promise<{ path: string; url: string; name: string;
+      thumb?: string; duration_sec?: number; status: string; note?: string }>
+  },
   // V4.60 / B3：按 id 取单条素材历史（含 copy_json），用于恢复已生成的文案
   creationHistoryDetail: (id: number) =>
     req<any>(`/api/creation-history/${id}`),

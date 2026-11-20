@@ -605,12 +605,30 @@ class AssetAnalysisCreate(BaseModel):
     model_config = {"protected_namespaces": ()}
     asset_id: int
     framework_version: str = "asset-deconstruct/1.0"
+    model_info: Optional[dict] = None
     dims_json: Optional[dict] = None
     category_json: Optional[dict] = None
     template_guess: Optional[dict] = None
     completeness: Optional[float] = None
     confidence: Optional[float] = None
     status: str = "analyzed"
+
+
+class AssetImportRequest(BaseModel):
+    """V4.118 统一素材导入：先由前端把文件落到 /files/*，再带元信息登记入库。"""
+    model_config = {"protected_namespaces": ()}
+    title: str = ""
+    source_type: str = "upload"          # upload / url / screenshot / video
+    file: Optional[str] = None           # /files/<name>
+    thumb: Optional[str] = None
+    source_url: Optional[str] = None
+    platform: Optional[str] = None
+    media_kind: str = "image"            # image / video
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration_sec: Optional[float] = None
+    rights_note: Optional[str] = None
+    note: Optional[str] = None           # 截图的内容完整性标注等
 
 
 class TemplateOut(BaseModel):
