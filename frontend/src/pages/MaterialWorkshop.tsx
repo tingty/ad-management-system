@@ -122,7 +122,7 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
     return () => { alive = false }
   }, [])
 
-  /* ---------------- V4.120：按模板创作的模板清单（含授权闸门状态） ---------------- */
+  /* ---------------- 按模板创作的模板清单 ---------------- */
   useEffect(() => {
     if (mode !== 'template' || templates.length) return
     let alive = true
@@ -255,10 +255,10 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
     const text = input.trim()
     if (!text || phase) return
     if (imageReady && !selectedCount) { setError('请至少选择一个尺寸'); return }
-    // V4.120：按模板创作必须先选一条通过授权闸门的模板，不静默退回默认模式。
+    // 按模板创作必须先选一条可用模板，不静默退回默认模式。
     const chosenTpl = mode === 'template' ? templates.find(t => t.id === templateId && t.usable) : null
     if (mode === 'template' && !chosenTpl) {
-      setError('请选择一条可用的素材模板（不可用模板通常是授权闸门未通过）')
+      setError('请选择一条可用的素材模板')
       return
     }
     setError(''); setToast('')
@@ -378,7 +378,7 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
                 </div>
               )}
               {!selectedTpl.usable && (
-                <div className="tl-warn">授权闸门未通过：{selectedTpl.reason}。{selectedTpl.required_action}</div>
+                <div className="tl-warn">模板暂不可用：{selectedTpl.reason}。{selectedTpl.required_action}</div>
               )}
             </div>
           )}

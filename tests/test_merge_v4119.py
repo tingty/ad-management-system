@@ -136,8 +136,7 @@ class TestMergeApiV4119(unittest.TestCase):
     def _asset(self, title):
         r = self.client.post("/api/template-library/assets", headers=self.auth,
                              json={"title": title, "media_kind": "image", "source_type": "upload",
-                                   "file": "/files/v4119.png", "platform": "Meta",
-                                   "rights_status": "granted", "rights_note": "自有素材，已获投放授权"})
+                                   "file": "/files/v4119.png", "platform": "Meta"})
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()["id"]
 

@@ -1164,7 +1164,7 @@ export const api = {
   workshopGenerate: (payload: { analysis: any; plan_id?: number | null
     targets: Array<{ platform: string; sizes: string[] }>; lang?: string; template_id?: number | null }) =>
     req<WorkshopGenerateResult>('/api/workshop/generate', { method: 'POST', body: JSON.stringify(payload) }),
-  // V4.120 按模板创作：模板列表 + 逐条授权闸门状态（只驱动图片，不影响文案）
+  // 按模板创作：模板列表 + 逐条基础可用性状态（只驱动图片，不影响文案）
   workshopTemplates: () => req<any[]>('/api/workshop/templates'),
   // 基于「勾选的创意文案组合」+ 落地页分析结论 + 风格/样式/颜色，生成推广图片
   mediaImages: (payload: MediaImagePayload) =>
@@ -1214,8 +1214,6 @@ export const api = {
     req<any>('/api/template-library/assets', { method: 'POST', body: JSON.stringify(payload) }),
   tlDeleteAsset: (id: number) =>
     req<any>(`/api/template-library/assets/${id}`, { method: 'DELETE' }),
-  tlPatchRights: (id: number, payload: { rights_status: string; rights_note: string }) =>
-    req<any>(`/api/template-library/assets/${id}/rights`, { method: 'PATCH', body: JSON.stringify(payload) }),
   tlAnalyses: (params: { asset_id?: number; limit?: number; offset?: number } = {}) =>
     req<any[]>(`/api/template-library/analyses${qs(params)}`),
   tlAddAnalysis: (payload: any) =>

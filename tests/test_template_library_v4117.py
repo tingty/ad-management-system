@@ -68,8 +68,7 @@ class TestCRUDV4117(unittest.TestCase):
     def _add_asset(self, title="测试素材", kind="image"):
         r = self.client.post("/api/template-library/assets", headers=self.auth,
                              json={"title": title, "media_kind": kind, "source_type": "upload",
-                                   "file": "/files/tl_v4117.png", "platform": "Meta",
-                                   "rights_status": "granted", "rights_note": "自有素材，已获投放授权"})
+                                   "file": "/files/tl_v4117.png", "platform": "Meta"})
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()
 

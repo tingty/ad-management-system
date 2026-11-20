@@ -566,8 +566,6 @@ class AssetSourceOut(BaseModel):
     width: Optional[int] = None
     height: Optional[int] = None
     duration_sec: Optional[float] = None
-    rights_note: Optional[str] = None
-    rights_status: Optional[str] = None  # V4.120 授权闸门：granted / denied / unknown
     status: str = "imported"
     merged_template_id: Optional[int] = None  # V4.119 软归并归属模板（原件保留）
     created_at: Optional[str] = None
@@ -587,8 +585,6 @@ class AssetSourceCreate(BaseModel):
     width: Optional[int] = None
     height: Optional[int] = None
     duration_sec: Optional[float] = None
-    rights_note: Optional[str] = None
-    rights_status: Optional[str] = None  # V4.120：导入必须声明 granted / denied
 
 
 class AssetAnalysisOut(BaseModel):
@@ -634,8 +630,6 @@ class AssetImportRequest(BaseModel):
     width: Optional[int] = None
     height: Optional[int] = None
     duration_sec: Optional[float] = None
-    rights_note: Optional[str] = None
-    rights_status: Optional[str] = None  # V4.120：必填闸门 granted / denied
     note: Optional[str] = None           # 截图的内容完整性标注等
 
 
@@ -718,13 +712,6 @@ class UnmergeIn(BaseModel):
     """撤销软归并：原件与解构保留，仅清除归并归属标记。"""
     model_config = {"protected_namespaces": ()}
     asset_ids: List[int]
-
-
-class RightsPatchIn(BaseModel):
-    """V4.120：为历史 / 新导入素材补录投放授权声明（闸门唯一入口）。"""
-    model_config = {"protected_namespaces": ()}
-    rights_status: str
-    rights_note: str = ""
 
 
 class CWRoute(BaseModel):

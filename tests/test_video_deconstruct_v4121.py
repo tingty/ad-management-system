@@ -6,7 +6,7 @@
 2. 诚实降级：无帧 / 各帧解构不可用 / 字幕 OCR 不可用都不臆造内容；
 3. 真实视觉通道聚合：逐帧解构结果合成视频维度，分类与 purpose/hook 跨帧合并；
 4. 归并复用：视频框架进入同一套归并键与 golden 完整度，骨架溯源记录视频框架；
-5. 接口集成：视频可解构落 unavailable / 成功落库 / 授权闸门前置拦截；
+5. 接口集成：视频可解构落 unavailable / 成功落库；
 6. 前端静态断言：视频解构按钮放开、视频维度分区、字幕 caveat 展示。
 """
 import asyncio
@@ -141,17 +141,15 @@ class TestMergeReuseV4121(unittest.TestCase):
             "completeness": 0.92,
             "category_json": {"primary": "前后对比", "purposes": ["转化"], "hooks": ["结果"]},
         }
-        e = am.eligibility(analysis, "granted")
+        e = am.eligibility(analysis)
         self.assertTrue(e["eligible"], e["reason"])
         self.assertEqual((e["primary"], e["purpose"], e["hook"]), ("前后对比", "转化", "结果"))
-        # 未授权视频仍被闸门拦截，不因新增解构通道而绕过。
-        self.assertFalse(am.eligibility(analysis, "unknown")["eligible"])
 
     def test_unknown_framework_still_rejected(self):
         import asset_merge as am
         analysis = {"status": "analyzed", "framework_version": "unknown/9.9", "completeness": 0.9,
                     "category_json": {"primary": "前后对比", "purposes": ["转化"], "hooks": ["结果"]}}
-        self.assertIn("不匹配", am.eligibility(analysis, "granted")["reason"])
+        self.assertIn("不匹配", am.eligibility(analysis)["reason"])
 
     def test_taxonomy_exposes_both_frameworks(self):
         import asset_merge as am
@@ -196,12 +194,10 @@ class TestVideoAnalyzeApi(unittest.TestCase):
         r = cls.client.post("/api/auth/login", json={"email": email, "password": pwd})
         cls.auth = {"Authorization": f"Bearer {r.json()['token']}"}
 
-    def _new_asset(self, title, rights_status="granted"):
+    def _new_asset(self, title):
         r = self.client.post("/api/template-library/assets", headers=self.auth, json={
             "title": title, "media_kind": "video", "source_type": "video",
             "file": "/files/v4121_test.mp4", "duration_sec": 12.0,
-            "rights_status": rights_status,
-            "rights_note": "自有素材已取得全球投放授权" if rights_status == "granted" else "明确禁止投放",
         })
         self.assertEqual(r.status_code, 200, r.text)
         return r.json()["id"]
@@ -252,14 +248,6 @@ class TestVideoAnalyzeApi(unittest.TestCase):
         finally:
             if os.path.exists(fake):
                 os.remove(fake)
-
-    def test_video_rights_gate_blocks_before_vision(self):
-        aid = self._new_asset("未授权视频", rights_status="denied")
-        with patch("video_vision_audit.extract_frames",
-                   side_effect=AssertionError("闸门未生效，不应调用抽帧 / 视觉模型")):
-            r = self.client.post(f"/api/template-library/analyze/{aid}", headers=self.auth)
-        self.assertEqual(r.status_code, 422, r.text)
-        self.assertEqual(r.json()["detail"]["blocked"], "rights_gate")
 
 
 class TestFrontendStaticV4121(unittest.TestCase):

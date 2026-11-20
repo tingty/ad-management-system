@@ -1,11 +1,10 @@
-"""V4.120 素材创意模板库 · 授权强制闸门 + 模板骨架出图适配（纯函数 / DB 查询层）。
+"""素材创意模板库 · 模板基础可用性校验 + 模板骨架出图适配（纯函数 / DB 查询层）。
 
-产品决议：授权标注从「仅供参考」升级为**强制闸门**。
-1. 素材只有 `rights_status=granted` 且有可追溯的授权说明，才能进入解构、归并、
-   golden 沉淀与工作坊按模板创作；`denied` 与历史 `unknown` 一律拦截。
-2. 模板只允许影响图片（Q9）：本模块把 `image_skeleton_json` 转成一条**视觉路线**
+产品决议：
+1. 模板只允许影响图片（Q9）：本模块把 `image_skeleton_json` 转成一条**视觉路线**
    注入 `style_opts.creative_plan`，复用既有图片提示词规则；文案生成链路完全不读模板。
-3. 所有拦截给出可执行的 `required_action`，不静默降级、不臆造授权。
+2. 工作坊按模板创作前只校验**模板自身**是否可用（归属 / 状态 / 骨架 / 引用素材完整），
+   给出可执行的 `required_action`，不静默降级。
 
 不直接依赖 FastAPI，方便专项测试；DB 查询只在本模块内以函数参数注入 session。
 """
@@ -13,42 +12,9 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-GRANTED = "granted"
-DENIED = "denied"
-UNKNOWN = "unknown"
-VALID_STATUSES = (GRANTED, DENIED)
-MIN_NOTE_LEN = 4
-
-REQUIRED_ACTION = "请在「素材创意模板库」补录投放授权声明（授权来源与范围）后再继续"
-
-
-def normalize_status(value: Any) -> str:
-    """历史数据没有 rights_status → unknown（不可用）；非法值一律按 unknown 处理。"""
-    s = str(value or "").strip().lower()
-    return s if s in VALID_STATUSES else UNKNOWN
-
-
-def rights_check(asset: Any) -> dict:
-    """判断一条素材是否通过授权闸门，返回 {ok, status, reason, required_action}。"""
-    status = normalize_status(getattr(asset, "rights_status", None))
-    note = str(getattr(asset, "rights_note", "") or "").strip()
-    if status == GRANTED:
-        if len(note) < MIN_NOTE_LEN:
-            return {"ok": False, "status": status,
-                    "reason": "已声明投放授权，但授权说明不足（需写明来源与范围）",
-                    "required_action": REQUIRED_ACTION}
-        return {"ok": True, "status": status, "reason": "", "required_action": ""}
-    if status == DENIED:
-        return {"ok": False, "status": status,
-                "reason": "该素材已明确标注不可用于投放，不能进入解构 / 模板链路",
-                "required_action": "如需使用，请先取得授权并更新授权声明"}
-    return {"ok": False, "status": UNKNOWN,
-            "reason": "该素材尚未声明投放授权（含历史存量素材）",
-            "required_action": REQUIRED_ACTION}
-
 
 def template_gate(db, template_id: Optional[int], owner_id: int) -> dict:
-    """校验模板在工作坊按模板创作前是否可用。
+    """校验模板在工作坊按模板创作前是否可用（仅模板自身属性）。
 
     返回 {template, ok, reason, required_action}；DB 异常不外泄给用户细节。
     """
@@ -81,12 +47,6 @@ def template_gate(db, template_id: Optional[int], owner_id: int) -> dict:
         out.update(reason="模板引用的素材已不存在，按模板创作已拦截",
                    required_action="请重新沉淀模板或补回素材")
         return out
-    for a in assets:
-        chk = rights_check(a)
-        if not chk["ok"]:
-            out.update(reason=f"模板所引用素材「{a.title or a.id}」授权闸门未通过：{chk['reason']}",
-                       required_action=chk["required_action"])
-            return out
     skeleton = t.image_skeleton_json if isinstance(t.image_skeleton_json, dict) else {}
     if not skeleton:
         out.update(reason="模板没有可用的图片骨架，不能驱动按模板创作",
