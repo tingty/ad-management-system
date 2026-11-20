@@ -31,8 +31,8 @@ class TestCreativeUiV4101(unittest.TestCase):
 
     def test_03_three_kinds_receive_confirmed_brief(self):
         src = (FRONTEND / "pages" / "CreativeWorkbench.tsx").read_text(encoding="utf-8")
-        self.assertIn("brief: confirmedBrief()", src)  # 文案
-        self.assertIn("brief: confirmedBrief(),", src)  # 图片 creative_plan
+        self.assertIn("brief: confirmedBrief() || {}", src)  # 文案（V4.115：null 归一成 {}）
+        self.assertIn("brief: confirmedBrief() || {},", src)  # 图片 creative_plan
         self.assertIn("creativeBrief={confirmedBrief()}", src)  # 视频
 
     def test_04_video_studio_has_hint_and_reroll(self):

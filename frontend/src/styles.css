@@ -2203,6 +2203,11 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ctd-badge.active { background: #fff4e6; color: var(--warn); }
 .ctd-badge.done { background: #eaf7ee; color: var(--ok); }
 .ctd-badge.needs { background: #fdecec; color: #b42318; }
+/* V4.115：进行中任务一键手动停止（行内），与状态徽章同一位置互斥出现 */
+.ctd-stop { flex: 0 0 auto; border: 1px solid var(--border); background: var(--card); color: var(--warn);
+  font-size: 11px; line-height: 1.4; padding: 2px 10px; border-radius: 999px; cursor: pointer; font-family: inherit; }
+.ctd-stop:hover:not(:disabled) { border-color: var(--warn); background: #fff8ee; }
+.ctd-stop:disabled { opacity: .55; cursor: not-allowed; }
 .ctd-row-line2 { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 5px; font-size: 11px; color: var(--muted); }
 .ctd-detail { border-top: 1px dashed var(--border); padding: 10px 12px; background: #fcfdff; }
 .ctd-sub { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px;

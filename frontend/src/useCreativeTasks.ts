@@ -124,8 +124,8 @@ export function useCreativeTasks(enabled = true) {
     await load({ silent: true })
   }, [load])
 
-  const cancel = useCallback(async (batchId: string, jobId = '') => {
-    await api.cancelCreativeTask(batchId, jobId)
+  const cancel = useCallback(async (batchId: string, jobId = '', reason = 'user') => {
+    await api.cancelCreativeTask(batchId, jobId, reason)
     await load({ silent: true })
   }, [load])
 

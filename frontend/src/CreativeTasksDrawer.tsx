@@ -21,11 +21,33 @@ const FILTERS: { key: TaskFilter; label: string }[] = [
 
 const KIND_LABEL: Record<string, string> = { video: '视频', images: '图片', image: '图片', copy: '文案' }
 
+/** V4.115：后端时间统一存 naive UTC 的 ISO 串（无时区标记）。
+ *  Date.parse("2026-11-20T02:07:03") 会被浏览器当成本地时区解析，差 8 小时；
+ *  这里补 Z 明确按 UTC 解析，得到真实时刻的时间戳，供展示与计时共用同一口径。 */
+function parseUtcMs(iso?: string): number {
+  if (!iso) return NaN
+  const s = String(iso).trim()
+  if (!s) return NaN
+  // 已经带时区后缀（Z 或 +08:00）的原样解析；否则按 UTC 补 Z。
+  if (/(Z|[+-]\d{2}:?\d{2})$/.test(s)) return Date.parse(s)
+  return Date.parse(s.replace(' ', 'T') + 'Z')
+}
+
+/** V4.115：任务创建时间，按浏览器本地时区显示 YYYY-MM-DD HH:MM。 */
+function formatCreatedAt(iso?: string): string {
+  const ms = parseUtcMs(iso)
+  if (!isFinite(ms)) return '—'
+  const d = new Date(ms)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 function elapsedText(iso?: string, finished?: string): string {
   if (!iso) return ''
-  const start = Date.parse(iso)
-  if (!start) return ''
-  const end = finished ? Date.parse(finished) : Date.now()
+  const start = parseUtcMs(iso)
+  if (!isFinite(start)) return ''
+  const end = finished ? parseUtcMs(finished) : Date.now()
+  if (!isFinite(end)) return ''
   const sec = Math.max(0, Math.round((end - start) / 1000))
   if (sec < 60) return `${sec} 秒`
   const m = Math.floor(sec / 60)
@@ -44,7 +66,11 @@ function stageText(b: CreativeBatch): string {
   if (b.status === 'partial') return '部分完成'
   if (b.status === 'needs_attention') return '待核实'
   if (b.status === 'failed') return '失败'
-  if (b.status === 'canceled') return '已停止'
+  // V4.115：手动停止单独标记，和被动取消区分，方便在「需处理」里检索。
+  if (b.status === 'canceled') {
+    const subs = b.subtasks || []
+    return subs.some(s => s.error_code === 'MANUAL_STOP') ? '手动停止' : '已停止'
+  }
   return b.status || '—'
 }
 
@@ -57,7 +83,7 @@ interface Props {
   error: string
   loadDetail: (batchId: string) => Promise<CreativeBatch | null>
   onRetry: (batchId: string, jobId: string, action: 'repoll' | 'redownload' | 'regenerate') => Promise<void>
-  onCancel: (batchId: string, jobId?: string) => Promise<void>
+  onCancel: (batchId: string, jobId?: string, reason?: string) => Promise<void>
   onReuse: (b: CreativeBatch) => void
 }
 
@@ -69,6 +95,7 @@ export default function CreativeTasksDrawer(props: Props) {
   const [detail, setDetail] = useState<CreativeBatch | null>(null)
   const [busy, setBusy] = useState('')
   const [picked, setPicked] = useState(false)
+  const [stopping, setStopping] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -118,6 +145,13 @@ export default function CreativeTasksDrawer(props: Props) {
     try { await onRetry(b.batch_id, s.job_id, action) } finally { setBusy('') }
   }
 
+  /** V4.115：进行中任务一键手动停止，落 MANUAL_STOP 标记供日后查询。 */
+  async function stopNow(b: CreativeBatch) {
+    if (stopping) return
+    setStopping(b.batch_id)
+    try { await onCancel(b.batch_id, '', 'user') } finally { setStopping('') }
+  }
+
   return (
     <>
       <div className="ctd-mask" onClick={onClose} />
@@ -152,18 +186,29 @@ export default function CreativeTasksDrawer(props: Props) {
             const isOpen = openId === b.batch_id
             return (
               <div key={b.batch_id} className={'ctd-row' + (isOpen ? ' open' : '')}>
-                <button className="ctd-row-head" onClick={() => setOpenId(isOpen ? '' : b.batch_id)}>
+                <div className="ctd-row-head" role="button" tabIndex={0}
+                  onClick={() => setOpenId(isOpen ? '' : b.batch_id)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') setOpenId(isOpen ? '' : b.batch_id) }}>
                   <div className="ctd-row-line1">
                     <span className="ctd-prod">{b.product_name || '未命名创作'}</span>
-                    <span className={'ctd-badge ' + bucketOf(b.status)}>{stageText(b)}</span>
+                    {BUCKET.active.includes(b.status) ? (
+                      <button className="ctd-stop" disabled={!!stopping}
+                        title="手动停止：后续步骤不再执行；已在厂商渲染的任务仍可能完成并计费"
+                        onClick={e => { e.stopPropagation(); stopNow(b) }}>
+                        {stopping === b.batch_id ? '停止中…' : '停止'}
+                      </button>
+                    ) : (
+                      <span className={'ctd-badge ' + bucketOf(b.status)}>{stageText(b)}</span>
+                    )}
                   </div>
                   <div className="ctd-row-line2">
+                    <span title="任务创建时间（本地时区）">创建 {formatCreatedAt(b.created_at)}</span>
                     <span>{kindText(b)}</span>
                     <span>{(b.platforms || []).join('、') || '—'}</span>
                     <span>已等待 {elapsedText(b.created_at, b.finished_at)}</span>
                     <span>成功 {b.success_count}/{b.total_count || 1}</span>
                   </div>
-                </button>
+                </div>
 
                 {isOpen && (
                   <div className="ctd-detail">
@@ -234,9 +279,9 @@ export default function CreativeTasksDrawer(props: Props) {
                     ))}
                     <div className="ctd-detail-foot">
                       {BUCKET.active.includes(b.status) && (
-                        <button className="ctd-link" onClick={() => onCancel(b.batch_id)}
-                          title="只停止后续步骤；若供应商已在渲染，该任务仍可能完成并计费">
-                          停止后续步骤
+                        <button className="ctd-link" onClick={() => onCancel(b.batch_id, '', 'user')}
+                          title="手动停止：只停止后续步骤；若供应商已在渲染，该任务仍可能完成并计费">
+                          手动停止
                         </button>
                       )}
                       {b.status !== 'canceled' && (

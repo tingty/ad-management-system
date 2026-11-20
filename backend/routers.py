@@ -1630,10 +1630,14 @@ def api_creative_task_retry(batch_id: str, body: dict, db: Session = Depends(get
 @router.post("/creative-tasks/{batch_id}/cancel")
 def api_creative_task_cancel(batch_id: str, body: dict | None = None, db: Session = Depends(get_db),
                              user: User = Depends(require_roles(*CAN_EDIT))):
-    """停止后续步骤（不做供应商取消：厂商无取消接口时，在途任务仍可能完成并计费）。"""
+    """停止后续步骤（不做供应商取消：厂商无取消接口时，在途任务仍可能完成并计费）。
+
+    V4.115：body.reason="user"（默认）标记 MANUAL_STOP，方便今后按「手动停止」查询。
+    """
     job_id = str((body or {}).get("job_id") or "").strip()
+    reason = str((body or {}).get("reason") or "user").strip()
     try:
-        return creative_tasks.cancel(db, user, batch_id, job_id)
+        return creative_tasks.cancel(db, user, batch_id, job_id, reason=reason)
     except LookupError:
         raise HTTPException(404, "创作任务不存在")
 

@@ -216,6 +216,16 @@ class MediaCopyRequest(BaseModel):
     # V4.101 / P1：用户在「完善并确认」后提交的创意 brief（必须 confirmed=true 才生效）。
     brief: dict = {}
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_none_dicts(cls, data):
+        # V4.115：未确认 brief 时前端 confirmedBrief() 返回 null；显式 null 在
+        # Pydantic v2 下会报 dict_type 422。null 与缺省等价，统一收敛成 {}。
+        if not isinstance(data, dict):
+            return data
+        from analysis_contract import coerce_request_dicts
+        return coerce_request_dicts(data, ("style_opts", "brief"))
+
 
 class CreativeBriefPreviewIn(BaseModel):
     """V4.101 / P4：用户原始提示词 → 系统补全预览（不生成素材、不触发付费出片）。"""
@@ -268,6 +278,16 @@ class MediaImageRequest(BaseModel):
     #   "text"         — 图片 + 文字（标题/副标/品牌）+ logo，无按钮
     #   "text_button"  — 图片 + 文字 + 按钮 + logo（默认，保持旧行为向后兼容）
     overlay_mode: str = "text_button"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_none_dicts(cls, data):
+        # V4.115：同 MediaCopyRequest，避免未确认 brief=null 触发 dict_type 422。
+        if not isinstance(data, dict):
+            return data
+        from analysis_contract import coerce_request_dicts
+        return coerce_request_dicts(data, ("copy_fields", "style_opts"))
+
 
 # ----------------------------- V4.108 素材工作坊（独立一级模块） -----------------------------
 class WorkshopAnalyzeRequest(BaseModel):
@@ -487,6 +507,15 @@ class CWRoutesRequest(BaseModel):
     exclude_names: List[str] = []
     # V4.105 / 方案C：已确认的结构化创作意图（受众 / 目标 / 核心价值 / 场景 / 风格 / 禁止项）
     creative_intent: dict = {}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_none_dicts(cls, data):
+        # V4.115：换一批路线时 user_brief 来自 confirmedBrief()，未确认时为 null。
+        if not isinstance(data, dict):
+            return data
+        from analysis_contract import coerce_request_dicts
+        return coerce_request_dicts(data, ("brief", "user_brief", "creative_intent"))
 
 
 # ----------------------------- V4.61 / B4：创意工作台「素材沉淀库」 -----------------------------

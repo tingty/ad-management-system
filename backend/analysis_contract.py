@@ -128,9 +128,32 @@ def as_channels(value: Any) -> list[dict]:
     return out
 
 
+# V4.115：analysis 内声明为 dict 的字段。真实环境里这些字段偶尔被写成 null，
+# Pydantic v2 的 `dict` 类型对显式 null 会报 dict_type 422（「Input should be a
+# valid dictionary」）。只把 null 收敛成 {}，不改写其它类型，避免误伤。
+DICT_FIELDS = ("creative_intent", "evidence_ref_audit")
+
+
+def coerce_request_dicts(data: dict, fields: tuple[str, ...]) -> dict:
+    """V4.115：请求体里显式为 None 的 dict 字段收敛成 {}。
+
+    前端「未确认的创意 brief」历史上直接传 null（confirmedBrief() 返回 null），
+    Pydantic 的 `brief: dict = {}` 只在**缺省**时用默认值，显式 null 会 422。
+    这里做一层兜底：null 与缺省等价，其它值原样交给 Pydantic 校验。
+    """
+    out = dict(data)
+    for key in fields:
+        if out.get(key, ...) is None:
+            out[key] = {}
+    return out
+
+
 def normalize_analysis(analysis: dict | None) -> dict:
     """把统一分析收敛成接口可接受的类型（幂等）。"""
     data = dict(analysis or {})
+    for key in DICT_FIELDS:
+        if data.get(key, ...) is None:
+            data[key] = {}
     for key in TEXT_FIELDS:
         if key in data:
             data[key] = as_text(data.get(key))

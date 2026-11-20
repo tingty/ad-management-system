@@ -1282,9 +1282,9 @@ export const api = {
   retryCreativeTask: (batchId: string, jobId: string, action: 'repoll' | 'redownload' | 'regenerate') =>
     req<any>(`/api/creative-tasks/${batchId}/retry`,
       { method: 'POST', body: JSON.stringify({ job_id: jobId, action }) }),
-  cancelCreativeTask: (batchId: string, jobId = '') =>
+  cancelCreativeTask: (batchId: string, jobId = '', reason = 'user') =>
     req<any>(`/api/creative-tasks/${batchId}/cancel`,
-      { method: 'POST', body: JSON.stringify({ job_id: jobId }) }),
+      { method: 'POST', body: JSON.stringify({ job_id: jobId, reason }) }),
   // V4.75 视频链路自检：报告当前生效的视频模型配置与契约参数是否齐备（不出片）
   cwVideoDiagnose: () => req<any>('/api/cw-video/diagnose'),
   updateCreationHistory: (id: number, payload: {

@@ -2,6 +2,38 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.115 任务栏显示创建时间 + 进行中任务可手动停止；修复「确认并批量生成」422 报错
+
+**发布日期**：2026-11-20 10:18
+**变更类型**：缺陷修复 / 优化 / 新增
+**涉及模块**：创意工作台（文案生成链路、任务抽屉）、后端接口（文案/图片/路线请求契约、创作任务取消）、前端（任务栏交互、时间显示）、回归测试、发版流程、系统版本
+**变更摘要**：修复「确认并批量生成」后 `Meta：文案生成失败：请求失败 422: Input should be a valid dictionary` 的报错。根因是未确认创意 brief 时前端 `confirmedBrief()` 返回 `null`，直接作为 `brief` 传给后端，而 `MediaCopyRequest.brief: dict` 在 Pydantic v2 下对**显式 null** 报 `dict_type` 422（缺省才用默认值 `{}`）；文案失败又连带图片任务显示「未提交」。同类隐患还包括 `analysis.creative_intent`/`evidence_ref_audit`、`style_opts`、`copy_fields`、`CWRoutesRequest.user_brief` 为 null 时的同类 422。修复后在后端对请求体 dict 字段做 `null → {}` 收敛、前端调用点用 `|| {}`，并用端到端测试确认 `brief: null` 从 422 变为 200。同时按需求优化任务抽屉：每条任务显示创建时间（`YYYY-MM-DD HH:MM`，后端 naive UTC 正确换算到本地时区），进行中任务提供行内「停止」按钮，停止后落 `MANUAL_STOP` 标记、显示「手动停止」，可在「需处理」查询。
+**更新要点**
+- 【修复】422 根因：`MediaCopyRequest` / `MediaImageRequest` / `CWRoutesRequest` 新增 `@model_validator(mode="before")`，把显式为 None 的 dict 字段（`brief`/`style_opts`/`copy_fields`/`user_brief`/`creative_intent`）收敛成 `{}`；`analysis_contract` 新增 `coerce_request_dicts()` 与 `DICT_FIELDS`，`normalize_analysis()` 一并处理 `creative_intent`/`evidence_ref_audit` 为 null 的情况。
+- 【修复】前端三处 API 调用点（文案 `mediaCopy`、图片 `creative_plan`、`cwRoutes.user_brief`）把 `confirmedBrief()` 改为 `confirmedBrief() || {}`，不再把 null 发往后端；归一化只针对 null，真正的类型错误（如 brief 给成数组）仍会被 Pydantic 拒绝，不掩盖问题。
+- 【语义】未确认 brief 归一成 `{}` 后 `confirmed` 为空，后端 `if req.brief and not req.brief.get("confirmed")` 短路，不会被误判为「已确认」，证据门与模型调用口径不变。
+- 【新增】任务创建时间：`CreativeTasksDrawer` 新增 `parseUtcMs()`（无时区 ISO 补 Z 按 UTC 解析）与 `formatCreatedAt()`（本地时区 `YYYY-MM-DD HH:MM`），任务行第二行显示「创建 YYYY-MM-DD HH:MM」；`elapsedText()` 同步改用同一解析口径，修正此前把 UTC 串当本地解析导致「已等待」偏差 8 小时的问题。
+- 【新增】手动停止：`creative_tasks.cancel()` 新增 `reason` 参数（默认 `user`），手动停止落 `error_code=MANUAL_STOP`、`stage=manual_stopped`，`status` 仍为 `canceled`（TERMINAL / worker 语义不变）；子任务标签显示「手动停止」，`/creative-tasks/{id}/cancel` 路由透传 `reason`，前端 `api.cancelCreativeTask` 与 `useCreativeTasks.cancel` 同步扩展。
+- 【新增】任务抽屉进行中任务行内「停止」按钮（无需展开详情），带防重复点击与「停止中…」态；详情底部按钮文案改为「手动停止」；停止成功后提示可在「需处理」查询。
+**本次优化与更改的功能 / 模块**
+- 【修复】请求契约：`backend/schemas.py`（三个请求模型 before-validator）、`backend/analysis_contract.py`（`coerce_request_dicts` / `DICT_FIELDS`）
+- 【新增】任务取消标记：`backend/creative_tasks.py`（`cancel(reason=...)`、`job_to_task` 标签）、`backend/routers.py`（取消路由透传 reason）
+- 【优化】前端：`frontend/src/pages/CreativeWorkbench.tsx`（三处 `|| {}`、任务回调 reason）、`frontend/src/CreativeTasksDrawer.tsx`（时间与停止交互）、`frontend/src/api.ts` 与 `frontend/src/useCreativeTasks.ts`（reason 透传）、`frontend/src/styles.css`（`.ctd-stop`）
+- 【新增】专项回归 `tests/test_task_panel_v4115.py`（11 项，含 `brief: null` 端到端 200）；同步更新 `tests/test_creative_ui_v4101.py` 的静态断言
+
+**影响范围**
+- 生成链路：仅修复请求体 null dict 的校验 422，不改变模型选配、提示词、计费与证据门口径；已确认 brief 的处理完全不变。
+- 任务数据：`MANUAL_STOP` 只写入 `error_code` / `stage` / `error_message`，`status` 仍为 `canceled`，不改变状态机与列表分组（手动停止归入「需处理」）；历史 `CANCELED` 任务仍显示「已停止」，向后兼容。
+- 时间显示：创建时间由 UTC 换算到浏览器本地时区显示；同一时区内口径一致。「已等待」计时纠正为此前偏差 8 小时的正确值。
+- 数据模型：本版不新增数据库列、不迁移历史数据，只复用既有 `error_code` 字段承载手动停止标记。
+- 真实付费模型调用与真实投放仍为外部验收项，模拟与浏览器测试不能替代。
+
+**验证**
+- 专项 `test_task_panel_v4115` 11/11：brief/analysis/请求体各 null dict 场景不再 422、已确认 brief 与真正类型错误不被误处理、前端三处 `|| {}`、任务时间与停止按钮静态断言、后端 reason 落库字段；`TestClient` 端到端构造 `brief: null` 调 `/api/media-campaign/copy` 返回 200（修复前 422）。
+- 全量回归 **464 项 0 失败 / 0 错误 / 2 跳过**；`npx tsc --noEmit` 0 错误；`npm run build` 通过；`python3 -m py_compile` 四个后端文件通过。
+- 无头浏览器实测（隔离库 8041 + 前端 5181）：进行中任务显示「创建 2026-11-20 10:07」（UTC 02:07 正确换算到本地）、行内「停止」按钮可见；点击停止后「需处理 1」出现、任务标签显示「手动停止」，全程无 console / page 错误。
+- 真实付费文案出片与真实投放效果仍为外部验收项。
+
 ## V4.114 图片创意规划改为单选——默认选中一条、有且只展示这一条全部内容，「改一句」意见直达出图
 
 **发布日期**：2026-11-19 18:25

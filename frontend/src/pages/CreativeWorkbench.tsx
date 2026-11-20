@@ -712,7 +712,7 @@ export default function CreativeWorkbench() {
         plan_id: cw?.id ?? planId ?? undefined,
         analysis: cw?.analysis || {}, platforms: selected, brief: cw?.brief || {}, count: 10,
         framework: creativeBriefFramework,
-        user_brief: confirmedBrief(), seed, exclude_names: excluded,
+        user_brief: confirmedBrief() || {}, seed, exclude_names: excluded,
         creative_intent: (intent || {}) as CreativeIntent,
       })
       setRoutes((res?.routes || []).map((r: any, i: number) => ({ ...r, selected: i === 0 })))
@@ -788,7 +788,7 @@ export default function CreativeWorkbench() {
         // 拿不到真实原因（模型未配置 / 证据门阻断 / 字段类型不符 / 网关超时）。
         let cr: any = null
         try {
-          cr = await api.mediaCopy({ analysis, platform: p, lang: 'en', brief: confirmedBrief() })
+          cr = await api.mediaCopy({ analysis, platform: p, lang: 'en', brief: confirmedBrief() || {} })
         } catch (e: any) {
           copyFailures[p] = '文案生成失败：' + (e?.message || '接口未返回结果')
           continue
@@ -917,7 +917,7 @@ export default function CreativeWorkbench() {
               platform: p,
               // V4.110：输入区不再暴露叠加模式，统一纯图片（无字 / 无按钮 / 无 Logo）
               overlay_mode: 'pure',
-              brief: confirmedBrief(),
+              brief: confirmedBrief() || {},
             },
           }
           const payload = {
@@ -1976,8 +1976,12 @@ export default function CreativeWorkbench() {
               : action === 'repoll' ? '已按原厂商任务号继续查询' : '已重新下载并校验')
           } catch (e: any) { showToast('操作失败：' + (e?.message || '')) }
         }}
-        onCancel={async (batchId, jobId) => {
-          try { await tasks.cancel(batchId, jobId); showToast('已停止后续步骤（在途任务仍可能完成并计费）') }
+        onCancel={async (batchId, jobId, reason) => {
+          try {
+            await tasks.cancel(batchId, jobId, reason)
+            showToast(reason === 'user' ? '已手动停止（在途任务仍可能完成并计费），可在「需处理」里查到'
+              : '已停止后续步骤（在途任务仍可能完成并计费）')
+          }
           catch (e: any) { showToast('操作失败：' + (e?.message || '')) }
         }}
         onReuse={(b) => {

@@ -251,6 +251,8 @@ def job_to_task(job: GenerationJob) -> dict:
         stage_label = ("时长未达标" if job.error_code == "DURATION_MISMATCH"
                        else "规格未达标" if job.error_code == "SPEC_MISMATCH"
                        else "画面文字未通过" if job.error_code == "TEXT_VISION_MISMATCH"
+                       # V4.115：手动停止单列标记，方便在「需处理」里查询
+                       else "手动停止" if job.error_code == "MANUAL_STOP"
                        else {"succeeded": "已完成", "needs_attention": "待核实",
                              "failed": "失败", "canceled": "已停止"}.get(task_status, task_status))
     elif is_video:
@@ -462,12 +464,22 @@ def retry(db: Session, user, batch_id: str, job_id: str, action: str) -> dict:
     return job_to_task(job)
 
 
-def cancel(db: Session, user, batch_id: str, job_id: str = "") -> dict:
-    """停止后续步骤（不做供应商取消：厂商无取消接口时，在途任务仍可能完成并计费）。"""
+def cancel(db: Session, user, batch_id: str, job_id: str = "", reason: str = "user") -> dict:
+    """停止后续步骤（不做供应商取消：厂商无取消接口时，在途任务仍可能完成并计费）。
+
+    V4.115：reason="user" 表示用户在任务栏手动停止，落 `error_code=MANUAL_STOP` 作为
+    可查询标记（区分系统自动取消 CANCELED）；status 仍为 canceled，保持 TERMINAL /
+    worker 既有语义不变。理由只做标记，不影响状态机。
+    """
     batch = (db.query(CreativeBatch)
              .filter_by(batch_id=batch_id, owner_id=getattr(user, "id", None)).first())
     if not batch:
         raise LookupError("batch_not_found")
+    manual = str(reason or "user").strip().lower() == "user"
+    code = "MANUAL_STOP" if manual else "CANCELED"
+    stage = "manual_stopped" if manual else "canceled"
+    message = ("已手动停止（用户操作）；若供应商已在渲染，该任务仍可能完成并计费"
+               if manual else "已停止后续步骤；若供应商已在渲染，该任务仍可能完成并计费")
     q = db.query(GenerationJob).filter_by(batch_id=batch_id,
                                           owner_id=getattr(user, "id", None))
     if job_id:
@@ -477,10 +489,10 @@ def cancel(db: Session, user, batch_id: str, job_id: str = "") -> dict:
         if j.status in ACTIVE:
             j.cancel_requested = True
             j.status = "canceled"
-            j.stage = "canceled"
+            j.stage = stage
             j.finished_at = _now()
-            j.error_code, j.error_stage = "CANCELED", j.stage
-            j.error_message = "已停止后续步骤；若供应商已在渲染，该任务仍可能完成并计费"
+            j.error_code, j.error_stage = code, stage
+            j.error_message = message
             j.error_action = ""
             j.updated_at = _now()
     _recount(db, batch)
