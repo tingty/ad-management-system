@@ -869,6 +869,9 @@ export interface WorkshopGenerateResult {
   images_skipped: boolean
   plan_id: number | null
   models: WorkshopModelStatus[]
+  /** V4.120：按模板创作的图片溯源（模板只影响图片） */
+  template_id?: number | null
+  template_name?: string
 }
 
 export interface CreativeAsset {
@@ -1159,8 +1162,10 @@ export const api = {
     creative_intent?: Record<string, any>; intent_text?: string; demo_mode?: boolean }) =>
     req<WorkshopAnalyzeResult>('/api/workshop/analyze', { method: 'POST', body: JSON.stringify(payload) }),
   workshopGenerate: (payload: { analysis: any; plan_id?: number | null
-    targets: Array<{ platform: string; sizes: string[] }>; lang?: string }) =>
+    targets: Array<{ platform: string; sizes: string[] }>; lang?: string; template_id?: number | null }) =>
     req<WorkshopGenerateResult>('/api/workshop/generate', { method: 'POST', body: JSON.stringify(payload) }),
+  // V4.120 按模板创作：模板列表 + 逐条授权闸门状态（只驱动图片，不影响文案）
+  workshopTemplates: () => req<any[]>('/api/workshop/templates'),
   // 基于「勾选的创意文案组合」+ 落地页分析结论 + 风格/样式/颜色，生成推广图片
   mediaImages: (payload: MediaImagePayload) =>
     req<MediaImageResult>('/api/media-campaign/images', { method: 'POST', body: JSON.stringify(payload) }),
@@ -1209,6 +1214,8 @@ export const api = {
     req<any>('/api/template-library/assets', { method: 'POST', body: JSON.stringify(payload) }),
   tlDeleteAsset: (id: number) =>
     req<any>(`/api/template-library/assets/${id}`, { method: 'DELETE' }),
+  tlPatchRights: (id: number, payload: { rights_status: string; rights_note: string }) =>
+    req<any>(`/api/template-library/assets/${id}/rights`, { method: 'PATCH', body: JSON.stringify(payload) }),
   tlAnalyses: (params: { asset_id?: number; limit?: number; offset?: number } = {}) =>
     req<any[]>(`/api/template-library/analyses${qs(params)}`),
   tlAddAnalysis: (payload: any) =>

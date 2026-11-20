@@ -124,9 +124,17 @@ def effective_category(analysis: dict) -> tuple[str, str, str, str]:
             source)
 
 
-def eligibility(analysis: dict) -> dict:
-    """判断一条解构能否进归并候选，并给出可展示的排除原因。"""
+def eligibility(analysis: dict, rights_status: str = "granted") -> dict:
+    """判断一条解构能否进归并候选，并给出可展示的排除原因。
+
+    V4.120：授权标注升级为强制闸门，未声明授权（unknown）/ 明确不可投放（denied）
+    一律不进候选；此处的 rights_status 由调用方从素材原件传入，不凭空推定。
+    """
     analysis = analysis if isinstance(analysis, dict) else {}
+    if str(rights_status or "unknown").strip().lower() != "granted":
+        return {"eligible": False, "reason": "投放授权闸门未通过（需补录已获授权声明）",
+                "primary": "", "purpose": "", "hook": "", "category_source": "",
+                "completeness": float(analysis.get("completeness") or 0)}
     primary, purpose, hook, source = effective_category(analysis)
     result = {"eligible": False, "reason": "", "primary": primary,
               "purpose": purpose, "hook": hook, "category_source": source,
@@ -257,7 +265,9 @@ def build_candidates(items: list[dict]) -> dict:
     for item in items:
         asset = item.get("asset") or {}
         analysis = item.get("analysis") or {}
-        e = eligibility(analysis)
+        # 缺省 granted 只为兼容未传该字段的旧调用方（专项测试 / 内部脚本）；
+        # 生产路由一律传入明确值，历史素材的 unknown 不会被隐式放行。
+        e = eligibility(analysis, asset.get("rights_status", "granted"))
         row = {
             "asset_id": asset.get("id"), "title": asset.get("title") or "未命名素材",
             "completeness": e["completeness"], "reason": e["reason"],

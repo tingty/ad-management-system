@@ -2465,3 +2465,31 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .tl-template-member { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
   padding: 4px 0; font-size: 12px; }
 .tl-template-member .btn { height: 26px; padding: 0 9px; font-size: 12px; }
+
+/* ===== V4.120 素材工作坊：按模板创作 + 授权强制闸门 ===== */
+.ws-modebar { display: flex; gap: 8px; margin-bottom: 14px; }
+.ws-mode { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px;
+  border: 1px solid var(--line, var(--border)); border-radius: 9px; background: var(--card-2, rgba(0,0,0,.02));
+  color: var(--muted, #6b7280); font-size: 13px; cursor: pointer; }
+.ws-mode.active { border-color: var(--primary, #2563eb); color: var(--primary, #2563eb);
+  background: rgba(37,99,235,.08); font-weight: 600; }
+.ws-mode-note { font-size: 11px; font-weight: 400; opacity: .75; }
+.ws-tpl-card { margin-bottom: 14px; }
+.ws-tpl-card select { max-width: 560px; }
+.ws-tpl-detail { margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+  background: var(--card-2, rgba(0,0,0,.02)); }
+.ws-tpl-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; }
+.ws-tpl-meta .chip { font-size: 11px; padding: 1px 7px; }
+.ws-template-source { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px;
+  background: rgba(124,58,237,.10); color: #6d28d9; font-size: 12.5px; }
+.tl-rights-box { padding: 11px 12px; border: 1px solid var(--line, var(--border));
+  border-radius: 9px; background: var(--card-2, rgba(0,0,0,.02)); }
+.tl-rights-title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.tl-required { margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  background: rgba(220,38,38,.12); color: #c0392b; font-size: 11px; font-weight: 600; }
+.tl-rights-tag { display: inline-block; margin-left: 6px; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; }
+.tl-rights-tag.ok { background: rgba(47,158,68,.14); color: #237a35; }
+.tl-rights-tag.bad { background: rgba(220,38,38,.12); color: #c0392b; }
+.tl-rights-edit { margin-top: 10px; padding: 10px; border-radius: 8px;
+  border: 1px dashed var(--line, var(--border)); background: var(--card-2, rgba(0,0,0,.02)); }

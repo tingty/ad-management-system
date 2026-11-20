@@ -25,7 +25,8 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      MediaImageSlot, MediaCopyVariant,
                      AssetSourceOut, AssetSourceCreate, AssetAnalysisOut, AssetAnalysisCreate,
                      AssetImportRequest, TemplateOut, TemplateCreate, TemplateUpdate,
-                     CategoryConfirmIn, MergeConfirmIn, GoldenOverrideIn, UnmergeIn)
+                     CategoryConfirmIn, MergeConfirmIn, GoldenOverrideIn, UnmergeIn,
+                     RightsPatchIn)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import (get_llm_with_info, finalize_invocation, parse_json, get_video,
@@ -3441,6 +3442,35 @@ def api_workshop_options(db: Session = Depends(get_db),
     }
 
 
+@router.get("/workshop/templates")
+async def api_workshop_templates(db: Session = Depends(get_db),
+                                 user: User = Depends(require_roles(*CAN_EDIT))):
+    """V4.120：工作坊首页「按模板创作」可选模板 + 逐条授权闸门状态。
+
+    不可用的模板也一并返回并给出原因，用户能看懂为什么不能选，而不是列表里凭空消失。
+    """
+    import template_gate as tg
+    rows = db.query(CreativeTemplate).filter(
+        CreativeTemplate.owner_id == user.id).order_by(
+        CreativeTemplate.updated_at.desc()).all()
+    out = []
+    for t in rows:
+        gate = tg.template_gate(db, t.id, user.id)
+        sk = t.image_skeleton_json if isinstance(t.image_skeleton_json, dict) else {}
+        out.append({
+            "id": t.id, "name": t.name or "", "primary_category": t.primary_category or "",
+            "purpose": t.purpose or [], "platform_tags": t.platform_tags or [],
+            "version": t.version or 1, "status": t.status or "active",
+            "golden_asset_id": t.golden_asset_id,
+            "skeleton_preview": {k: sk.get(k) for k in (
+                "composition", "focal_path", "palette", "lighting", "texture", "hook_type")
+                if sk.get(k)},
+            "usable": gate["ok"], "reason": gate["reason"],
+            "required_action": gate["required_action"],
+        })
+    return out
+
+
 @router.post("/workshop/analyze")
 async def api_workshop_analyze(req: WorkshopAnalyzeRequest, db: Session = Depends(get_db),
                                user: User = Depends(require_roles(*CAN_EDIT))):
@@ -3497,6 +3527,20 @@ async def api_workshop_generate(req: WorkshopGenerateRequest, db: Session = Depe
     analysis = req.analysis if isinstance(req.analysis, dict) else {}
     if not analysis:
         raise HTTPException(400, "缺少分析结果，请先解析产品")
+
+    # V4.120：按模板创作 — 模板只驱动图片骨架，文案链路完全不读模板。
+    # 授权闸门在入队 / 付费调用之前执行，不可用模板直接 422，不静默退回默认模式。
+    template = None
+    template_name = ""
+    if req.template_id:
+        import template_gate as tg
+        gate = tg.template_gate(db, req.template_id, user.id)
+        if not gate["ok"]:
+            raise HTTPException(status_code=422, detail={
+                "message": gate["reason"], "blocked": "template_gate",
+                "required_action": gate["required_action"]})
+        template = gate["template"]
+        template_name = template.name or ""
 
     # 文案平台：以请求里的平台为准（只出文案时尺寸可以为空）；
     # 尺寸任务：由标准库复核后的 targets 决定。
@@ -3580,12 +3624,16 @@ async def api_workshop_generate(req: WorkshopGenerateRequest, db: Session = Depe
                 # 出图链路按**实际版式**把图上那一行收敛到可排版长度；完整文案仍留在
                 # 「文案素材」里作为投放字段，不做删减。
                 ov = cw_workshop.overlay_variant(copy_res, analysis)
+                style_opts = {"fit_overlay": True}
+                if template is not None:
+                    import template_gate as tg
+                    style_opts = tg.template_style_opts(template, platform)
                 i_req = MediaImageRequest(
                     analysis=LandingAnalysis(**cw_workshop.landing_payload(analysis)),
                     platform=platform, lang=req.lang or "en",
                     copy_fields=copy_res.get("fields") or {},
                     copy_variants=[MediaCopyVariant(**ov)],
-                    style_opts={"fit_overlay": True}, slots=slots,
+                    style_opts=style_opts, slots=slots,
                 )
                 job, created = job_service.create_job(
                     db, {"images_request": i_req.model_dump(), "archive": {}}, user,
@@ -3606,6 +3654,7 @@ async def api_workshop_generate(req: WorkshopGenerateRequest, db: Session = Depe
     return {"copies": copies, "image_jobs": image_jobs, "warnings": warnings,
             "images_skipped": (not image_ready),
             "plan_id": req.plan_id,
+            "template_id": req.template_id, "template_name": template_name,
             "models": cw_workshop.model_status(db)["items"]}
 
 
@@ -3618,6 +3667,32 @@ def _iso(dt):
     return dt.isoformat() if dt else ""
 
 
+def _rights_block(chk: dict) -> HTTPException:
+    """V4.120 授权闸门统一错误：给出原因与可执行动作，不静默降级。"""
+    return HTTPException(status_code=422, detail={
+        "message": f"授权闸门未通过：{chk['reason']}",
+        "blocked": "rights_gate",
+        "required_action": chk.get("required_action") or "请补录投放授权声明",
+        "rights_status": chk.get("status") or "unknown",
+    })
+
+
+def _rights_on_import(status, note, field_name: str = "rights_status") -> tuple[str, str]:
+    """V4.120：导入必须显式声明授权状态并写明来源/范围。"""
+    import template_gate as tg
+    st = tg.normalize_status(status)
+    if st == tg.UNKNOWN:
+        raise HTTPException(status_code=422, detail={
+            "message": f"导入必须声明投放授权：{field_name} 仅接受 granted（已获授权）/ denied（不可投放）",
+            "blocked": "rights_gate", "required_action": tg.REQUIRED_ACTION})
+    text = str(note or "").strip()
+    if len(text) < tg.MIN_NOTE_LEN:
+        raise HTTPException(status_code=422, detail={
+            "message": "请填写授权说明（至少 4 个字），写明授权来源与范围",
+            "blocked": "rights_gate", "required_action": tg.REQUIRED_ACTION})
+    return st, text[:255]
+
+
 def _asset_source_out(r: "CreativeAssetSource") -> dict:
     return {
         "id": r.id, "owner_id": r.owner_id, "owner_name": r.owner_name,
@@ -3625,6 +3700,7 @@ def _asset_source_out(r: "CreativeAssetSource") -> dict:
         "file": r.file, "thumb": r.thumb, "source_url": r.source_url, "platform": r.platform,
         "media_kind": r.media_kind or "image", "width": r.width, "height": r.height,
         "duration_sec": r.duration_sec, "rights_note": r.rights_note,
+        "rights_status": getattr(r, "rights_status", None) or "unknown",
         "status": r.status or "imported", "merged_template_id": r.merged_template_id,
         "created_at": _iso(r.created_at), "updated_at": _iso(r.updated_at),
     }
@@ -3676,11 +3752,13 @@ async def tl_add_asset(body: AssetSourceCreate, db: Session = Depends(get_db),
     st = (body.source_type or "upload").strip().lower()
     if st not in ("upload", "url", "screenshot", "video"):
         raise HTTPException(400, "source_type 仅支持 upload / url / screenshot / video")
+    rights_status, rights_note = _rights_on_import(body.rights_status, body.rights_note)
     r = CreativeAssetSource(
         owner_id=user.id, owner_name=user.username, title=(body.title or "")[:255],
         source_type=st, file=body.file, thumb=body.thumb, source_url=body.source_url,
         platform=body.platform, media_kind=kind, width=body.width, height=body.height,
-        duration_sec=body.duration_sec, rights_note=body.rights_note, status="imported")
+        duration_sec=body.duration_sec, rights_note=rights_note,
+        rights_status=rights_status, status="imported")
     db.add(r); db.commit(); db.refresh(r)
     return _asset_source_out(r)
 
@@ -3703,6 +3781,25 @@ async def tl_delete_asset(asset_id: int, db: Session = Depends(get_db),
     db.query(CreativeAssetAnalysis).filter(CreativeAssetAnalysis.asset_id == asset_id).delete(synchronize_session=False)
     db.commit()
     return {"ok": True}
+
+
+@router.patch("/template-library/assets/{asset_id}/rights", response_model=AssetSourceOut)
+async def tl_patch_rights(asset_id: int, body: RightsPatchIn, db: Session = Depends(get_db),
+                          user: User = Depends(require_roles(*CAN_EDIT))):
+    """V4.120：历史 / 新素材补录授权声明（闸门唯一入口）。
+
+    已解构的存量素材补录为 denied 时保留解构记录，但后续归并 / 模板引用会被拦截。
+    """
+    import template_gate as tg
+    st, note = _rights_on_import(body.rights_status, body.rights_note)
+    r = db.query(CreativeAssetSource).filter_by(id=asset_id, owner_id=user.id).first()
+    if not r:
+        raise HTTPException(404, "素材不存在或无权编辑")
+    r.rights_status = st
+    r.rights_note = note
+    r.updated_at = utcnow()
+    db.commit(); db.refresh(r)
+    return _asset_source_out(r)
 
 
 # ---- L2 分析记录 ----
@@ -3762,6 +3859,15 @@ async def tl_add_template(body: TemplateCreate, db: Session = Depends(get_db),
         raise HTTPException(400, "模板名称不能为空")
     if not (body.primary_category or "").strip():
         raise HTTPException(400, "请选择主分类")
+    if body.golden_asset_id:
+        golden = db.query(CreativeAssetSource).filter_by(
+            id=body.golden_asset_id, owner_id=user.id).first()
+        if not golden:
+            raise HTTPException(404, "golden 素材不存在或无权使用")
+        import template_gate as tg
+        chk = tg.rights_check(golden)
+        if not chk["ok"]:
+            raise _rights_block(chk)
     r = CreativeTemplate(
         owner_id=user.id, owner_name=user.username, name=body.name.strip(),
         primary_category=body.primary_category.strip(), purpose=body.purpose or [],
@@ -3781,6 +3887,21 @@ async def tl_update_template(tid: int, body: TemplateUpdate, db: Session = Depen
     if not r:
         raise HTTPException(404, "模板不存在或无权编辑")
     data = body.model_dump(exclude_none=True, exclude={"reset_to_ai"})
+    # V4.120：编辑时同样不能把未授权素材塞进 golden / 归并列表，堵住 PATCH 绕过。
+    import template_gate as tg
+    edited_ids = []
+    if data.get("golden_asset_id"):
+        edited_ids.append(int(data["golden_asset_id"]))
+    for x in (data.get("merged_asset_ids") or []):
+        if str(x).isdigit():
+            edited_ids.append(int(x))
+    for aid in dict.fromkeys(edited_ids):
+        a = db.query(CreativeAssetSource).filter_by(id=aid, owner_id=user.id).first()
+        if not a:
+            raise HTTPException(404, f"素材 #{aid} 不存在或无权引用")
+        chk = tg.rights_check(a)
+        if not chk["ok"]:
+            raise _rights_block(chk)
     for field in ("name", "primary_category", "purpose", "platform_tags", "image_skeleton_json",
                   "variables_json", "golden_asset_id", "merged_asset_ids", "edit_note", "status"):
         if field in data:
@@ -3838,14 +3959,15 @@ async def tl_import_asset(body: AssetImportRequest, db: Session = Depends(get_db
     file_val = (body.file or "").strip()
     if file_val and not (file_val.startswith("/files/") or os.path.isabs(file_val)):
         raise HTTPException(400, "file 必须是 /files/<name> 或绝对路径")
-    rights = body.rights_note or ""
+    rights_status, rights = _rights_on_import(body.rights_status, body.rights_note)
     if st == "screenshot" and body.note:
         rights = (rights + "｜" if rights else "") + body.note[:120]
     r = CreativeAssetSource(
         owner_id=user.id, owner_name=user.username, title=(body.title or "")[:255],
         source_type=st, file=file_val or None, thumb=body.thumb, source_url=body.source_url,
         platform=body.platform, media_kind=kind, width=body.width, height=body.height,
-        duration_sec=body.duration_sec, rights_note=rights[:255] or None, status="imported")
+        duration_sec=body.duration_sec, rights_note=rights[:255] or None,
+        rights_status=rights_status, status="imported")
     db.add(r); db.commit(); db.refresh(r)
     return _asset_source_out(r)
 
@@ -3863,6 +3985,11 @@ async def tl_analyze_asset(asset_id: int, db: Session = Depends(get_db),
     asset = db.query(CreativeAssetSource).filter_by(id=asset_id, owner_id=user.id).first()
     if not asset:
         raise HTTPException(404, "素材不存在或无权分析")
+    # V4.120 授权闸门：无投放授权 / 明确不可投放 / 授权说明不全一律不调用视觉模型。
+    import template_gate as tg
+    chk = tg.rights_check(asset)
+    if not chk["ok"]:
+        raise _rights_block(chk)
     if (asset.media_kind or "image") != "image":
         raise HTTPException(400, "视频解构将在 V4.121 提供，当前仅支持图片")
     if not asset.file:
@@ -3985,9 +4112,14 @@ async def tl_merge_confirm(body: MergeConfirmIn, db: Session = Depends(get_db),
         CreativeAssetSource.owner_id == user.id, CreativeAssetSource.id.in_(ids)).all()
     if len(assets) != len(ids):
         raise HTTPException(404, "包含不属于你的素材，或素材不存在")
+    import template_gate as tg
     for asset in assets:
         if asset.merged_template_id:
             raise HTTPException(400, f"素材「{asset.title or asset.id}」已归并，请先撤销归并")
+        # V4.120：授权闸门先于解构资格，未授权素材不进归并 / 模板沉淀。
+        chk = tg.rights_check(asset)
+        if not chk["ok"]:
+            raise _rights_block(chk)
 
     latest = _tl_latest_analyses(db, user.id)
     by_id: dict = {}
@@ -4048,6 +4180,13 @@ async def tl_set_golden(tid: int, body: GoldenOverrideIn, db: Session = Depends(
         member_ids.append(t.golden_asset_id)
     if body.asset_id not in member_ids:
         raise HTTPException(400, "golden 必须属于本模板已归并的素材")
+    golden_asset = db.query(CreativeAssetSource).filter_by(
+        id=body.asset_id, owner_id=user.id).first()
+    if golden_asset:
+        import template_gate as tg
+        chk = tg.rights_check(golden_asset)
+        if not chk["ok"]:
+            raise _rights_block(chk)
     row = _tl_latest_analyses(db, user.id).get(body.asset_id)
     if not row:
         raise HTTPException(400, "该素材没有可用解构结果")

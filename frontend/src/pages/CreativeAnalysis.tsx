@@ -13,8 +13,11 @@ import { api } from '../api'
  * V4.119：新增「分类归并 · 模板沉淀」Tab——12 类主分类 + 目的 + 钩子 + 信息结构相似度
  * 给出候选组；人工确认归并后按框架完整度选 golden 并沉淀图片骨架模板（可覆盖 / 可撤销）。
  *
+ * V4.120：授权标注升级为强制闸门——导入必须声明 granted/denied 并写明来源范围；
+ * 未授权素材禁止解构 / 归并 / 模板沉淀 / 工作坊按模板创作，可就地补录授权。
+ *
  * 保留原「文本快速分析」Tab（V4.50 能力）作为兜底，避免破坏既有用户习惯。
- * 工作坊模板模式（V4.120）/ 视频解构（V4.121）后续版本接入。
+ * 视频解构（V4.121）后续版本接入。
  */
 
 const STATUS_LABEL: Record<string, string> = {
@@ -26,7 +29,8 @@ type Asset = {
   id: number; title: string; source_type: string; file?: string | null; thumb?: string | null;
   source_url?: string | null; platform?: string | null; media_kind: string;
   width?: number | null; height?: number | null; duration_sec?: number | null;
-  rights_note?: string | null; status: string; merged_template_id?: number | null; created_at?: string;
+  rights_note?: string | null; rights_status?: string | null;
+  status: string; merged_template_id?: number | null; created_at?: string;
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -43,7 +47,12 @@ export default function CreativeAnalysis() {
   const [importTitle, setImportTitle] = useState('')
   const [importPlatform, setImportPlatform] = useState('')
   const [urlInput, setUrlInput] = useState('')
+  // V4.120 授权闸门：默认未选择，用户必须显式声明，不允许静默按「自有素材」放行。
+  const [rightsStatus, setRightsStatus] = useState('')
   const [rightsNote, setRightsNote] = useState('')
+  const [rightsEditId, setRightsEditId] = useState<number | null>(null)
+  const [rightsEditStatus, setRightsEditStatus] = useState('')
+  const [rightsEditNote, setRightsEditNote] = useState('')
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
   const [importErr, setImportErr] = useState('')
@@ -126,10 +135,25 @@ export default function CreativeAnalysis() {
 
   function resetImportMsg() { setImportMsg(''); setImportErr('') }
 
+  /** V4.120：授权闸门前置校验，未声明授权不允许把文件登记进素材库。 */
+  function checkRightsGate(): boolean {
+    if (!rightsStatus) {
+      setImportErr('强制闸门：请选择投放授权状态（已获授权 / 不可投放）')
+      return false
+    }
+    if (rightsNote.trim().length < 4) {
+      setImportErr('强制闸门：请填写授权说明（至少 4 个字，写明授权来源与范围）')
+      return false
+    }
+    return true
+  }
+
   // ---- 本地上传（图片 / 视频）----
   async function onUpload(file: File | undefined, kind: 'image' | 'video') {
     if (!file) return
-    resetImportMsg(); setImporting(true)
+    resetImportMsg()
+    if (!checkRightsGate()) return
+    setImporting(true)
     try {
       let up: any
       if (kind === 'video') up = await api.uploadVideoAsset(file)
@@ -142,7 +166,7 @@ export default function CreativeAnalysis() {
         width: up.width || null, height: up.height || null,
         duration_sec: up.duration_sec || null,
         platform: importPlatform.trim() || null,
-        rights_note: rightsNote.trim() || null,
+        rights_note: rightsNote.trim(), rights_status: rightsStatus,
       }
       await api.tlImport(payload)
       setImportMsg(`已导入：${file.name}${kind === 'video' ? '（仅归档 + 封面帧，解构在 V4.121）' : ''}`)
@@ -161,13 +185,15 @@ export default function CreativeAnalysis() {
   async function importFromUrl() {
     const u = urlInput.trim()
     if (!/^https?:\/\//i.test(u)) { setImportErr('请输入 http(s) 图片链接'); return }
-    resetImportMsg(); setImporting(true)
+    resetImportMsg()
+    if (!checkRightsGate()) return
+    setImporting(true)
     try {
       const up = await api.fetchAssetUrl(u)
       await api.tlImport({
         title: importTitle.trim() || u.slice(0, 60), source_type: 'url', media_kind: 'image',
         file: up.url, source_url: u, platform: importPlatform.trim() || null,
-        rights_note: rightsNote.trim() || null,
+        rights_note: rightsNote.trim(), rights_status: rightsStatus,
       })
       setImportMsg('已导入图片 URL'); setUrlInput(''); setImportTitle('')
       await loadAssets()
@@ -180,7 +206,9 @@ export default function CreativeAnalysis() {
   async function importFromScreenshot() {
     const u = urlInput.trim()
     if (!/^https?:\/\//i.test(u)) { setImportErr('请输入 http(s) 网页链接'); return }
-    resetImportMsg(); setImporting(true)
+    resetImportMsg()
+    if (!checkRightsGate()) return
+    setImporting(true)
     try {
       const shot = await api.screenshotAsset(u, 'viewport')
       if (shot.status !== 'ok' || !shot.url) {
@@ -191,7 +219,7 @@ export default function CreativeAnalysis() {
         title: importTitle.trim() || u.slice(0, 60), source_type: 'screenshot', media_kind: 'image',
         file: shot.url, source_url: u, platform: importPlatform.trim() || null,
         width: shot.width || null, height: shot.height || null,
-        rights_note: rightsNote.trim() || null,
+        rights_note: rightsNote.trim(), rights_status: rightsStatus,
         note: shot.integrity_note || '网页截图 · 内容完整性未保证',
       })
       setImportMsg('已截图并导入（内容完整性未保证，登录墙 / 动态渲染可能截不全）')
@@ -217,6 +245,22 @@ export default function CreativeAnalysis() {
     } catch (e: any) {
       setAnalyses(prev => ({ ...prev, [asset.id]: { status_text: '解构失败', reason: e?.message || '' } }))
     } finally { setAnalyzingId(null) }
+  }
+
+  /** V4.120：为历史 / 新素材补录授权；闸门通过后才能解构与沉淀。 */
+  async function saveRights(asset: Asset) {
+    if (!rightsEditStatus) { setImportErr('请选择授权状态'); return }
+    if (rightsEditNote.trim().length < 4) { setImportErr('请填写授权说明（至少 4 个字，来源与范围）'); return }
+    setImportErr(''); setImportMsg('')
+    try {
+      const updated = await api.tlPatchRights(asset.id, {
+        rights_status: rightsEditStatus, rights_note: rightsEditNote.trim(),
+      })
+      setAssets(prev => prev.map(a => a.id === asset.id ? { ...a, ...updated } : a))
+      setImportMsg(`素材「${asset.title || asset.id}」授权声明已更新`)
+      setRightsEditId(null)
+      await loadLibraryMeta()
+    } catch (e: any) { setImportErr(e?.message || '补录授权失败') }
   }
 
   async function deleteAsset(asset: Asset) {
@@ -384,10 +428,27 @@ export default function CreativeAnalysis() {
                 </div>
               </div>
             )}
-            <label className="field" style={{ marginTop: 12 }}>
-              <span className="label">版权 / 授权标注（可选，仅供分析参考）</span>
-              <input value={rightsNote} onChange={e => setRightsNote(e.target.value)} placeholder="如：竞品公开广告截图 / 自有素材" />
-            </label>
+            <div className="tl-rights-box" style={{ marginTop: 12 }}>
+              <div className="tl-rights-title">投放授权声明 <span className="tl-required">必填 · 强制闸门</span></div>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                未声明授权的素材不能解构、归并、沉淀模板或被工作坊按模板创作引用。
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <label className="field" style={{ minWidth: 180 }}>
+                  <span className="label">授权状态</span>
+                  <select value={rightsStatus} onChange={e => setRightsStatus(e.target.value)}>
+                    <option value="">请选择</option>
+                    <option value="granted">已获授权（可投放分析）</option>
+                    <option value="denied">不可投放（仅归档）</option>
+                  </select>
+                </label>
+                <label className="field" style={{ flex: 1, minWidth: 260 }}>
+                  <span className="label">授权说明（来源与范围，至少 4 字）</span>
+                  <input value={rightsNote} onChange={e => setRightsNote(e.target.value)}
+                    placeholder="如：自有素材，已获全球 Meta / Google 投放授权" />
+                </label>
+              </div>
+            </div>
             {importMsg && <div className="tl-ok">{importMsg}</div>}
             {importErr && <div className="err">{importErr}</div>}
           </div>
@@ -407,6 +468,7 @@ export default function CreativeAnalysis() {
               {assets.map(a => {
                 const analysis = analyses[a.id]
                 const expanded = expandedId === a.id
+                const rightsOk = a.rights_status === 'granted' && (a.rights_note || '').trim().length >= 4
                 return (
                   <div key={a.id} className="card tl-asset-card">
                     <div className="tl-asset-thumb">
@@ -425,8 +487,13 @@ export default function CreativeAnalysis() {
                       {a.merged_template_id && (
                         <span className="tl-merged-tag">已归并到 {templates.find(t => t.id === a.merged_template_id)?.name || `模板 #${a.merged_template_id}`}</span>
                       )}
-                      {a.rights_note && <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>{a.rights_note.slice(0, 30)}</span>}
+                      <span className={`tl-rights-tag ${rightsOk ? 'ok' : 'bad'}`} title={a.rights_note || ''}>
+                        {rightsOk ? '授权已声明' : (a.rights_status === 'denied' ? '不可投放' : '授权未声明')}
+                      </span>
                     </div>
+                    {rightsOk && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                      授权说明：{a.rights_note?.slice(0, 48)}
+                    </div>}
                     {analysis?.category_json && (
                       <div className="tl-cat-line">
                         {analysis.category_json.primary && <span className="chip">{analysis.category_json.primary}</span>}
@@ -437,15 +504,46 @@ export default function CreativeAnalysis() {
                     )}
                     <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                       {a.media_kind === 'image' && (
-                        <button className="btn primary" onClick={() => runAnalyze(a)} disabled={analyzingId === a.id}>
+                        <button className="btn primary" onClick={() => runAnalyze(a)}
+                          disabled={analyzingId === a.id || !rightsOk}
+                          title={rightsOk ? '' : '请先补录投放授权声明'}>
                           {analyzingId === a.id ? '解构中…' : (analysis ? '重新解构' : '解构')}
                         </button>
                       )}
+                      <button className="btn" onClick={() => {
+                        setRightsEditId(rightsEditId === a.id ? null : a.id)
+                        setRightsEditStatus(a.rights_status === 'granted' || a.rights_status === 'denied' ? a.rights_status : '')
+                        setRightsEditNote(a.rights_note || '')
+                      }}>
+                        {rightsEditId === a.id ? '收起授权' : '补录授权'}
+                      </button>
                       <button className="btn" onClick={() => setExpandedId(expanded ? null : a.id)}>
                         {expanded ? '收起' : (analysis ? '看解构' : '详情')}
                       </button>
                       <button className="btn" onClick={() => deleteAsset(a)}>删除</button>
                     </div>
+
+                    {rightsEditId === a.id && (
+                      <div className="tl-rights-edit">
+                        <div className="tl-rights-title">补录投放授权声明</div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                          <label className="field" style={{ minWidth: 150 }}>
+                            <span className="label">授权状态</span>
+                            <select value={rightsEditStatus} onChange={e => setRightsEditStatus(e.target.value)}>
+                              <option value="">请选择</option>
+                              <option value="granted">已获授权</option>
+                              <option value="denied">不可投放</option>
+                            </select>
+                          </label>
+                          <label className="field" style={{ flex: 1, minWidth: 180 }}>
+                            <span className="label">授权说明（≥4 字）</span>
+                            <input value={rightsEditNote} onChange={e => setRightsEditNote(e.target.value)}
+                              placeholder="授权来源与范围" />
+                          </label>
+                          <button className="btn primary" onClick={() => saveRights(a)}>保存授权</button>
+                        </div>
+                      </div>
+                    )}
 
                     {expanded && analysis && (
                       <div className="tl-analysis">

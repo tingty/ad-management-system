@@ -140,7 +140,8 @@ class TestWorkshopImageV4111(unittest.TestCase):
         src = (BACKEND / "routers.py").read_text(encoding="utf-8")
         start = src.index('@router.post("/workshop/generate")')
         end = src.index('"images_skipped": (not image_ready)')
-        self.assertIn('style_opts={"fit_overlay": True}', src[start:end])
+        # V4.120：默认模式仍显式开启 fit_overlay；按模板创作时用同一开关叠加模板视觉路线。
+        self.assertRegex(src[start:end], r'style_opts\s*=\s*\{"fit_overlay": True\}')
 
         media = (BACKEND / "media_ad.py").read_text(encoding="utf-8")
         # 默认关闭：只有显式传入才收敛

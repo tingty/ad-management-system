@@ -36,6 +36,8 @@ type ImgItem = {
 
 type Phase = '' | 'analyzing' | 'copying' | 'imaging'
 type JobPhase = 'queued' | 'running' | 'done' | 'failed'
+/** V4.120：首页两种创作模式，默认流程保持原样不动。 */
+type Mode = 'default' | 'template'
 
 const LS_KEY = 'admb_workshop_v1'
 
@@ -89,6 +91,13 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
   const [preview, setPreview] = useState<ImgItem | null>(null)
   const timer = useRef<number | null>(null)
 
+  // V4.120 按模板创作：模板只驱动图片，文案仍走下面同一条 run() 链路。
+  const [mode, setMode] = useState<Mode>('default')
+  const [templates, setTemplates] = useState<any[]>([])
+  const [templateId, setTemplateId] = useState<number | null>(null)
+  const [tplLoading, setTplLoading] = useState(false)
+  const [templateSource, setTemplateSource] = useState('')
+
   /* ---------------- 启动参数（模型就绪状态 + 标准库尺寸） ---------------- */
   useEffect(() => {
     let alive = true
@@ -112,6 +121,23 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
       .catch((e: any) => { if (alive) setError(e?.message || '初始化失败') })
     return () => { alive = false }
   }, [])
+
+  /* ---------------- V4.120：按模板创作的模板清单（含授权闸门状态） ---------------- */
+  useEffect(() => {
+    if (mode !== 'template' || templates.length) return
+    let alive = true
+    setTplLoading(true)
+    api.workshopTemplates()
+      .then((list) => {
+        if (!alive) return
+        setTemplates(Array.isArray(list) ? list : [])
+        const first = (Array.isArray(list) ? list : []).find((t: any) => t.usable)
+        if (first) setTemplateId(first.id)
+      })
+      .catch((e: any) => { if (alive) setError(e?.message || '模板清单加载失败') })
+      .finally(() => { if (alive) setTplLoading(false) })
+    return () => { alive = false }
+  }, [mode, templates.length])
 
   /* ---------------- 会话持久化：刷新后仍能接着看结果 ---------------- */
   useEffect(() => {
@@ -229,8 +255,15 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
     const text = input.trim()
     if (!text || phase) return
     if (imageReady && !selectedCount) { setError('请至少选择一个尺寸'); return }
+    // V4.120：按模板创作必须先选一条通过授权闸门的模板，不静默退回默认模式。
+    const chosenTpl = mode === 'template' ? templates.find(t => t.id === templateId && t.usable) : null
+    if (mode === 'template' && !chosenTpl) {
+      setError('请选择一条可用的素材模板（不可用模板通常是授权闸门未通过）')
+      return
+    }
     setError(''); setToast('')
     setCopies([]); setJobs([]); setImages([]); setJobPhase({}); setTitle(''); setJobNote('')
+    setTemplateSource(chosenTpl?.name || '')
     try {
       setPhase('analyzing')
       const a = await api.workshopAnalyze({
@@ -246,7 +279,9 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
         : platforms.map(platform => ({ platform, sizes: [] as string[] }))
       const g = await api.workshopGenerate({
         analysis: a.analysis, plan_id: a.plan_id, targets,
+        template_id: chosenTpl ? chosenTpl.id : null,
       })
+      if (g.template_name) setTemplateSource(g.template_name)
       setCopies(g.copies || [])
       setJobs(g.image_jobs || [])
       if (g.warnings?.length) setError(g.warnings.join('；'))
@@ -291,8 +326,65 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
       .map(([platform, items]) => ({ platform, items }))
   }, [images, opt])
 
+  const selectedTpl = mode === 'template' ? templates.find(t => t.id === templateId) : null
+
   return (
     <div className="ws">
+      {/* V4.120：首页 Tab — 默认流程原样保留，按模板创作只影响图片 */}
+      <div className="ws-modebar">
+        <button type="button" className={`ws-mode ${mode === 'default' ? 'active' : ''}`}
+          onClick={() => { setMode('default'); setError(''); setTemplateSource('') }}>
+          默认创作
+        </button>
+        <button type="button" className={`ws-mode ${mode === 'template' ? 'active' : ''}`}
+          onClick={() => { setMode('template'); setError('') }}>
+          按模板创作
+          <span className="ws-mode-note">模板只影响图片</span>
+        </button>
+      </div>
+
+      {mode === 'template' && (
+        <section className="card ws-tpl-card">
+          <div className="tl-section-title">选择素材模板</div>
+          <div className="muted" style={{ fontSize: 12, margin: '4px 0 10px' }}>
+            模板只复用图片版式与视觉表达骨架；文案、产品事实与证据仍由本次输入的分析生成。
+          </div>
+          {tplLoading ? <div className="muted">加载模板中…</div> : templates.length === 0 ? (
+            <div className="muted">暂无模板。请先在「素材创意模板库 → 分类归并 · 模板沉淀」沉淀一条模板。</div>
+          ) : (
+            <select value={templateId ?? ''} onChange={e => {
+              setTemplateId(e.target.value ? Number(e.target.value) : null)
+              setTemplateSource('')
+            }}>
+              <option value="">请选择模板</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id} disabled={!t.usable}>
+                  {t.name}{t.usable ? '' : `（不可用：${t.reason}）`}
+                </option>
+              ))}
+            </select>
+          )}
+          {selectedTpl && (
+            <div className="ws-tpl-detail">
+              <div className="ws-tpl-meta">
+                <b>{selectedTpl.primary_category || '未分类'}</b>
+                {(selectedTpl.purpose || []).map((p: string) => <span key={p} className="chip">{p}</span>)}
+                <span className="muted" style={{ fontSize: 11 }}>版本 v{selectedTpl.version || 1}</span>
+              </div>
+              {Object.keys(selectedTpl.skeleton_preview || {}).length > 0 && (
+                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                  骨架：{Object.entries(selectedTpl.skeleton_preview).map(([k, v]) =>
+                    `${k}=${String(v)}`).join(' · ')}
+                </div>
+              )}
+              {!selectedTpl.usable && (
+                <div className="tl-warn">授权闸门未通过：{selectedTpl.reason}。{selectedTpl.required_action}</div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* ① 输入 */}
       <section className="card ws-input-card">
         <textarea
@@ -353,11 +445,12 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
             ))}
           </span>
           <button type="button" className="btn ws-run" onClick={run}
-            disabled={!input.trim() || !ready || !!phase || (imageReady && !selectedCount)}>
+            disabled={!input.trim() || !ready || !!phase || (imageReady && !selectedCount)
+              || (mode === 'template' && !selectedTpl?.usable)}>
             {phase === 'analyzing' ? '解析中…' : phase === 'copying' ? '写文案…'
               : phase === 'imaging' ? `出图 ${pendingCount || ''}`.trim() + '…'
               : imageReady
-                ? `开始创作${selectedCount ? ` · ${selectedCount} 张` : ''}`
+                ? `${mode === 'template' ? '按模板创作' : '开始创作'}${selectedCount ? ` · ${selectedCount} 张` : ''}`
                 : '生成文案'}
           </button>
         </div>
@@ -374,6 +467,11 @@ export default function MaterialWorkshop({ canManageModels, onOpenModels }: {
         </div>
       )}
 
+      {mode === 'template' && templateSource && (
+        <div className="ws-template-source">
+          本批图片由模板「{templateSource}」驱动（仅影响图片版式与视觉表达；文案与产品事实由本次输入生成）
+        </div>
+      )}
       {error && <div className="ws-error">{error}</div>}
       {jobNote && <div className="ws-error">{jobNote}</div>}
       {toast && <div className="ws-toast">{toast}</div>}

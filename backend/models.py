@@ -332,7 +332,10 @@ class CreativeAssetSource(Base):
     width = Column(Integer, nullable=True)
     height = Column(Integer, nullable=True)
     duration_sec = Column(Float, nullable=True)
-    rights_note = Column(String(255), nullable=True)    # 版权/授权标注（仅供分析参考）
+    rights_note = Column(String(255), nullable=True)    # 版权/授权说明（来源与范围，V4.120 起强制）
+    # V4.120：授权闸门。granted=已声明可投放授权；denied=明确不可投放；
+    # 历史存量无此列 → NULL，按 unknown 处理，补录前禁止解构 / 沉淀 / 模板引用。
+    rights_status = Column(String(16), nullable=True, index=True)
     file_hash = Column(String(64), nullable=True, index=True)  # 去重（文件 sha256）
     status = Column(String(24), default="imported")     # imported/analyzing/analyzed/merged/failed/unavailable
     # V4.119：软归并标记（merged_to_template_X），原件与解构永久保留，可取消归并。
