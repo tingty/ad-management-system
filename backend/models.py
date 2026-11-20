@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float
 from datetime import datetime, timezone
 from database import Base
 
@@ -310,5 +310,71 @@ class CwLibrary(Base):
     url = Column(String(1024), nullable=True)          # 产品链接（kind=product）
     meta_json = Column(JSON, nullable=True)            # brand / summary / snapshot_id / evidence_ids / platform 等
     source_plan_id = Column(Integer, nullable=True, index=True)   # 关联创意方案（产品去重用）
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+# ============ V4.117 素材创意模板库：三层数据模型（素材条目 / 分析记录 / 模板） ============
+class CreativeAssetSource(Base):
+    """素材创意模板库 L1 · 原始素材条目：本地上传 / 图片 URL / 网页截图 / 视频导入的原件。
+    原件长期归档（软归并不物理删除）；视频存原文件 + 封面帧。"""
+    __tablename__ = "creative_asset_sources"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    owner_name = Column(String(64), nullable=True)
+    title = Column(String(255), nullable=True)
+    source_type = Column(String(24), default="upload")  # upload / url / screenshot / video
+    file = Column(String(512), nullable=True)           # /files/<name> 原件
+    thumb = Column(String(512), nullable=True)          # 封面帧（视频）或缩略图
+    source_url = Column(String(1024), nullable=True)    # 来源链接
+    platform = Column(String(64), nullable=True)        # 来源平台（Meta/Google/...）
+    media_kind = Column(String(16), default="image")    # image / video
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    duration_sec = Column(Float, nullable=True)
+    rights_note = Column(String(255), nullable=True)    # 版权/授权标注（仅供分析参考）
+    file_hash = Column(String(64), nullable=True, index=True)  # 去重（文件 sha256）
+    status = Column(String(24), default="imported")     # imported/analyzing/analyzed/merged/failed/unavailable
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class CreativeAssetAnalysis(Base):
+    """素材创意模板库 L2 · 解构分析记录：一次解构一条，可对同一素材多次分析。
+    dims_json=版本化维度结果；category_json=分类体系结果；template_guess=模板归属建议。"""
+    __tablename__ = "creative_asset_analyses"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    asset_id = Column(Integer, nullable=True, index=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    framework_version = Column(String(32), nullable=True)  # asset-deconstruct/1.0
+    model_info = Column(JSON, nullable=True)
+    dims_json = Column(JSON, nullable=True)            # 布局/视觉/信息/效果/呈现 维度结果
+    category_json = Column(JSON, nullable=True)        # 主分类轴 + 辅助标签
+    template_guess = Column(JSON, nullable=True)       # {name, confidence, diff[]}
+    completeness = Column(Float, nullable=True)        # 框架完整度 0~1（Q6 golden 选择依据）
+    confidence = Column(Float, nullable=True)
+    status = Column(String(24), default="analyzed")    # analyzing/analyzed/failed/unavailable/low_confidence
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class CreativeTemplate(Base):
+    """素材创意模板库 L3 · 可复用模板：同一类同一目的只保留一条「唯一表达」。
+    只含图片骨架（Q9），文案不受模板影响；golden 素材由框架完整度选出（Q6）。"""
+    __tablename__ = "creative_templates"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    owner_name = Column(String(64), nullable=True)
+    name = Column(String(255), nullable=True)
+    primary_category = Column(String(64), nullable=True, index=True)  # 主分类轴（12 类）
+    purpose = Column(JSON, nullable=True)             # 推广目的标签数组
+    platform_tags = Column(JSON, nullable=True)       # 平台标签数组
+    image_skeleton_json = Column(JSON, nullable=True) # 图片结构骨架（构图/信息层级/钩子/CTA）
+    variables_json = Column(JSON, nullable=True)      # 变量字典（{{变量}} → 含义/来源）
+    golden_asset_id = Column(Integer, nullable=True)  # 唯一表达对应的素材 id
+    merged_asset_ids = Column(JSON, nullable=True)    # 已归并的素材 id 列表（软归并）
+    edit_note = Column(Text, nullable=True)           # 人工编辑/完善内容
+    version = Column(Integer, default=1)
+    status = Column(String(24), default="active")     # draft / active / archived
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

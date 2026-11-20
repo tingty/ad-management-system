@@ -1202,6 +1202,25 @@ export const api = {
       `/api/creative-analysis${qs(params)}`),
   creativeAnalysis: (id: number) =>
     req<any>(`/api/creative-analysis/${id}`),
+  // V4.117 素材创意模板库：三层数据模型 CRUD（素材条目 / 分析记录 / 模板）
+  tlAssets: (params: { kind?: string; limit?: number; offset?: number } = {}) =>
+    req<any[]>(`/api/template-library/assets${qs(params)}`),
+  tlAddAsset: (payload: any) =>
+    req<any>('/api/template-library/assets', { method: 'POST', body: JSON.stringify(payload) }),
+  tlDeleteAsset: (id: number) =>
+    req<any>(`/api/template-library/assets/${id}`, { method: 'DELETE' }),
+  tlAnalyses: (params: { asset_id?: number; limit?: number; offset?: number } = {}) =>
+    req<any[]>(`/api/template-library/analyses${qs(params)}`),
+  tlAddAnalysis: (payload: any) =>
+    req<any>('/api/template-library/analyses', { method: 'POST', body: JSON.stringify(payload) }),
+  tlTemplates: (params: { category?: string; limit?: number; offset?: number } = {}) =>
+    req<any[]>(`/api/template-library/templates${qs(params)}`),
+  tlAddTemplate: (payload: any) =>
+    req<any>('/api/template-library/templates', { method: 'POST', body: JSON.stringify(payload) }),
+  tlUpdateTemplate: (id: number, payload: any) =>
+    req<any>(`/api/template-library/templates/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  tlDeleteTemplate: (id: number) =>
+    req<any>(`/api/template-library/templates/${id}`, { method: 'DELETE' }),
   // V4.52 创意工作台 · 创意策略 / 路线规划 + 历史库
   creativePlan: (payload: { title?: string; analysis: any; platforms: string[]; gen_image?: boolean; gen_video?: boolean }) =>
     req<any>('/api/creative-plan', { method: 'POST', body: JSON.stringify(payload) }),

@@ -2,6 +2,33 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.117 素材创意模板库 V1：全球创意分析改名并入素材工作坊 + 三层数据模型与基础 CRUD
+
+**发布日期**：2026-11-20 12:10
+**变更类型**：新增 / 优化
+**涉及模块**：素材创意模板库（新模块）、素材工作坊（菜单分组）、创意工作台（菜单项迁移）、后端数据模型与迁移、后端路由、前端 API、回归测试、发版数据（release_notes_data）、发版流程、系统版本
+**变更摘要**：按确认方案启动「素材创意模板库」建设。本版为 V4.117–V4.121 分期的第一刀，只交付数据骨架 + 基础 CRUD + 菜单改造，不引入解构引擎 / 截图服务 / 视频处理（后续版本）。原「全球创意分析」正式改名「素材创意模板库」，从创意工作台分组迁入「素材工作坊」分组成为第二个子项——工作坊分组由 1 条升为 2 条，自动渲染为可折叠二级菜单。新增三层数据模型 `CreativeAssetSource`（素材条目，含视频长期归档）/ `CreativeAssetAnalysis`（解构分析记录）/ `CreativeTemplate`（可复用模板，只含图片骨架），由 `ensure_schema()` 自动建表；提供素材/分析/模板的增删改查接口，人工编辑模板时 version 自增并支持重置为 AI 建议。所有参数按用户 Q1–Q13 答复冻结。
+**更新要点**
+- 【新增】三张新表：`creative_asset_sources`（18 列，含 source_type=upload/url/screenshot/video、file/thumb、宽高时长、rights_note、file_hash 去重键、status）、`creative_asset_analyses`（13 列，含 dims_json/category_json/template_guess/completeness/confidence）、`creative_templates`（16 列，含 primary_category、image_skeleton_json、variables_json、golden_asset_id、merged_asset_ids、edit_note、version）；`models.py` 补 `Float` 导入。
+- 【新增】CRUD 路由：`GET/POST /api/template-library/assets`、`DELETE /api/template-library/assets/{id}`（作为模板 golden 时拒绝删除、级联清分析记录）、`GET/POST /api/template-library/analyses`（写入后回写素材状态）、`GET/POST /api/template-library/templates`、`PATCH /api/template-library/templates/{id}`（字段更新 + version 自增 + reset_to_ai 清空 edit_note）、`DELETE /api/template-library/templates/{id}`；全部 editor 权限。
+- 【优化】菜单改造：`creativeanalysis` 项从 `GROUP_WORKBENCH` 移到 `GROUP_WORKSHOP`，label 改「素材创意模板库」；`groupOpen` 增第三键 `workshop`，`openKey` 增 `GROUP_WORKSHOP → 'workshop'` 映射，避免与 workbench/system 折叠串台；内部 hash 保持 `#/creativeanalysis` 不变（用户 Q11 决定不做重定向）。
+- 【优化】`CreativeAnalysis.tsx` 删除组件内重复 `page-head`（标题/说明统一由全局页头渲染，沿用 V4.116 约定），更新注释为「素材工作坊·素材创意模板库」。
+- 【新增】前端 `api.ts` 加 9 个模板库方法（`tlAssets/tlAddAsset/tlDeleteAsset/tlAnalyses/tlAddAnalysis/tlTemplates/tlAddTemplate/tlUpdateTemplate/tlDeleteTemplate`）。
+- 【新增】文档 `docs/素材创意模板库与工作坊改造方案_20261120.html`：参数冻结稿，含三层模型、解构六步流程、12 类主分类轴 + 9 辅助标签分类体系、框架完整度评分口径、分期规划与 Q1–Q13 决议。
+- 【新增】专项测试 `tests/test_template_library_v4117.py`（14 项）：建表、素材 CRUD、分析写入与状态回写、模板版本与 reset、非法入参、删除保护、鉴权、前端菜单/改名/api/hash 静态断言。
+**本次优化与更改的功能 / 模块**
+- 【新增】素材创意模板库：三层数据模型（素材条目 / 分析记录 / 模板）与基础 CRUD，新建模块骨架。
+- 【优化】素材工作坊分组：由单条目升为可折叠二级菜单，纳入「素材创意模板库」子项。
+- 【变更】创意工作台分组：原「全球创意分析」项迁出；后端 models/schemas/routers、前端 App.tsx/CreativeAnalysis.tsx/api.ts 同步更新。
+
+**影响范围**
+- 新增入口：素材工作坊下「素材创意模板库」子菜单；原「全球创意分析」入口位置与显示名变化，hash 不变故旧链接仍可达。
+- 数据与接口：新增三张业务表与一组 `/api/template-library/*` 接口；现有创意工作台 / 工作坊默认流程不受影响。
+
+**验证**
+- 专项 14/14 通过（建表 + CRUD + 边界 + 鉴权 + 前端静态断言）；全量 `run_all.py` 0 失败；`tsc --noEmit` 0 错误；`npm run build` 成功。
+- 发版数据由 `prepare_release --sync` 生成，独立进程 `--check` 通过。
+
 ## V4.116 创意工作台顶部收敛为单一主标题+说明；补充创意指令二次点击确认生效并可见
 
 **发布日期**：2026-11-20 10:42

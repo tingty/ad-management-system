@@ -2,9 +2,9 @@ import React, { useState } from 'react'
 import { api } from '../api'
 
 /**
- * 创意工作台 · 全球创意分析
- * 输入参考素材（链接 / 文本）→ 调用已配置大模型归类的创意风格/类型 → 产出可复用提示词模板。
- * 提示词可「复制」沉淀到「素材提示词」库复用（需求 2：提示词更新与同步）。
+ * 素材工作坊 · 素材创意模板库（V4.117 由「全球创意分析」改造而来，hash 保持 #/creativeanalysis）。
+ * 当前：输入参考素材（链接 / 文本）→ 调用大模型归类创意风格 → 产出可复用提示词模板。
+ * 后续：V4.118 起接入素材导入 / 解构 / 分类 / 模板沉淀，页面将扩展为库视图。
  */
 export default function CreativeAnalysis() {
   const [urls, setUrls] = useState('')
@@ -41,12 +41,8 @@ export default function CreativeAnalysis() {
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h2>全球创意分析</h2>
-        <p className="muted">分析 Meta / Google / Unity / Adsterra 等大媒体上最具创意与转化效果的素材，
-          归类创意风格与类型，并产出可直接调用的图片 / 视频提示词模板。</p>
-      </div>
-
+      {/* V4.117：标题与说明统一由 App.tsx 全局页头渲染（素材创意模板库），
+          此处不再重复渲染 page-head，避免双标题占用顶部空间（沿用 V4.116 约定）。 */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 12 }}>
           <label className="field">

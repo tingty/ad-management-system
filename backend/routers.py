@@ -7,7 +7,8 @@ import os, time, re, json, asyncio, uuid
 
 from database import get_db, SessionLocal
 from models import (ModelConfig, User, AuditLog, LoginLog, PromptConfig, SystemState,
-                    CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, CreativePlan, CwLibrary, utcnow)
+                    CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, CreativePlan, CwLibrary,
+                    CreativeAssetSource, CreativeAssetAnalysis, CreativeTemplate, utcnow)
 from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LoginRequest, UserOut, UserCreate, UserUpdate,
                      PromptOut, PromptUpdate, PromptDefaultIn, LayerMatchIn, ImageQualityAuditIn,
@@ -21,7 +22,9 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      CWVideoPlanRequest, CWVideoPlanResult, CWVideoGenerateRequest, CWVideoGenerateResult,
                      CWVideoAsset, CWVideoJobOut, ModelInfo,
                      WorkshopAnalyzeRequest, WorkshopGenerateRequest,
-                     MediaImageSlot, MediaCopyVariant)
+                     MediaImageSlot, MediaCopyVariant,
+                     AssetSourceOut, AssetSourceCreate, AssetAnalysisOut, AssetAnalysisCreate,
+                     TemplateOut, TemplateCreate, TemplateUpdate)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import (get_llm_with_info, finalize_invocation, parse_json, get_video,
@@ -3525,3 +3528,195 @@ async def api_workshop_generate(req: WorkshopGenerateRequest, db: Session = Depe
             "images_skipped": (not image_ready),
             "plan_id": req.plan_id,
             "models": cw_workshop.model_status(db)["items"]}
+
+
+# ===========================================================================
+# V4.117 素材创意模板库：三层数据模型 CRUD（素材条目 / 分析记录 / 模板）
+# 说明：本版本交付数据骨架 + 基础增删改查 + 菜单改造；解构引擎(V4.118)、
+#       分类与归并(V4.119)、工作坊模板模式(V4.120)、视频解构(V4.121)后续版本。
+# ===========================================================================
+def _iso(dt):
+    return dt.isoformat() if dt else ""
+
+
+def _asset_source_out(r: "CreativeAssetSource") -> dict:
+    return {
+        "id": r.id, "owner_id": r.owner_id, "owner_name": r.owner_name,
+        "title": r.title or "", "source_type": r.source_type or "upload",
+        "file": r.file, "thumb": r.thumb, "source_url": r.source_url, "platform": r.platform,
+        "media_kind": r.media_kind or "image", "width": r.width, "height": r.height,
+        "duration_sec": r.duration_sec, "rights_note": r.rights_note,
+        "status": r.status or "imported",
+        "created_at": _iso(r.created_at), "updated_at": _iso(r.updated_at),
+    }
+
+
+def _asset_analysis_out(r: "CreativeAssetAnalysis") -> dict:
+    return {
+        "id": r.id, "asset_id": r.asset_id, "owner_id": r.owner_id,
+        "framework_version": r.framework_version, "model_info": r.model_info or {},
+        "dims_json": r.dims_json or {}, "category_json": r.category_json or {},
+        "template_guess": r.template_guess or {}, "completeness": r.completeness,
+        "confidence": r.confidence, "status": r.status or "analyzed",
+        "created_at": _iso(r.created_at),
+    }
+
+
+def _template_out(r: "CreativeTemplate") -> dict:
+    return {
+        "id": r.id, "owner_id": r.owner_id, "owner_name": r.owner_name,
+        "name": r.name or "", "primary_category": r.primary_category,
+        "purpose": r.purpose or [], "platform_tags": r.platform_tags or [],
+        "image_skeleton_json": r.image_skeleton_json or {}, "variables_json": r.variables_json or {},
+        "golden_asset_id": r.golden_asset_id, "merged_asset_ids": r.merged_asset_ids or [],
+        "edit_note": r.edit_note, "version": r.version or 1, "status": r.status or "active",
+        "created_at": _iso(r.created_at), "updated_at": _iso(r.updated_at),
+    }
+
+
+# ---- L1 素材条目 ----
+@router.get("/template-library/assets", response_model=list[AssetSourceOut])
+async def tl_list_assets(kind: Optional[str] = None, limit: int = 100, offset: int = 0,
+                         db: Session = Depends(get_db), user: User = Depends(require_roles(*CAN_EDIT))):
+    """素材创意模板库·素材条目列表（当前用户，最近更新倒序）。kind 传 image/video 过滤。"""
+    q = db.query(CreativeAssetSource).filter(CreativeAssetSource.owner_id == user.id)
+    if kind:
+        q = q.filter(CreativeAssetSource.media_kind == kind)
+    lim = max(1, min(int(limit or 100), 300)); off = max(0, int(offset or 0))
+    rows = q.order_by(CreativeAssetSource.updated_at.desc()).offset(off).limit(lim).all()
+    return [_asset_source_out(r) for r in rows]
+
+
+@router.post("/template-library/assets", response_model=AssetSourceOut)
+async def tl_add_asset(body: AssetSourceCreate, db: Session = Depends(get_db),
+                       user: User = Depends(require_roles(*CAN_EDIT))):
+    """手动登记一条素材条目（文件/截图由上传接口先落盘，再带 file 登记）。"""
+    kind = (body.media_kind or "image").strip().lower()
+    if kind not in ("image", "video"):
+        raise HTTPException(400, "media_kind 仅支持 image / video")
+    st = (body.source_type or "upload").strip().lower()
+    if st not in ("upload", "url", "screenshot", "video"):
+        raise HTTPException(400, "source_type 仅支持 upload / url / screenshot / video")
+    r = CreativeAssetSource(
+        owner_id=user.id, owner_name=user.username, title=(body.title or "")[:255],
+        source_type=st, file=body.file, thumb=body.thumb, source_url=body.source_url,
+        platform=body.platform, media_kind=kind, width=body.width, height=body.height,
+        duration_sec=body.duration_sec, rights_note=body.rights_note, status="imported")
+    db.add(r); db.commit(); db.refresh(r)
+    return _asset_source_out(r)
+
+
+@router.delete("/template-library/assets/{asset_id}")
+async def tl_delete_asset(asset_id: int, db: Session = Depends(get_db),
+                          user: User = Depends(require_roles(*CAN_EDIT))):
+    """删除素材条目：仅本人可删；被模板引用（golden 或已归并）时拒绝，避免悬空引用。"""
+    r = db.query(CreativeAssetSource).filter_by(id=asset_id, owner_id=user.id).first()
+    if not r:
+        raise HTTPException(404, "素材不存在或无权删除")
+    used = db.query(CreativeTemplate).filter(
+        CreativeTemplate.owner_id == user.id,
+        (CreativeTemplate.golden_asset_id == asset_id)).first()
+    if used:
+        raise HTTPException(400, "该素材为模板的唯一表达，请先移除引用再删除")
+    db.delete(r)
+    db.query(CreativeAssetAnalysis).filter(CreativeAssetAnalysis.asset_id == asset_id).delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True}
+
+
+# ---- L2 分析记录 ----
+@router.get("/template-library/analyses", response_model=list[AssetAnalysisOut])
+async def tl_list_analyses(asset_id: Optional[int] = None, limit: int = 100, offset: int = 0,
+                           db: Session = Depends(get_db), user: User = Depends(require_roles(*CAN_EDIT))):
+    """解构分析记录列表；可按 asset_id 过滤（一次素材多次分析）。"""
+    q = db.query(CreativeAssetAnalysis).filter(CreativeAssetAnalysis.owner_id == user.id)
+    if asset_id:
+        q = q.filter(CreativeAssetAnalysis.asset_id == int(asset_id))
+    lim = max(1, min(int(limit or 100), 300)); off = max(0, int(offset or 0))
+    rows = q.order_by(CreativeAssetAnalysis.id.desc()).offset(off).limit(lim).all()
+    return [_asset_analysis_out(r) for r in rows]
+
+
+@router.post("/template-library/analyses", response_model=AssetAnalysisOut)
+async def tl_add_analysis(body: AssetAnalysisCreate, db: Session = Depends(get_db),
+                          user: User = Depends(require_roles(*CAN_EDIT))):
+    """写入一条解构分析结果（V4.118 引擎落库用；此处提供接口骨架，数据契约已固定）。"""
+    asset = db.query(CreativeAssetSource).filter_by(id=body.asset_id, owner_id=user.id).first()
+    if not asset:
+        raise HTTPException(404, "素材不存在或无权分析")
+    st = (body.status or "analyzed").strip().lower()
+    if st not in ("analyzed", "failed", "unavailable", "low_confidence"):
+        raise HTTPException(400, "status 非法")
+    r = CreativeAssetAnalysis(
+        asset_id=body.asset_id, owner_id=user.id,
+        framework_version=body.framework_version or "asset-deconstruct/1.0",
+        dims_json=body.dims_json or {}, category_json=body.category_json or {},
+        template_guess=body.template_guess or {}, completeness=body.completeness,
+        confidence=body.confidence, status=st)
+    db.add(r); db.commit(); db.refresh(r)
+    if asset.status in ("imported", "analyzing"):
+        asset.status = "analyzed" if st == "analyzed" else st
+        db.commit()
+    return _asset_analysis_out(r)
+
+
+# ---- L3 模板 ----
+@router.get("/template-library/templates", response_model=list[TemplateOut])
+async def tl_list_templates(category: Optional[str] = None, limit: int = 100, offset: int = 0,
+                            db: Session = Depends(get_db), user: User = Depends(require_roles(*CAN_EDIT))):
+    """模板列表（当前用户）；可按主分类轴过滤。"""
+    q = db.query(CreativeTemplate).filter(CreativeTemplate.owner_id == user.id)
+    if category:
+        q = q.filter(CreativeTemplate.primary_category == category)
+    lim = max(1, min(int(limit or 100), 300)); off = max(0, int(offset or 0))
+    rows = q.order_by(CreativeTemplate.updated_at.desc()).offset(off).limit(lim).all()
+    return [_template_out(r) for r in rows]
+
+
+@router.post("/template-library/templates", response_model=TemplateOut)
+async def tl_add_template(body: TemplateCreate, db: Session = Depends(get_db),
+                          user: User = Depends(require_roles(*CAN_EDIT))):
+    """新建模板（editor 可编辑，Q12）。"""
+    if not (body.name or "").strip():
+        raise HTTPException(400, "模板名称不能为空")
+    if not (body.primary_category or "").strip():
+        raise HTTPException(400, "请选择主分类")
+    r = CreativeTemplate(
+        owner_id=user.id, owner_name=user.username, name=body.name.strip(),
+        primary_category=body.primary_category.strip(), purpose=body.purpose or [],
+        platform_tags=body.platform_tags or [], image_skeleton_json=body.image_skeleton_json or {},
+        variables_json=body.variables_json or {}, golden_asset_id=body.golden_asset_id,
+        merged_asset_ids=body.merged_asset_ids or [], edit_note=body.edit_note,
+        status=(body.status or "active").strip().lower(), version=1)
+    db.add(r); db.commit(); db.refresh(r)
+    return _template_out(r)
+
+
+@router.patch("/template-library/templates/{tid}", response_model=TemplateOut)
+async def tl_update_template(tid: int, body: TemplateUpdate, db: Session = Depends(get_db),
+                             user: User = Depends(require_roles(*CAN_EDIT))):
+    """人工编辑模板：更新可编辑字段，version 自增；reset_to_ai 清空 edit_note。"""
+    r = db.query(CreativeTemplate).filter_by(id=tid, owner_id=user.id).first()
+    if not r:
+        raise HTTPException(404, "模板不存在或无权编辑")
+    data = body.model_dump(exclude_none=True, exclude={"reset_to_ai"})
+    for field in ("name", "primary_category", "purpose", "platform_tags", "image_skeleton_json",
+                  "variables_json", "golden_asset_id", "merged_asset_ids", "edit_note", "status"):
+        if field in data:
+            setattr(r, field, data[field])
+    if body.reset_to_ai:
+        r.edit_note = None
+    r.version = (r.version or 1) + 1
+    db.commit(); db.refresh(r)
+    return _template_out(r)
+
+
+@router.delete("/template-library/templates/{tid}")
+async def tl_delete_template(tid: int, db: Session = Depends(get_db),
+                             user: User = Depends(require_roles(*CAN_EDIT))):
+    """删除模板（仅本人）。素材原件不受影响（软归并可解除）。"""
+    r = db.query(CreativeTemplate).filter_by(id=tid, owner_id=user.id).first()
+    if not r:
+        raise HTTPException(404, "模板不存在或无权删除")
+    db.delete(r); db.commit()
+    return {"ok": True}

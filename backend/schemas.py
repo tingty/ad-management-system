@@ -546,6 +546,123 @@ class CwLibraryCreate(BaseModel):
     source_plan_id: Optional[int] = None
 
 
+# ============ V4.117 素材创意模板库：三层数据模型 schema ============
+class AssetSourceOut(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    id: int
+    owner_id: Optional[int] = None
+    owner_name: Optional[str] = None
+    title: str = ""
+    source_type: str = "upload"
+    file: Optional[str] = None
+    thumb: Optional[str] = None
+    source_url: Optional[str] = None
+    platform: Optional[str] = None
+    media_kind: str = "image"
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration_sec: Optional[float] = None
+    rights_note: Optional[str] = None
+    status: str = "imported"
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class AssetSourceCreate(BaseModel):
+    """手动登记一条素材条目（上传/截图由专用接口先落文件，再带 file 登记）。"""
+    model_config = {"protected_namespaces": ()}
+    title: str = ""
+    source_type: str = "upload"
+    file: Optional[str] = None
+    thumb: Optional[str] = None
+    source_url: Optional[str] = None
+    platform: Optional[str] = None
+    media_kind: str = "image"
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration_sec: Optional[float] = None
+    rights_note: Optional[str] = None
+
+
+class AssetAnalysisOut(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    id: int
+    asset_id: Optional[int] = None
+    owner_id: Optional[int] = None
+    framework_version: Optional[str] = None
+    model_info: Optional[dict] = None
+    dims_json: Optional[dict] = None
+    category_json: Optional[dict] = None
+    template_guess: Optional[dict] = None
+    completeness: Optional[float] = None
+    confidence: Optional[float] = None
+    status: str = "analyzed"
+    created_at: Optional[str] = None
+
+
+class AssetAnalysisCreate(BaseModel):
+    """写入一条解构分析结果（V4.118 解构引擎落库用；V4.117 提供接口骨架）。"""
+    model_config = {"protected_namespaces": ()}
+    asset_id: int
+    framework_version: str = "asset-deconstruct/1.0"
+    dims_json: Optional[dict] = None
+    category_json: Optional[dict] = None
+    template_guess: Optional[dict] = None
+    completeness: Optional[float] = None
+    confidence: Optional[float] = None
+    status: str = "analyzed"
+
+
+class TemplateOut(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    id: int
+    owner_id: Optional[int] = None
+    owner_name: Optional[str] = None
+    name: str = ""
+    primary_category: Optional[str] = None
+    purpose: Optional[list] = None
+    platform_tags: Optional[list] = None
+    image_skeleton_json: Optional[dict] = None
+    variables_json: Optional[dict] = None
+    golden_asset_id: Optional[int] = None
+    merged_asset_ids: Optional[list] = None
+    edit_note: Optional[str] = None
+    version: int = 1
+    status: str = "active"
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class TemplateCreate(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    name: str = ""
+    primary_category: str = ""
+    purpose: Optional[list] = None
+    platform_tags: Optional[list] = None
+    image_skeleton_json: Optional[dict] = None
+    variables_json: Optional[dict] = None
+    golden_asset_id: Optional[int] = None
+    merged_asset_ids: Optional[list] = None
+    edit_note: Optional[str] = None
+    status: str = "active"
+
+
+class TemplateUpdate(BaseModel):
+    """人工编辑模板：可改任意可编辑字段；version 由后端自增。"""
+    model_config = {"protected_namespaces": ()}
+    name: Optional[str] = None
+    primary_category: Optional[str] = None
+    purpose: Optional[list] = None
+    platform_tags: Optional[list] = None
+    image_skeleton_json: Optional[dict] = None
+    variables_json: Optional[dict] = None
+    golden_asset_id: Optional[int] = None
+    merged_asset_ids: Optional[list] = None
+    edit_note: Optional[str] = None
+    status: Optional[str] = None
+    reset_to_ai: bool = False   # 为 true 时清空 edit_note，回到 AI 原始建议（V4.119 用，此处预留）
+
+
 class CWRoute(BaseModel):
     """单条创意路线（概念级，非逐平台）。"""
     key: str = ""                    # A–J（V4.96 起最多 10 条）

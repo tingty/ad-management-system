@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>素材创意模板库与素材工作坊改造方案（参数冻结稿 · Q4 待商议 · 2026-11-20）</title>
+<style>
+  :root{
+    --ink:#141a22; --ink-2:#374151; --muted:#6b7280; --line:#e2e8f0;
+    --bg:#f5f7fa; --card:#fff; --brand:#1f5fa8; --brand-soft:#eaf2fb;
+    --amber:#b45309; --amber-soft:#fff7ed; --ok:#0f6e56; --ok-soft:#e1f5ee;
+    --bad:#b42318; --bad-soft:#fef3f2; --purple:#534ab7; --purple-soft:#eeedfe;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 22px 80px}
+  header.hero{background:linear-gradient(135deg,#16324f,#1f5fa8 58%,#3b82c4);color:#fff;
+    border-radius:16px;padding:30px 32px;box-shadow:0 10px 28px rgba(20,40,80,.16)}
+  header.hero h1{margin:0 0 8px;font-size:25px;line-height:1.35}
+  header.hero .sub{color:#d8e8fb;font-size:13.5px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .meta span{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);
+    padding:4px 10px;border-radius:999px;font-size:12px;color:#fff}
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px;margin-top:20px}
+  h2{font-size:19px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line);color:var(--brand)}
+  h3{font-size:15.5px;margin:22px 0 8px;color:var(--ink)}
+  h4{font-size:14px;margin:16px 0 6px;color:var(--brand)}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0 8px 20px;padding:0}
+  li{margin:5px 0}
+  code{background:#f1f4f8;border:1px solid #e3e9f0;border-radius:5px;padding:1px 5px;font-size:12.5px;
+    overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#1d4ed8}
+  .lead{background:var(--brand-soft);border-left:4px solid var(--brand);border-radius:8px;padding:12px 16px;margin:12px 0}
+  .note{background:var(--purple-soft);border-left:4px solid var(--purple);border-radius:8px;padding:12px 16px;margin:12px 0}
+  .warn{background:var(--bad-soft);border-left:4px solid var(--bad);border-radius:8px;padding:12px 16px;margin:12px 0}
+  .good{background:var(--ok-soft);border-left:4px solid var(--ok);border-radius:8px;padding:12px 16px;margin:12px 0}
+  .amber{background:var(--amber-soft);border-left:4px solid var(--amber);border-radius:8px;padding:12px 16px;margin:12px 0}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top;text-align:left;word-break:break-word;overflow-wrap:anywhere}
+  th{background:#f8fafc;font-weight:600;color:var(--ink-2)}
+  .steps{counter-reset:s;list-style:none;margin-left:0;padding-left:0}
+  .steps li{position:relative;padding-left:34px;margin:10px 0}
+  .steps li:before{counter-increment:s;content:counter(s);position:absolute;left:0;top:1px;width:24px;height:24px;
+    background:var(--brand-soft);color:var(--brand);border-radius:50%;font-size:12px;font-weight:600;text-align:center;line-height:24px}
+  .codebox{position:relative;background:#0f172a;color:#e2e8f0;border-radius:10px;padding:16px 18px;margin:10px 0;
+    font:12.5px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+  .codebox .cp{position:absolute;top:8px;right:8px;background:#334155;color:#e2e8f0;border:1px solid #475569;
+    border-radius:6px;padding:3px 9px;font-size:11px;cursor:pointer}
+  .codebox .cp:hover{background:#475569}
+  .tag{display:inline-block;font-size:11.5px;padding:2px 8px;border-radius:999px;margin:0 4px 4px 0;white-space:nowrap}
+  .tag.b{background:var(--brand-soft);color:var(--brand)}
+  .tag.a{background:var(--amber-soft);color:var(--amber)}
+  .tag.g{background:var(--ok-soft);color:var(--ok)}
+  .tag.p{background:var(--purple-soft);color:var(--purple)}
+  .tag.r{background:var(--bad-soft);color:var(--bad)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:760px){.grid2,.grid3{grid-template-columns:1fr}}
+  .mini{background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:14px}
+  .mini b{color:var(--brand)}
+  .tree{background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:14px 18px;
+    font:13px/1.9 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--ink-2)}
+  .tree .hl{color:var(--brand);font-weight:700}
+  .q{background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0}
+  .q b{color:var(--brand)}
+  .q.pending{border-color:#c7d7ef;background:#f4f9ff}
+  .q.pending b{color:var(--purple)}
+  .def{color:var(--muted);font-size:12.5px}
+  .decision{color:var(--ok);font-weight:600}
+  footer{color:var(--muted);font-size:12px;text-align:center;margin-top:26px}
+  @media print{body{background:#fff}header.hero{box-shadow:none}.codebox{background:#f4f6f9;color:#111;border:1px solid #ccc}.cp{display:none}section{break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>素材创意模板库 + 素材工作坊模板模式 · 产品方案与规划</h1>
+  <div class="sub">把「全球创意分析」改造为可存放 / 解构 / 分类 / 复用推广素材的「素材创意模板库」，并作为「素材工作坊」的子菜单；工作坊保持默认流程不变，新增"按模板创作"模式</div>
+  <div class="meta">
+    <span>状态：参数冻结稿（Q1–Q13 已答复，Q4 分类待商议）</span>
+    <span>产出：2026-11-20</span>
+    <span>依据：代码实证 + 你的 Q1–Q13 决策</span>
+    <span>建议版本：V4.117 起分期</span>
+    <span>本轮仍未实施，待 Q4 确认后冻结开发</span>
+  </div>
+</header>
+
+<section>
+  <h2>零、本轮更新摘要</h2>
+  <div class="lead">
+    <b>已固化 11 项决策：</b>原始素材含视频长期归档、导入支持"本地上传 + 图片 URL + 网页自动截图"、效果仅创意层推断、AI 建议 + 人工确认归并、唯一表达按"框架完整度"、视频解构放 V4.121、模板只影响图片、模板作为路线来源之一、正式定名"素材创意模板库"且不做旧 hash 重定向、editor 可编辑。
+  </div>
+  <div class="q pending"><b>唯一待商议：Q4 分类方案。</b>你在 Q4 要求我给出具体建议共同商议 —— 见<b>第五节</b>：主分类轴 12 类创意套路 + 9 个辅助标签维度 + 归并键 + 框架完整度评分口径。请重点看 5.2 的 12 类是否符合你的业务口径、5.4 的完整度评分是否认可。</div>
+  <div class="note"><b>新增技术依赖提醒（Q2 带来）：</b>"网页链接自动截图"需要在服务端引入 headless 浏览器（playwright + chromium），真实环境 docker 镜像需预装；同时必须做 SSRF 防护。详见 4.4 —— 这是 V4.118 开工前的部署前置条件。</div>
+</section>
+
+<section>
+  <h2>一、现状实证（基于代码盘点，不是推测）</h2>
+  <h3>1.1 「全球创意分析」当前能力</h3>
+  <table>
+    <tr><th>维度</th><th>现状</th><th>关键位置</th></tr>
+    <tr><td>菜单 / 路由</td><td>创意工作台分组下二级项，label「全球创意分析」，hash <code>#/creativeanalysis</code>，仅 editor 以上可见</td><td><code>App.tsx</code> L45、L120、L125、L392</td></tr>
+    <tr><td>页面能力</td><td>输入标题 + 链接文本 + 描述文本 → 调 LLM → 展示分类卡片 + 复制提示词</td><td><code>pages/CreativeAnalysis.tsx</code> L10-16、L52-131</td></tr>
+    <tr><td>明确没有</td><td><b>无上传图片</b>、<b>无视频</b>、<b>无素材持久化</b>、<b>无分类管理 / 去重 / 编辑</b>、<b>不在工作坊菜单下</b></td><td>同上</td></tr>
+    <tr><td>后端</td><td><code>POST/GET /api/creative-analysis</code>，落库 <code>creative_analyses</code></td><td><code>routers.py</code> L275-365；<code>models.py</code> L254-267</td></tr>
+  </table>
+  <div class="warn"><b>实证结论：</b>现模块本质是"文本 → 提示词生成器"，你的需求里"存放 / 导入 / 解构 / 分类 / 视频 / 模板复用"它一项都不具备，属于<b>新建垂直切片</b>。</div>
+  <h3>1.2 可复用资产</h3>
+  <div class="grid3">
+    <div class="mini"><b>导入</b><br><code>/assets/upload</code>、<code>/assets/fetch-url</code>、<code>CwLibrary</code> 沉淀表</div>
+    <div class="mini"><b>视频</b><br><code>extract_frames()</code> 抽首/中/尾帧；视觉通道 <code>recognize_frames()</code>（不走 Mock）</div>
+    <div class="mini"><b>落库</b><br><code>ensure_schema()</code> 自动建表；<code>backend/uploads/</code> + <code>/files</code> 映射</div>
+    <div class="mini"><b>护栏</b><br>D0 证据门 / <code>evidence_index</code> / 商品保真三件套</div>
+    <div class="mini"><b>黄金样例</b><br><code>docs/推广图概念提炼…20261119.html</code> 已人工解构的 Homestyler 图</div>
+    <div class="mini"><b>溯源</b><br><code>GenerationJob</code> payload + 素材历史挂 <code>template_id</code></div>
+  </div>
+</section>
+
+<section>
+  <h2>二、信息架构与菜单改造</h2>
+  <div class="tree">
+    素材工作坊 <span class="hl">（一级分组，默认展开）</span><br>
+    ├── 素材创作 <span class="hl">（原 workshop，默认方案，hash 不变）</span><br>
+    └── 素材创意模板库 <span class="hl">（原 creativeanalysis 改造）</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;├── 素材导入与分析<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;├── 分类浏览 / 筛选<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;└── 模板沉淀（唯一表达）→ 被工作坊"按模板创作"引用
+  </div>
+  <table>
+    <tr><th>改动点</th><th>决议 / 说明</th></tr>
+    <tr><td>正式命名</td><td><span class="decision">Q11 已定：</span>「素材创意模板库」；旧 <code>#/creativeanalysis</code> <b>不做重定向</b></td></tr>
+    <tr><td>hash 处理</td><td>为最小化改动，<b>内部 key / hash 保持 <code>creativeanalysis</code> 不变</b>，仅改显示名与菜单归属 —— 这样旧链接仍可达同一页，无需任何重定向逻辑，也满足你的决定。若你希望 hash 也改成新值（如 <code>#/template-library</code>），请告知，届时旧链接将失效（按你的选择不做兼容）。</td></tr>
+    <tr><td>分组结构</td><td><code>GROUP_WORKSHOP.items</code> 由 1 条增至 2 条，自动从"一级入口"切换为二级菜单</td></tr>
+    <tr><td>折叠状态 <span class="tag r">P0 坑</span></td><td><code>App.tsx</code> L324 的 <code>openKey</code> 现仅 <code>workbench</code>/<code>system</code>，需扩展第三 key，否则与新分组串台</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>三、三层数据模型</h2>
+  <div class="grid3">
+    <div class="mini"><b>L1 · 素材条目</b><br>原始导入物，<span class="decision">含视频长期归档（Q1）</span>。字段：来源类型、文件、封面帧、来源 URL / 平台、图片或视频、宽高时长、版权标注、状态。</div>
+    <div class="mini"><b>L2 · 分析记录</b><br>一次解构。字段：素材 ID、框架版本、模型快照、维度结果 JSON、分类标签、模板归属建议、差异、置信度、状态。</div>
+    <div class="mini"><b>L3 · 模板</b><br>可复用表达。<span class="decision">只含图片骨架（Q9）</span>。字段：主分类、目的、平台标签、变量化图片骨架、变量字典、golden 素材、已归并素材、人工编辑、版本。</div>
+  </div>
+  <table>
+    <tr><th>表</th><th>关键字段</th><th>说明</th></tr>
+    <tr><td><code>creative_asset_source</code></td><td>id, owner, title, source_type(upload/url/screenshot), file, thumb, source_url, platform, media_kind, width/height, duration_sec, rights_note, status</td><td>视频原文件 + 封面帧均落 <code>uploads/</code>，DB 存文件名</td></tr>
+    <tr><td><code>creative_asset_analysis</code></td><td>id, asset_id, framework_version, model_info, dims_json, <b>category_json</b>, template_guess, diff_notes, confidence, status</td><td><code>category_json</code> 存第五节的分类结果</td></tr>
+    <tr><td><code>creative_template</code></td><td>id, owner, primary_category, purpose, platform_tags, <b>image_skeleton_json</b>, variables_json, golden_asset_id, merged_asset_ids, edit_note, version, status</td><td>不含文案骨架（Q9）</td></tr>
+  </table>
+  <p class="def">三表均为新建，<code>ensure_schema()</code> 自动建表。生成侧在 <code>GenerationJob</code> payload / 素材历史挂 <code>template_id</code> 溯源，不改核心状态机。</p>
+</section>
+
+<section>
+  <h2>四、解构分析框架</h2>
+  <h3>4.1 固定六步流程</h3>
+  <ol class="steps">
+    <li><b>导入登记</b>：本地上传 / 图片 URL / 网页截图 / 视频上传；写来源、平台、版权标注。</li>
+    <li><b>规范化</b>：读宽高格式；视频抽首/中/尾帧 + 记时长（一期只归档 + 封面帧，解构放 V4.121）。</li>
+    <li><b>视觉解构</b>：逐项分析构图 / 动线 / 色彩 / 主体（视觉模型不可用标 <code>unavailable</code>，不臆测）。</li>
+    <li><b>结构与文案解构</b>：信息层级、标题角色、卖点、CTA、字画分工。</li>
+    <li><b>效果推断</b>：<span class="decision">Q3 已定：仅创意 / 传达层，标注"非投放数据"</span>。</li>
+    <li><b>分类 + 模板归属</b>：按第五节打分类标签，给归属建议 + 差异 + 置信度。</li>
+  </ol>
+  <h3>4.2 维度字典</h3>
+  <div class="grid2">
+    <div class="mini"><b>图片</b><br>布局（构图/动线/留白/主体）、视觉（配色/光线/质感）、信息（标题/卖点/CTA/价格）、呈现（特写/场景/前后）、文字（是否含字/字画分工）</div>
+    <div class="mini"><b>视频专属（V4.121）</b><br>前 3 秒钩子、时长分镜、镜头语言、字幕/VO 分工、音乐情绪、信息递进与收口 CTA</div>
+  </div>
+  <h3>4.3 输出结构（框架版本化）</h3>
+  <div class="codebox"><button class="cp">复制</button>{
+  "framework_version": "asset-deconstruct/1.0",
+  "media_kind": "image",
+  "layout": {"composition":"前后对比分屏", "focal_path":"Z形", "negative_space":"左上留白放Logo"},
+  "visual": {"palette":"深灰+暖黄点缀", "lighting":"暖光", "product_presence":"主体居中特写"},
+  "info": {"headline_role":"主利益点", "benefits":["续航","降噪"], "cta":"Get Started Free", "text_on_image":false},
+  "effect": {"hook_type":"前后落差", "emotion":"aspirational", "intent":"转化",
+             "evidence_kind":"视觉对比", "caveat":"创意推断，非真实投放数据"},
+  "category": {"primary":"前后对比", "purpose":["转化"], "tags":{...}},
+  "template_guess": {"name":"前后对比实验", "confidence":0.86, "diff":["竞品用箭头而非斜切分割"]}
+}</div>
+  <div class="note"><b>验收黄金样例：</b>用 <code>docs/推广图概念提炼…20261119.html</code> 里已人工解构的 Homestyler 图，检验系统能否解构出"前后对比 / 上下分层 / 暖光 / 因果箭头 / 三理由 / 低风险 CTA"。</div>
+
+  <h3>4.4 网页链接自动截图（Q2 新增能力 · 技术依赖）</h3>
+  <div class="amber"><b>结论：</b>可做，但它是本方案<b>唯一新增的部署依赖</b>，需在 V4.118 开工前确认真实环境能装浏览器。</div>
+  <ul>
+    <li><b>新增接口</b>：<code>POST /api/assets/screenshot</code>，入参 <code>{url, mode: viewport|fullpage}</code>；headless chromium 打开 → 截图 → 写入 <code>uploads/</code> → 复用 <code>fetch-url</code> 的入库与标注逻辑。</li>
+    <li><b>部署前置</b>：docker 镜像预装 playwright + chromium（约 150MB）；或用已有截图服务。本机已有 chromium 可用于开发验证，但真实环境需单独确认。</li>
+    <li><b>安全（必须）</b>：SSRF 防护 —— 只允许 http(s)、禁止内网/回环/私有 IP、DNS 解析后复检、屏蔽重定向到内网；超时 20s、限制最大页面高度与图片大小。</li>
+    <li><b>诚实标注</b>：登录墙 / 验证码 / 纯动态渲染页可能截不到完整内容，结果一律标"网页截图 · 内容完整性未保证"，不冒充有效素材。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>五、分类体系详设（Q4 商议重点）</h2>
+  <p>分类要同时服务三件事：<b>检索</b>（找得到）、<b>归并</b>（判得准"大同小异"）、<b>模板归属</b>（这条属于哪种模板）。单一树形分类会失真，因此采用<b>「一层主分类轴（必填，单一）+ 多维辅助标签（多选）」</b>的混合体系。</p>
+
+  <h3>5.1 体系总览</h3>
+  <div class="tree">
+    主分类轴（必填 / 单一）＝ <span class="hl">创意套路 12 类</span> → 决定"这是哪类模板"<br>
+    ＋ 辅助标签（多选 / 可空）＝ 目的 · 行业 · 平台 · 形态 · 风格 · 情绪 · 钩子 · 证据 · 合规<br>
+    ＝ 归并键（主分类 + 目的 + 钩子 + 信息结构相似度） → 候选组 → 人工确认 → 唯一表达
+  </div>
+
+  <h3>5.2 主分类轴：12 类创意套路 <span class="tag p">请商议这一类目表</span></h3>
+  <table>
+    <tr><th>#</th><th>主分类</th><th>识别要点</th><th>典型画面</th></tr>
+    <tr><td>1</td><td>前后对比</td><td>同一对象 Before/After 并置，强调改变</td><td>分屏、斜切、箭头、滑动条</td></tr>
+    <tr><td>2</td><td>问题-方案</td><td>先呈现痛点，再给出产品解法</td><td>困境场景 → 产品登场</td></tr>
+    <tr><td>3</td><td>社会证明</td><td>用他人行为/评价建立可信</td><td>星级评价、下载量、用户数、评论墙</td></tr>
+    <tr><td>4</td><td>利益清单</td><td>多条卖点并列罗列</td><td>图标 + 短句阵列、checklist</td></tr>
+    <tr><td>5</td><td>限时促销</td><td>价格/折扣/稀缺驱动决策</td><td>折扣标签、倒计时、"仅今日"</td></tr>
+    <tr><td>6</td><td>权威背书</td><td>名人/机构/认证抬升信任</td><td>名人代言、获奖徽章、媒体报道</td></tr>
+    <tr><td>7</td><td>场景沉浸</td><td>产品置入真实使用情境</td><td>地铁通勤、居家、户外运动</td></tr>
+    <tr><td>8</td><td>产品特写</td><td>产品主体居中、质感优先</td><td>纯色背景主体大图、细节特写</td></tr>
+    <tr><td>9</td><td>悬念钩子</td><td>提问/反常识引发好奇</td><td>问句、留白、意外画面</td></tr>
+    <tr><td>10</td><td>挑战实测</td><td>用实验/测评展示性能</td><td>对比测试、极限场景、数据实测</td></tr>
+    <tr><td>11</td><td>情感共鸣</td><td>故事或情绪驱动</td><td>温情、怀旧、 aspiration、恐惧诉求</td></tr>
+    <tr><td>12</td><td>UGC 原生</td><td>模拟用户真实分享质感</td><td>手机自拍感、随手拍、聊天截图风</td></tr>
+  </table>
+  <p class="def">这 12 类与项目已有 <code>creative_frameworks</code>（叙事框架，带 beats/layers）思路一致，但更贴合"推广素材套路"，作为模板的一级归属。可增/并/改名，确认后固化为分类字典 v1.0。</p>
+
+  <h3>5.3 辅助标签维度（多选）</h3>
+  <table>
+    <tr><th>维度</th><th>建议取值</th><th>参与归并键</th></tr>
+    <tr><td>推广目的</td><td>拉新 / 激活 / 转化 / 召回 / 品牌认知</td><td><b>是</b></td></tr>
+    <tr><td>行业品类</td><td>电商 / 游戏 / 工具App / 教育 / 金融 / 旅游 / 快消 / 其他</td><td>否</td></tr>
+    <tr><td>投放平台</td><td>Meta / Google / TikTok / Unity / Adsterra / 其他（复用 media_platforms）</td><td>否</td></tr>
+    <tr><td>素材形态</td><td>图片 / 视频；比例 1:1·9:16·4:5·16:9；时长档 &lt;15s·15-30s·&gt;30s</td><td>否</td></tr>
+    <tr><td>视觉风格</td><td>写实 / 3D / 插画 / 扁平 / UGC原生 / 拼贴</td><td>否</td></tr>
+    <tr><td>情绪基调</td><td>紧迫 / 温暖 / 幽默 / 专业 / 向往 / 焦虑</td><td>否</td></tr>
+    <tr><td>钩子类型</td><td>价格 / 结果 / 痛点 / 好奇 / 社会证明</td><td><b>是</b></td></tr>
+    <tr><td>证据形式</td><td>数据数字 / 用户评价 / 对比画面 / 权威认证 / 无证据</td><td>否</td></tr>
+    <tr><td>合规标注</td><td>来源平台 / 是否需授权 / 版权状态</td><td>否</td></tr>
+  </table>
+
+  <h3>5.4 归并键 + 唯一表达（框架完整度口径）<span class="tag p">请商议评分口径</span></h3>
+  <div class="lead">
+    <b>归并键：</b>主分类相同 + 推广目的相同 + 钩子类型相同 + 信息结构相似度 ≥ 阈值 → 进入同一归并候选组 → <span class="decision">AI 建议 + 人工确认（Q5）</span>。被归并素材软保留、标 <code>merged_to_template_X</code>，可取消。
+  </div>
+  <p><b>唯一表达按"框架完整度"（Q6）：</b>完整度 = 必填维度中"有值且置信度 ≥ 0.6"的比例。选完整度最高的素材作为 golden 表达。</p>
+  <table>
+    <tr><th>必填维度组（图片 12 项）</th><th>计分项</th></tr>
+    <tr><td>布局</td><td>构图套路 / 视觉动线 / 主体位置</td></tr>
+    <tr><td>视觉</td><td>配色 / 光线 / 质感</td></tr>
+    <tr><td>信息</td><td>标题角色 / 卖点 / CTA / 证据形式</td></tr>
+    <tr><td>分类</td><td>主分类 / 推广目的</td></tr>
+  </table>
+  <p class="def">得分 = Σ(有值且 conf≥0.6) ÷ 12。并列时以"最近导入"打破平局（仅作 tie-break，不改变 Q6 主规则）；人工始终可覆盖 golden 选择。完整度低 / 分析失败 / 不可用的素材不进候选。</p>
+
+  <h3>5.5 界面落地</h3>
+  <ul>
+    <li>库首页：左侧主分类轴（12 类）导航，右侧素材网格；每条卡显示主分类 + 目的 + 平台 + 形态，已归并的标"已归并到 模板X"。</li>
+    <li>筛选栏：目的 / 行业 / 平台 / 风格 / 钩子 多选 chips（来自 5.3 辅助标签）。</li>
+    <li>模板视图：按主分类分组，每个模板展示 golden 表达 + 归并数量 + 人工编辑入口（editor 权限，Q12）。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>六、素材工作坊"按模板创作"模式</h2>
+  <h3>6.1 交互：增量开关，默认模式不动</h3>
+  <p>输入卡顶部加二选一模式条：<span class="tag b">默认 · 素材创作</span>（完全不变）/ <span class="tag p">按模板创作</span>（新增）。</p>
+  <h3>6.2 模板模式创作链路</h3>
+  <ol class="steps">
+    <li>选择一个模板（单选；<span class="decision">Q10：模板作为路线来源之一</span>，模板骨架落成一条路线，不另建规划逻辑）。</li>
+    <li><b>仍需输入新产品信息 / 链接</b> —— 模板决定"怎么表达"，产品事实来自新输入。</li>
+    <li><b><span class="decision">Q9：模板只影响图片</span></b> —— 把图片骨架（构图 / 信息层级 / 钩子 / CTA 形式）注入 <code>images_request</code>；<b>文案链路不受模板影响</b>，仍按原 analysis + brief 生成。</li>
+    <li><b>证据护栏</b>：骨架只给结构，卖点 / 数字仍取自自家 <code>evidence_index</code>，不照搬参考素材事实。</li>
+    <li>结果挂 <code>template_id</code>；出图卡标"按模板X出图"，文案卡不标模板。</li>
+  </ol>
+  <div class="warn"><b>关键护栏：</b>模板 = 表达骨架，不是"别人素材的 prompt 直接拿来用"，否则把竞品事实带进自家素材，触发编造与侵权，与 D0 证据门冲突。</div>
+</section>
+
+<section>
+  <h2>七、遗漏点与风险清单（决议后状态）</h2>
+  <table>
+    <tr><th>#</th><th>遗漏 / 风险</th><th>决议后状态</th></tr>
+    <tr><td>1-3</td><td>三层概念 / 分析子模块关系 / "效果"冒充投放数据</td><td><span class="tag g">已解决</span> 三层建模 + Q3 仅创意层标注</td></tr>
+    <tr><td>4</td><td>视频解构维度与成本</td><td><span class="tag g">已排期</span> V4.121，一期只归档 + 封面帧</td></tr>
+    <tr><td>5</td><td>视觉模型前置依赖</td><td><span class="tag a">待核验</span> Q8 称已配置；实施时仍须核对 last_test_ok is True，不可用标 unavailable</td></tr>
+    <tr><td>6</td><td>模板照搬 prompt 致编造 / 侵权</td><td><span class="tag g">已设护栏</span> 骨架只给结构，事实取自 evidence_index</td></tr>
+    <tr><td>7</td><td>网页自动截图的获取方式</td><td><span class="tag a">新增依赖</span> Q2 要一期上，见 4.4（playwright + SSRF 防护）</td></tr>
+    <tr><td>8</td><td>版权 / 来源标注</td><td><span class="tag g">已采纳</span> 强制来源 URL / 平台 / 采集时间 + "仅供分析"</td></tr>
+    <tr><td>9</td><td>分类维度</td><td><span class="tag p">商议中</span> 见第五节 Q4 方案</td></tr>
+    <tr><td>10-11</td><td>去重判定 / 编辑回溯</td><td><span class="tag g">已定</span> AI建议+人工确认 + 软归并 + 版本化</td></tr>
+    <tr><td>12-13</td><td>状态机 / 批量与容量</td><td><span class="tag g">采纳</span> imported/analyzing/analyzed/merged/failed/unavailable；先支持多选，容量策略后续</td></tr>
+    <tr><td>14-15</td><td>与提示词库关系 / 权限</td><td><span class="tag g">已定</span> 模板可导出提示词；editor 可编辑（Q12）</td></tr>
+    <tr><td>16</td><td>折叠 key 扩展 + 旧 hash</td><td><span class="tag g">已定</span> 扩展 openKey；不做重定向，内部 hash 不变（Q11）</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>八、分期规划（按决议更新）</h2>
+  <table>
+    <tr><th>版本</th><th>范围</th><th>验收标准</th></tr>
+    <tr><td><b>V4.117 骨架与改名</b></td><td>菜单改名并入工作坊分组 / 折叠 key / 三表落地 + 空壳 CRUD</td><td>菜单结构正确、三表建成、无 console 错误；内部 hash 不变、无需重定向</td></tr>
+    <tr><td><b>V4.118 导入 + 图片解构</b></td><td>本地上传 + 图片 URL + <b>网页自动截图（4.4）</b> + <b>视频上传归档（不解构）</b>；六步流程、维度字典 v1.0、状态机</td><td>三种导入均可入库；视频可归档 + 封面帧；黄金样例解构命中预期；截图接口有 SSRF 防护</td></tr>
+    <tr><td><b>V4.119 分类 + 模板沉淀</b></td><td><b>Q4 分类体系落地</b>、相似度候选、人工确认归并、框架完整度选 golden、唯一表达、版本与重置</td><td>3 张相似图归并为 1 模板；golden 按完整度选出；原件保留、可取消归并</td></tr>
+    <tr><td><b>V4.120 工作坊模板模式</b></td><td>模式切换、选模板、<b>图片骨架注入（文案不受影响）</b>、证据护栏、template_id 溯源</td><td>默认模式回归全绿；按模板出图、文案仍按原逻辑；结果可溯源</td></tr>
+    <tr><td><b>V4.121 视频解构</b></td><td>视频抽帧解构、视频专属维度、分类与归并扩展</td><td>导入 1 段视频产出分镜 / 钩子 / 字幕解构</td></tr>
+  </table>
+  <div class="note"><b>顺序理由：</b>先定数据骨架与菜单 → 导入与解构产出稳定结构 → 分类归并 → 接工作坊生成 → 视频。网页截图依赖需在 V4.118 前完成部署确认。</div>
+</section>
+
+<section>
+  <h2>九、Q1–Q13 参数冻结表</h2>
+  <div class="q"><b>Q1 · 存放范围：</b><span class="decision">原始素材（含视频）长期归档</span>。→ 视频原文件 + 封面帧均落库，软归并不删原件。</div>
+  <div class="q"><b>Q2 · 导入方式：</b><span class="decision">本地上传 + 图片 URL + 网页链接自动截图</span>。→ 新增截图接口与部署依赖，见 4.4。</div>
+  <div class="q"><b>Q3 · "效果"定义：</b><span class="decision">仅创意 / 传达层推断</span>。→ 显式标注"非真实投放数据"。</div>
+  <div class="q pending"><b>Q4 · 分类维度：</b><b>待商议</b> —— 你要求我给具体方案，见第五节。需你确认：①12 类主分类轴是否合适；②9 个辅助标签是否够用；③5.4 框架完整度评分口径是否认可。</div>
+  <div class="q"><b>Q5 · 归并判定：</b><span class="decision">AI 建议 + 人工确认</span>。→ 软归并，不自动删。</div>
+  <div class="q"><b>Q6 · 唯一表达保留：</b><span class="decision">框架完整度</span>。→ 按 5.4 评分选 golden；并列时最近导入 tie-break；人工可覆盖。</div>
+  <div class="q"><b>Q7 · 视频解构：</b><span class="decision">放 V4.121</span>。→ 一期视频仅归档 + 封面帧。</div>
+  <div class="q"><b>Q8 · 视觉模型：</b><span class="decision">真实环境已配置</span>。→ 实施时核验 last_test_ok，不可用仍标 unavailable。</div>
+  <div class="q"><b>Q9 · 模板影响范围：</b><span class="decision">只影响图片</span>。→ 文案链路不受模板影响，模板骨架只注入 images_request。</div>
+  <div class="q"><b>Q10 · 模板与 10 条路线：</b><span class="decision">模板作为路线来源之一</span>。→ 模板骨架落成路线，不另建规划逻辑。</div>
+  <div class="q"><b>Q11 · 命名 / hash：</b><span class="decision">定名"素材创意模板库"，旧 hash 不做重定向</span>。→ 内部 hash 保持不变（详见第二节说明）。</div>
+  <div class="q"><b>Q12 · 权限：</b><span class="decision">editor 可编辑模板</span>。→ 沿用现有 editor 以上角色体系。</div>
+</section>
+
+<section>
+  <h2>十、改进建议 + 本轮边界</h2>
+  <ul>
+    <li><b>溯源闭环</b>：素材历史点"由模板 X 生成"跳回模板及 golden 素材，形成"参考 → 模板 → 出片"链路。</li>
+    <li><b>解构质量回归</b>：用黄金样例做自动化测试，框架升级跑一遍防维度漂移。</li>
+    <li><b>模板健康度</b>：引用次数 / 出片成功率 / 人工采纳率，淘汰无人用模板。</li>
+    <li><b>一键导出</b>：图片骨架导出为提示词（对接"提示词管理"）。</li>
+    <li><b>批量解构队列</b>：多图导入进后台队列，复用现有 GenerationJob worker 避免前端超时。</li>
+  </ul>
+  <div class="lead"><b>本轮边界：</b>Q1–Q13 已固化，<b>仅 Q4 待你确认</b>；仍未修改任何代码 / 菜单 / 数据库。请针对第五节回复：12 类主分类是否调整、辅助标签是否增减、完整度评分是否认可（或直接说"Q4 按方案定"）。确认后我冻结全部参数，从 V4.117 开始实施与发版。</div>
+</section>
+
+<footer>素材创意模板库与工作坊改造方案（参数冻结稿 · Q4 待商议） · 2026-11-20 · 单文件 HTML，无外部依赖，可打印 / 分享</footer>
+</div>
+<script>
+document.querySelectorAll('.cp').forEach(function(b){
+  b.addEventListener('click',function(){
+    var box=b.parentNode, txt=box.textContent.replace(/^复制/,'').trim();
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt)}
+    else{var ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta)}
+    b.textContent='已复制';setTimeout(function(){b.textContent='复制'},1200)
+  })
+})
+</script>
+</body>
+</html>

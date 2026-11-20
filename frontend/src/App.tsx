@@ -32,9 +32,9 @@ const SB_KEY = 'admb_sidebar'
 type NavItem = { key: Tab; label: string; desc: string; icon: string }
 type NavGroup = { name: string; icon: string; items: NavItem[] }
 
-/* V4.50 创意工作台：自动化创意素材创作中枢。
-   包含「创意工作台」（对话式自动创作）、「全球创意分析」（参考素材 → LLM 归类 → 可复用提示词）
-   与「素材历史」（V4.75 从素材创作平台迁入，固定放最后一位）。 */
+/* 创意工作台：自动化创意素材创作中枢。
+   V4.117：「全球创意分析」改造为「素材创意模板库」并迁入「素材工作坊」分组，本组不再包含该项。
+   含「创意工作台」（对话式自动创作）、「素材标准库」「提示词管理」与「素材历史」（固定最后一位）。 */
 const GROUP_WORKBENCH: NavGroup = {
   name: '创意工作台',
   icon: 'compass',
@@ -42,8 +42,6 @@ const GROUP_WORKBENCH: NavGroup = {
     // V4.116：说明收敛为一句，避免与组件内部标题 / 说明重复占用顶部空间。
     { key: 'workbench', label: '创意工作台', icon: 'compass',
       desc: '输入落地页 / 应用链接或产品信息并选择推广媒体，AI 自动完成产品分析、创意规划与素材生成。' },
-    { key: 'creativeanalysis', label: '全球创意分析', icon: 'atom',
-      desc: '分析 Meta / Google / Unity / Adsterra 等大媒体上最具创意与转化效果的素材，归类创意风格与类型，并产出可直接调用的图片 / 视频提示词模板。' },
     { key: 'speclibrary', label: '素材标准库', icon: 'tags',
       desc: '图片与视频素材规格的唯一标准来源，逐平台逐广告产品列出尺寸、比例、格式、大小、时长与伴随素材，并标注官方核验状态与来源；生成链路直接引用，展示与生成始终一致。' },
     { key: 'materialprompts', label: '提示词管理', icon: 'filetext',
@@ -53,15 +51,17 @@ const GROUP_WORKBENCH: NavGroup = {
   ],
 }
 
-/* V4.108 素材工作坊：独立一级模块。
-   只有一件事——把链接或产品描述变成可预览、可下载的文案与图片；
-   专业参数（路线、brief、版位矩阵）留在创意工作台，不进这个入口。 */
+/* 素材工作坊：把链接或产品描述变成可预览、可下载的文案与图片（默认方案）；
+   V4.117：原「全球创意分析」改造为「素材创意模板库」并入本分组，成为第二个子项，
+   分组由 1 条升为 2 条 → 自动渲染为可折叠二级菜单。专业参数仍留在创意工作台。 */
 const GROUP_WORKSHOP: NavGroup = {
   name: '素材工作坊',
   icon: 'wand',
   items: [
     // V4.108：本模块按产品要求隐藏说明行，desc 留空，页头只保留标题。
     { key: 'workshop', label: '素材工作坊', icon: 'wand', desc: '' },
+    { key: 'creativeanalysis', label: '素材创意模板库', icon: 'atom',
+      desc: '导入并解构推广图片 / 视频，沉淀可复用的创意模板；供「按模板创作」引用。' },
   ],
 }
 
@@ -145,7 +145,7 @@ export default function App() {
   const [booting, setBooting] = useState(true)
   const [tab, setTab] = useState<Tab>(() => tabFromHash() || 'workbench')
   const [collapsed, setCollapsed] = useState<boolean>(readCollapsed)
-  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ workbench: true, system: true })
+  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>({ workshop: true, workbench: true, system: true })
   // 版本发布「新版通知」红点：记录最新版本号 + 已读事件触发重算
   const [releaseLatest, setReleaseLatest] = useState<string | null>(null)
   const [seenTick, setSeenTick] = useState(0)
@@ -321,7 +321,9 @@ export default function App() {
                 </Fragment>
               )
             }
-            const openKey = g.name === GROUP_WORKBENCH.name ? 'workbench' : 'system'
+            // V4.117：素材工作坊升为二级菜单，需第三个独立折叠 key，避免与 workbench/system 串台。
+            const openKey = g.name === GROUP_WORKSHOP.name ? 'workshop'
+              : g.name === GROUP_WORKBENCH.name ? 'workbench' : 'system'
             return (
               <Fragment key={openKey}>
                 {i > 0 && <div className="sb-sep" />}
