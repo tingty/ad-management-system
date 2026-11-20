@@ -16,6 +16,9 @@ import { api } from '../api'
  * V4.122：移除「投放授权声明」子模块与强制闸门，导入 / 解构 / 归并 / 模板沉淀
  * 不再要求授权声明；模板的按模板创作校验只保留模板自身基础可用性。
  *
+ * V4.123：已解构图片在「素材库」与「已沉淀模板」两处均可通过缩略图 / 查看原图
+ * 打开原图预览；归并 Tab 主动加载素材列表，确保直接进入该 Tab 也能看到 golden 原图。
+ *
  * V4.121：视频素材也可解构——抽帧后按真实视觉通道聚合分镜 / 钩子 / 字幕（真实 OCR）
  * / 节奏，复用同一套 12 类分类与归并键；结果区新增视频维度分区，不可用时如实标注。
  *
@@ -73,6 +76,9 @@ export default function CreativeAnalysis() {
   const [mergeMsg, setMergeMsg] = useState('')
   const [mergeErr, setMergeErr] = useState('')
 
+  // V4.123：原图预览（素材库卡片 / 已沉淀模板 golden 共用）
+  const [previewAsset, setPreviewAsset] = useState<Asset | null>(null)
+
   // ===== 原文本快速分析状态（保留）=====
   const [urls, setUrls] = useState('')
   const [text, setText] = useState('')
@@ -85,7 +91,7 @@ export default function CreativeAnalysis() {
   async function loadAssets() {
     setAssetsLoading(true)
     try {
-      const list = await api.tlAssets({ limit: 100 })
+      const list = await api.tlAssets({ limit: 500 })
       setAssets(Array.isArray(list) ? list : [])
     } catch (e: any) {
       setImportErr(e?.message || '加载素材库失败')
@@ -124,9 +130,17 @@ export default function CreativeAnalysis() {
   }
 
   useEffect(() => {
+    // V4.123：归并 Tab 也要加载素材列表，否则直接进来时模板卡片找不到 golden 原图。
     if (tab === 'library') { loadAssets(); loadLibraryMeta() }
-    if (tab === 'merge') { loadCandidates(); loadLibraryMeta() }
+    if (tab === 'merge') { loadAssets(); loadCandidates(); loadLibraryMeta() }
   }, [tab])
+
+  useEffect(() => {
+    if (!previewAsset) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreviewAsset(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [previewAsset])
 
   function resetImportMsg() { setImportMsg(''); setImportErr('') }
 
@@ -306,6 +320,11 @@ export default function CreativeAnalysis() {
     navigator.clipboard?.writeText(t); setCopied(tag); setTimeout(() => setCopied(''), 1500)
   }
 
+  // V4.123：原图优先用 file，缺失时退回 thumb（两者都由 api.fileUrl 还原成可访问地址）。
+  function originalUrl(a: Asset) {
+    return api.fileUrl(a.file || a.thumb || '')
+  }
+
   return (
     <div className="page">
       {/* V4.117/4.118：标题与说明由 App.tsx 全局页头渲染，此处不重复。 */}
@@ -405,11 +424,19 @@ export default function CreativeAnalysis() {
                 const expanded = expandedId === a.id
                 return (
                   <div key={a.id} className="card tl-asset-card">
-                    <div className="tl-asset-thumb">
-                      {(a.thumb || a.file) ? (
+                    {a.media_kind !== 'video' && (a.thumb || a.file) ? (
+                      <button type="button" className="tl-asset-thumb tl-preview-thumb"
+                        onClick={() => setPreviewAsset(a)} title="查看原图">
                         <img src={api.fileUrl(a.thumb || a.file || '')} alt={a.title} />
-                      ) : <span className="muted">无预览</span>}
-                    </div>
+                        <span className="tl-preview-hint">查看原图</span>
+                      </button>
+                    ) : (
+                      <div className="tl-asset-thumb">
+                        {(a.thumb || a.file) ? (
+                          <img src={api.fileUrl(a.thumb || a.file || '')} alt={a.title} />
+                        ) : <span className="muted">无预览</span>}
+                      </div>
+                    )}
                     <div style={{ fontWeight: 600, marginTop: 8, fontSize: 14 }}>{a.title || '未命名素材'}</div>
                     <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                       {SOURCE_LABEL[a.source_type] || a.source_type} · {a.media_kind === 'video' ? '视频' : '图片'}
@@ -627,11 +654,20 @@ export default function CreativeAnalysis() {
                       <span className="muted">{t.primary_category} · {(t.purpose || []).join('、')} · v{t.version}</span>
                     </div>
                     <div className="tl-template-golden">
-                      {goldenAsset?.file ? <img src={api.fileUrl(goldenAsset.thumb || goldenAsset.file)} alt="golden" /> : <span className="muted">无 golden 预览</span>}
+                      {goldenAsset && goldenAsset.media_kind !== 'video' && (goldenAsset.thumb || goldenAsset.file) ? (
+                        <button type="button" className="tl-preview-thumb tl-template-thumb"
+                          onClick={() => setPreviewAsset(goldenAsset)} title="查看 golden 原图">
+                          <img src={api.fileUrl(goldenAsset.thumb || goldenAsset.file || '')} alt="golden" />
+                        </button>
+                      ) : <span className="muted">无 golden 预览</span>}
                       <div>
                         <div className="muted" style={{ fontSize: 12 }}>唯一表达（golden）</div>
                         <div>{goldenAsset?.title || `素材 #${t.golden_asset_id || '—'}`}</div>
                         <div className="muted" style={{ fontSize: 11 }}>骨架字段 {Object.keys(t.image_skeleton_json || {}).length} 项 · 归并 {(t.merged_asset_ids || []).length} 条</div>
+                        {goldenAsset && goldenAsset.media_kind !== 'video' && (goldenAsset.thumb || goldenAsset.file) && (
+                          <button type="button" className="tl-preview-link"
+                            onClick={() => setPreviewAsset(goldenAsset)}>查看原图</button>
+                        )}
                       </div>
                     </div>
                     <div className="tl-template-members">
@@ -736,6 +772,37 @@ export default function CreativeAnalysis() {
             </div>
           )}
         </>
+      )}
+
+      {/* V4.123：已解构图片原图预览（点击缩略图 / 查看原图打开，Esc 或点遮罩关闭） */}
+      {previewAsset && (
+        <div className="tl-preview-backdrop" onClick={() => setPreviewAsset(null)}>
+          <div className="tl-preview-modal" role="dialog" aria-modal="true" aria-label="原图预览"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="tl-preview-head">
+              <div>
+                <b>{previewAsset.title || '未命名素材'}</b>
+                <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
+                  原图预览 · {SOURCE_LABEL[previewAsset.source_type] || previewAsset.source_type}
+                  {previewAsset.platform ? ` · ${previewAsset.platform}` : ''}
+                  {previewAsset.width && previewAsset.height ? ` · ${previewAsset.width}×${previewAsset.height}` : ''}
+                </div>
+              </div>
+              <button className="btn" onClick={() => setPreviewAsset(null)}>关闭</button>
+            </div>
+            <div className="tl-preview-body">
+              <img src={originalUrl(previewAsset)} alt={previewAsset.title || '原图'} />
+            </div>
+            <div className="tl-preview-foot">
+              <span className="muted" style={{ fontSize: 12 }}>
+                {STATUS_LABEL[previewAsset.status] || previewAsset.status} · 长期归档原件
+              </span>
+              <a className="btn" href={originalUrl(previewAsset)} target="_blank" rel="noreferrer">
+                在新窗口打开原图
+              </a>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
