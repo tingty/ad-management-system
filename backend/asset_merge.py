@@ -22,6 +22,10 @@ from asset_deconstruct import (
     FRAMEWORK_VERSION as DECONSTRUCT_VERSION,
     HOOK_TYPES, PRIMARY_CATEGORIES, PURPOSES,
 )
+from asset_video_deconstruct import FRAMEWORK_VERSION as VIDEO_DECONSTRUCT_VERSION
+
+# V4.121：图片 / 视频两套解构框架共用同一套分类字典、归并键与 golden 口径。
+SUPPORTED_FRAMEWORKS = frozenset({DECONSTRUCT_VERSION, VIDEO_DECONSTRUCT_VERSION})
 
 MERGE_FRAMEWORK_VERSION = "asset-merge/1.0"
 CATEGORY_TAXONOMY_VERSION = "asset-category/1.0"
@@ -40,6 +44,8 @@ def taxonomy() -> dict:
         "similarity_threshold": SIMILARITY_THRESHOLD,
         "min_completeness": MIN_COMPLETENESS,
         "deconstruct_framework": DECONSTRUCT_VERSION,
+        "video_deconstruct_framework": VIDEO_DECONSTRUCT_VERSION,
+        "supported_deconstruct_frameworks": sorted(SUPPORTED_FRAMEWORKS),
         "merge_framework": MERGE_FRAMEWORK_VERSION,
         "taxonomy_version": CATEGORY_TAXONOMY_VERSION,
     }
@@ -144,7 +150,7 @@ def eligibility(analysis: dict, rights_status: str = "granted") -> dict:
         result["reason"] = f"解构状态为 {status or '未知'}，仅已解构素材可参与归并"
         return result
     fw = str(analysis.get("framework_version") or DECONSTRUCT_VERSION)
-    if fw != DECONSTRUCT_VERSION:
+    if fw not in SUPPORTED_FRAMEWORKS:
         result["reason"] = f"解构框架版本 {fw} 与当前归并规则不匹配"
         return result
     if result["completeness"] < MIN_COMPLETENESS:
@@ -211,7 +217,8 @@ def build_skeleton(analysis: dict) -> dict:
         "hook_type": _value(_cell(dims, "effect", "hook_type")),
         "emotion": _value(_cell(dims, "effect", "emotion")),
         "intent": _value(_cell(dims, "effect", "intent")),
-        "source_framework": DECONSTRUCT_VERSION,
+        # V4.121：golden 可能来自视频解构，溯源记录实际框架版本（仍是统一 12 类口径）。
+        "source_framework": str(analysis.get("framework_version") or DECONSTRUCT_VERSION),
         "golden_analysis_id": analysis.get("id"),
     }
     return {k: v for k, v in skeleton.items() if v not in (None, "", [], {})}
@@ -272,6 +279,8 @@ def build_candidates(items: list[dict]) -> dict:
             "asset_id": asset.get("id"), "title": asset.get("title") or "未命名素材",
             "completeness": e["completeness"], "reason": e["reason"],
             "merged_template_id": item.get("merged_template_id"),
+            # V4.121：图片 / 视频共用归并键，候选视图需标出素材来源类型。
+            "media_kind": asset.get("media_kind") or "image",
         }
         if not e["eligible"]:
             excluded.append(row)
@@ -284,6 +293,8 @@ def build_candidates(items: list[dict]) -> dict:
             "created_at": asset.get("created_at") or analysis.get("created_at"),
             "category_source": e["category_source"], "eligible": True,
             "merged_template_id": item.get("merged_template_id"),
+            "media_kind": asset.get("media_kind") or "image",
+            "framework_version": analysis.get("framework_version") or DECONSTRUCT_VERSION,
         })
 
     groups: list[dict] = []

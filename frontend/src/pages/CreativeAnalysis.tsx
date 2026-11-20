@@ -16,8 +16,10 @@ import { api } from '../api'
  * V4.120：授权标注升级为强制闸门——导入必须声明 granted/denied 并写明来源范围；
  * 未授权素材禁止解构 / 归并 / 模板沉淀 / 工作坊按模板创作，可就地补录授权。
  *
+ * V4.121：视频素材也可解构——抽帧后按真实视觉通道聚合分镜 / 钩子 / 字幕（真实 OCR）
+ * / 节奏，复用同一套 12 类分类与归并键；结果区新增视频维度分区，不可用时如实标注。
+ *
  * 保留原「文本快速分析」Tab（V4.50 能力）作为兜底，避免破坏既有用户习惯。
- * 视频解构（V4.121）后续版本接入。
  */
 
 const STATUS_LABEL: Record<string, string> = {
@@ -169,7 +171,7 @@ export default function CreativeAnalysis() {
         rights_note: rightsNote.trim(), rights_status: rightsStatus,
       }
       await api.tlImport(payload)
-      setImportMsg(`已导入：${file.name}${kind === 'video' ? '（仅归档 + 封面帧，解构在 V4.121）' : ''}`)
+      setImportMsg(`已导入：${file.name}${kind === 'video' ? '（已归档 + 封面帧，可点击「解构」）' : ''}`)
       setImportTitle('')
       await loadAssets()
     } catch (e: any) {
@@ -232,10 +234,6 @@ export default function CreativeAnalysis() {
 
   // ---- 触发解构 ----
   async function runAnalyze(asset: Asset) {
-    if (asset.media_kind !== 'image') {
-      setImportErr('视频解构将在 V4.121 提供，当前仅支持图片')
-      return
-    }
     setAnalyzingId(asset.id); setExpandedId(asset.id)
     setAnalyses(prev => ({ ...prev, [asset.id]: { status_text: '解构中…' } }))
     try {
@@ -390,14 +388,14 @@ export default function CreativeAnalysis() {
             {importMode === 'upload' && (
               <div className="tl-dropzone">
                 <div className="muted" style={{ marginBottom: 10 }}>
-                  上传推广图片（PNG / JPG / WEBP）进入解构；视频仅归档 + 封面帧，解构在 V4.121。
+                  上传推广图片（PNG / JPG / WEBP）进入解构；视频请先切到「上传视频」，归档后可解构分镜/钩子/字幕/节奏。
                 </div>
                 <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp"
                   onChange={e => onUpload(e.target.files?.[0], 'image')} disabled={importing} />
                 <div style={{ marginTop: 10 }}>
                   <input ref={videoInputRef} type="file" accept="video/mp4,video/quicktime,video/webm"
                     onChange={e => onUpload(e.target.files?.[0], 'video')} disabled={importing} />
-                  <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>↑ 视频（仅归档）</span>
+                  <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>↑ 视频（归档后可解构）</span>
                 </div>
               </div>
             )}
@@ -503,13 +501,11 @@ export default function CreativeAnalysis() {
                       </div>
                     )}
                     <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                      {a.media_kind === 'image' && (
-                        <button className="btn primary" onClick={() => runAnalyze(a)}
-                          disabled={analyzingId === a.id || !rightsOk}
-                          title={rightsOk ? '' : '请先补录投放授权声明'}>
-                          {analyzingId === a.id ? '解构中…' : (analysis ? '重新解构' : '解构')}
-                        </button>
-                      )}
+                      <button className="btn primary" onClick={() => runAnalyze(a)}
+                        disabled={analyzingId === a.id || !rightsOk}
+                        title={rightsOk ? '' : '请先补录投放授权声明'}>
+                        {analyzingId === a.id ? '解构中…' : (analysis ? '重新解构' : '解构')}
+                      </button>
                       <button className="btn" onClick={() => {
                         setRightsEditId(rightsEditId === a.id ? null : a.id)
                         setRightsEditStatus(a.rights_status === 'granted' || a.rights_status === 'denied' ? a.rights_status : '')
@@ -566,6 +562,7 @@ export default function CreativeAnalysis() {
                         <DimBlock title="布局" data={analysis.dims_json?.layout} />
                         <DimBlock title="视觉" data={analysis.dims_json?.visual} />
                         <DimBlock title="信息与文案" data={analysis.dims_json?.info} />
+                        <DimBlock title="视频解构（分镜/钩子/字幕/节奏）" data={analysis.dims_json?.video} />
                         <DimBlock title="效果推断（非投放数据）" data={analysis.dims_json?.effect} />
                         {analysis.category_json && (
                           <div className="tl-dim">
@@ -694,6 +691,7 @@ export default function CreativeAnalysis() {
                           <input type="radio" name={`golden-${g.key}`} checked={m.asset_id === golden}
                             onChange={() => setGoldenPicks(prev => ({ ...prev, [g.key]: m.asset_id }))} title="选为 golden" />
                           <span className="tl-merge-member-title">{m.title}</span>
+                          <span className="chip">{m.media_kind === 'video' ? '视频' : '图片'}</span>
                           <span className="muted">完整度 {Math.round(m.completeness * 100)}%</span>
                           {m.asset_id === g.golden_asset_id && <span className="tl-golden-tag">建议 golden</span>}
                           {m.merged_template_id && <span className="muted">已归并 #{m.merged_template_id}</span>}
@@ -886,4 +884,6 @@ const DIM_LABEL: Record<string, string> = {
   palette: '配色', lighting: '光线', texture: '质感',
   headline_role: '标题角色', benefits: '卖点', cta: 'CTA', evidence_kind: '证据', text_on_image: '画面文字',
   hook_type: '钩子', emotion: '情绪', intent: '意图',
+  shot_sequence: '分镜序列', hook_moment: '钩子时刻', subtitle_strategy: '字幕/画面文字',
+  rhythm: '节奏推断', frame_count: '抽帧数', duration_sec: '视频时长',
 }

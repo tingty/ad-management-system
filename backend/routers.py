@@ -2589,7 +2589,7 @@ async def upload_video_asset(file: UploadFile = File(...),
         pass
     return {"path": path, "url": f"/files/{name}", "name": file.filename,
             "thumb": thumb_url, "duration_sec": duration,
-            "status": "ok", "note": "视频仅归档 + 封面帧，解构将在 V4.121 提供"}
+            "status": "ok", "note": "视频已归档并生成封面帧，可点击「解构」分析分镜/钩子/字幕/节奏"}
 
 
 @router.get("/settings/creative-presets")
@@ -3975,10 +3975,11 @@ async def tl_import_asset(body: AssetImportRequest, db: Session = Depends(get_db
 @router.post("/template-library/analyze/{asset_id}", response_model=AssetAnalysisOut)
 async def tl_analyze_asset(asset_id: int, db: Session = Depends(get_db),
                            user: User = Depends(require_roles(*CAN_EDIT))):
-    """V4.118：对一张图片素材执行解构（真实视觉模型），落一条分析记录。
+    """V4.118 / V4.121：对图片或视频素材执行解构（真实视觉模型），落一条分析记录。
 
-    视频素材在 V4.121 前不解构，直接 400 并说明。视觉模型不可用 → 落 status=unavailable
-    记录（不臆造维度），不抛 500。分析完成回写素材状态。
+    视频走抽帧 + asset_video_deconstruct（分镜/钩子/字幕/节奏），与图片共用分类与
+    归并键。视觉模型不可用 / 抽帧失败 → 落 status=unavailable 记录（不臆造维度），
+    不抛 500。分析完成回写素材状态。
     """
     import asset_deconstruct as ad
     import creative_tasks
@@ -3990,33 +3991,46 @@ async def tl_analyze_asset(asset_id: int, db: Session = Depends(get_db),
     chk = tg.rights_check(asset)
     if not chk["ok"]:
         raise _rights_block(chk)
-    if (asset.media_kind or "image") != "image":
-        raise HTTPException(400, "视频解构将在 V4.121 提供，当前仅支持图片")
+    kind = (asset.media_kind or "image").strip().lower()
+    if kind not in ("image", "video"):
+        raise HTTPException(400, "仅支持图片 / 视频素材解构")
     if not asset.file:
-        raise HTTPException(400, "素材没有可用的图片文件")
-    # 定位本地图片字节（/files/<name> → uploads/<name>）。
+        raise HTTPException(400, "素材没有可用的文件")
+    # 定位本地文件（/files/<name> → uploads/<name>）。
     fname = os.path.basename(asset.file)
     fpath = os.path.join(UPLOAD_DIR, fname)
     if not os.path.isfile(fpath):
-        raise HTTPException(400, "图片文件不存在或已被清理")
-    with open(fpath, "rb") as f:
-        image_bytes = f.read()
-    # 统一图片格式：解构引擎按 JPEG base64 传入，非 JPEG 用 PIL 转码。
-    from PIL import Image
-    import io
-    try:
-        im = Image.open(io.BytesIO(image_bytes))
-        if im.format != "JPEG":
-            buf = io.BytesIO();
-            im.convert("RGB").save(buf, format="JPEG", quality=90)
-            image_bytes = buf.getvalue()
-    except Exception:
-        raise HTTPException(400, "图片无法解码，可能不是有效图片")
+        raise HTTPException(400, "文件不存在或已被清理")
 
     asset.status = "analyzing"
     db.commit()
     cfg = creative_tasks._vision_model_cfg(db)
-    result = await ad.deconstruct_image(image_bytes, cfg)
+    if kind == "video":
+        # V4.121：抽帧 + 视频专属维度（分镜/钩子/字幕/节奏），复用真实视觉通道。
+        import asset_video_deconstruct as avd
+        import video_vision_audit as vva
+        duration = float(asset.duration_sec or 0)
+        frames, finfo = vva.extract_frames(fpath, duration, count=3)
+        ocr = {"status": "unavailable", "reason": "无可用帧，未做字幕识别"}
+        if frames:
+            ocr = await vva.recognize_frames(frames, cfg)
+        result = await avd.deconstruct_video(
+            frames, cfg, duration, finfo.get("times") or [], ocr)
+    else:
+        with open(fpath, "rb") as f:
+            image_bytes = f.read()
+        # 统一图片格式：解构引擎按 JPEG base64 传入，非 JPEG 用 PIL 转码。
+        from PIL import Image
+        import io
+        try:
+            im = Image.open(io.BytesIO(image_bytes))
+            if im.format != "JPEG":
+                buf = io.BytesIO()
+                im.convert("RGB").save(buf, format="JPEG", quality=90)
+                image_bytes = buf.getvalue()
+        except Exception:
+            raise HTTPException(400, "图片无法解码，可能不是有效图片")
+        result = await ad.deconstruct_image(image_bytes, cfg)
     st = result.get("status", "unavailable")
     if st not in ("analyzed", "unavailable", "low_confidence"):
         st = "unavailable"
