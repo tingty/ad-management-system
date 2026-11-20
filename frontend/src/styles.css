@@ -1780,6 +1780,9 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 /* ① 顶部一句话介绍 */
 .cwb-intro { margin: 6px 0 0; font-size: 13px; color: var(--muted, #6b7280); line-height: 1.5; }
 
+/* V4.116：标题 / 说明已收敛到全局页头，组件顶部只留动作按钮，右对齐并留出呼吸空间 */
+.cwb-top-actions-only { display: flex; justify-content: flex-end; align-items: center; margin: 2px 0 16px; }
+
 /* ② 输入模块：统一表单行（标签 + 控件），组件一致 */
 .cwb-input-card { padding: 18px; }
 .cwb-form { display: flex; flex-direction: column; gap: 14px; }
@@ -2298,6 +2301,10 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
   color: #b45309; background: rgba(245, 158, 11, .12); border-radius: 7px; padding: 5px 9px; }
 .cwb-route-edit { margin: 6px 0 4px; }
 .cwb-route-edit .cwb-supplement-input { min-height: 62px; font-size: 12.5px; }
+
+/* V4.116：补充创意指令「已采纳 / 实时生效」可见反馈 */
+.cwb-supp-live { margin: 6px 0 0; font-size: 12px; line-height: 1.5; color: #15803d; background: #eef8f1; border: 1px solid #bfe6cd; border-radius: 7px; padding: 6px 9px; }
+.cwb-supp-applied { color: #15803d; font-weight: 600; }
 .cwb-route-edit-btn { margin-top: 2px; font-size: 11.5px; }
 /* V4.106 / 方案D：参考图角色选择（风格参考 / 商品保真） */
 .cwb-ref-role { max-width: 320px; }

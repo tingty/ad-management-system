@@ -2,6 +2,34 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.116 创意工作台顶部收敛为单一主标题+说明；补充创意指令二次点击确认生效并可见
+
+**发布日期**：2026-11-20 10:42
+**变更类型**：新增 / 优化 / 排查确认
+**涉及模块**：创意工作台（顶部页头、图片规划补充指令区、生成提示行）、全局页头（App.tsx）、前端样式、回归测试、发版数据（release_notes_data）、发版流程、系统版本
+**变更摘要**：按需求把创意工作台顶部从「两组标题 + 两组说明」收敛为「一个页面主标题 + 一个说明文字」——主标题与说明统一由 App.tsx 全局页头（page-head）呈现，组件内部不再重复渲染「创意工作台」标题与「输入产品链接…」说明；全局说明精简为一句，组件顶部只留「新建创作 / 任务」两个常驻按钮（右对齐）。同时排查用户关心的问题：第一次「确认并批量生成」后补填「补充创意指令（可选）」、再次点击时该指令是否生效。结论是**当前链路本已生效**：textarea 双向绑定 `imageSupplement`，每次点击 `batchGenerate` 都新建 `style_opts.creative_plan.supplement` 并生成全新 `idempotency_key`，后端以裸 dict 收单、落 DB 快照、worker 读快照现场重建、`build_image_prompt_rule()` 把补充指令以最高优先级渲染进 `rule_text` 并拼入 `bg_prompt` 发给文生图模型，全链路无字段丢弃、无旧 prompt 缓存。真正的缺口是界面缺少「已采纳」反馈，用户无法确认指令是否随二次点击生效。本版补上两处可见反馈（输入框下方实时提示 + 生成提示行采纳标记），并用专项测试固化整条链路。
+**更新要点**
+- 【优化】顶部去重：`CreativeWorkbench.tsx` 删除组件内的 `<h2 cwb-title-only>创意工作台</h2>` 与 `<p cwb-intro>输入产品链接…</p>`，只保留 `.cwb-top-actions-only`（新建创作 / 任务，右对齐）；App.tsx 全局 `workbench.desc` 精简为一句「输入落地页 / 应用链接或产品信息并选择推广媒体，AI 自动完成产品分析、创意规划与素材生成。」
+- 【排查结论】补充创意指令二次点击生效：确认 `supplement: imageSupplement || ''` 读最新 state、`idempotency_key` 每次点击唯一（含 `Date.now()` + 随机数，不命中幂等）、`style_opts` 为后端通用 dict（嵌套 `creative_plan.supplement` 不被 Pydantic 丢弃）、worker 读 DB 提交快照现场重建 prompt、`rule_hash`/`config_id` 随补充指令变化（无缓存复用旧规则）。
+- 【新增】可见反馈①：补充指令输入框下方，填写后显示「已填写 N 字 · 点击下方『确认并批量生成』即随本次出图生效（改后可再次点击，按最新内容重新生成）」（`.cwb-supp-live`）。
+- 【新增】可见反馈②：生成提示行在补充指令非空时追加「补充创意指令（N 字）已确认采纳，将随本次点击一并生效」（`.cwb-supp-applied`），让二次点击前即可确认本次会携带最新指令。
+**本次优化与更改的功能 / 模块**
+- 【优化】创意工作台页头：`frontend/src/pages/CreativeWorkbench.tsx`（移除重复标题/说明、顶部按钮右对齐）
+- 【优化】全局页头：`frontend/src/App.tsx`（workbench 说明精简为一句）
+- 【新增】补充指令可见反馈：`frontend/src/pages/CreativeWorkbench.tsx`（`.cwb-supp-live` / `.cwb-supp-applied`）、`frontend/src/styles.css`（对应样式）
+- 【新增】专项回归 `tests/test_header_supplement_v4116.py`（7 项：顶部去重、说明精简、payload 读最新 state、幂等键唯一、后端保留嵌套 supplement、规则随补充变化、可见反馈）
+
+**影响范围**
+- 顶部展示：仅合并重复的标题/说明，不改变路由、权限、新建创作与任务入口的行为；全局 page-head 现为唯一主标题 + 说明来源。
+- 补充指令：不改变出图链路与计费，指令内容、优先级（仅视觉表达、不绘制文字、不编造事实）与证据门均保持原状；本版只做可见性增强，二次点击本就已生效。
+- 幂等 / 缓存：未改动任何幂等键规则或 hash 逻辑；每次点击仍生成新 key、新任务，历史任务不受影响。
+- 真实付费出片与真实投放效果仍为外部验收项，模拟与浏览器测试不能替代。
+
+**验证**
+- 专项 `test_header_supplement_v4116` **7/7 通过**：组件内无重复标题/说明、全局说明为单句、payload 读最新 `imageSupplement` state、`idempotency_key` 含时间+随机数、`MediaImageRequest` 保留嵌套 `creative_plan.supplement`、`rule_hash` 与 `config_id` 随补充指令变化、两处可见反馈与样式存在。
+- 全量回归与 `npx tsc --noEmit` / `npm run build` 见下方发布校验记录。
+- 真实付费文案出片与真实投放效果仍为外部验收项。
+
 ## V4.115 任务栏显示创建时间 + 进行中任务可手动停止；修复「确认并批量生成」422 报错
 
 **发布日期**：2026-11-20 10:18

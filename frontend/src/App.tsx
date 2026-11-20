@@ -39,8 +39,9 @@ const GROUP_WORKBENCH: NavGroup = {
   name: '创意工作台',
   icon: 'compass',
   items: [
+    // V4.116：说明收敛为一句，避免与组件内部标题 / 说明重复占用顶部空间。
     { key: 'workbench', label: '创意工作台', icon: 'compass',
-      desc: '自动化创意素材创作：输入落地页 / 应用链接或产品信息，选择推广媒体，剩余由大模型自动分析产品、规划创意路线并生成推广图片与视频。对话式流程，人工仅介入必要输入与重要决策。' },
+      desc: '输入落地页 / 应用链接或产品信息并选择推广媒体，AI 自动完成产品分析、创意规划与素材生成。' },
     { key: 'creativeanalysis', label: '全球创意分析', icon: 'atom',
       desc: '分析 Meta / Google / Unity / Adsterra 等大媒体上最具创意与转化效果的素材，归类创意风格与类型，并产出可直接调用的图片 / 视频提示词模板。' },
     { key: 'speclibrary', label: '素材标准库', icon: 'tags',

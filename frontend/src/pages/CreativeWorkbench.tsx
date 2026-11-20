@@ -1281,12 +1281,9 @@ export default function CreativeWorkbench() {
 
   return (
     <div className="cwb">
-      {/* ① 顶部：标题 + 一句话介绍 + 两个常驻入口（新建创作 / 任务），不新增一级导航 */}
-      <div className="cwb-top">
-        <div>
-          <h2 className="cwb-title-only">创意工作台</h2>
-          <p className="cwb-intro">输入产品链接并选择投放平台，AI 自动完成产品分析、创意规划与素材生成。</p>
-        </div>
+      {/* V4.116：主标题与说明统一由 App.tsx 全局页头（page-head）呈现，
+          本组件不再重复渲染标题 / 说明，只保留两个常驻入口（新建创作 / 任务）。 */}
+      <div className="cwb-top cwb-top-actions-only">
         <div className="cwb-top-actions">
           <button className="cwb-new-btn" onClick={startNewCreation} disabled={imgBusy}
             title={imgBusy ? '图片任务正在生成，完成后再开始新的创作（视频等待期间可随时新建）' : '新建一次空白创作，不会删除已有任务或结果'}>
@@ -1580,6 +1577,7 @@ export default function CreativeWorkbench() {
                         placeholder="例如：强调续航卖点、采用生活方式叙事、突出价格优势…（仅调整构图 / 光线 / 色调 / 场景 / 镜头语言等视觉表达，不会绘制到画面中）"
                         value={imageSupplement}
                         onChange={e => setImageSupplement(e.target.value)} />
+                      {imageSupplement.trim() && <p className="cwb-supp-live">已填写 {imageSupplement.trim().length} 字 · 点击下方「确认并批量生成」即随本次出图生效（改后可再次点击，按最新内容重新生成）</p>}
                       <p className="cwb-supplement-hint">仅作用于图片视觉表达，与所选路线合并为统一提示词规则；不生成画面文字，不编造商品事实与数字。</p>
                     </div>
                   </div>
@@ -1602,7 +1600,7 @@ export default function CreativeWorkbench() {
                   </div>
                 )}
                 {hasImage && routes.some(r => r.selected) && (
-                  <p className="cwb-gen-note">本次将创建 {selected.length * routes.filter(r => r.selected).length} 个图片任务（{selected.length} 个平台 × {routes.filter(r => r.selected).length} 条路线：{curRoute?.name || '—'}）。该路线的修改意见已并入出图提示词。</p>
+                  <p className="cwb-gen-note">本次将创建 {selected.length * routes.filter(r => r.selected).length} 个图片任务（{selected.length} 个平台 × {routes.filter(r => r.selected).length} 条路线：{curRoute?.name || '—'}）。该路线的修改意见已并入出图提示词。{imageSupplement.trim() && <b className="cwb-supp-applied"> · 补充创意指令（{imageSupplement.trim().length} 字）已确认采纳，将随本次点击一并生效</b>}</p>
                 )}
                 <div className="cwb-confirm">
                   <button className="cwb-gen-btn" onClick={batchGenerate}
