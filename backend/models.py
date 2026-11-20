@@ -335,6 +335,8 @@ class CreativeAssetSource(Base):
     rights_note = Column(String(255), nullable=True)    # 版权/授权标注（仅供分析参考）
     file_hash = Column(String(64), nullable=True, index=True)  # 去重（文件 sha256）
     status = Column(String(24), default="imported")     # imported/analyzing/analyzed/merged/failed/unavailable
+    # V4.119：软归并标记（merged_to_template_X），原件与解构永久保留，可取消归并。
+    merged_template_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 

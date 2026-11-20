@@ -10,8 +10,11 @@ import { api } from '../api'
  *  - 解构结果：按维度字典分区展示布局/视觉/信息/效果/分类 + 模板建议 + 完整度；
  *  - 诚实标注：视觉模型不可用 (unavailable) 与截图内容不完整都显式提示，不冒充已解构。
  *
+ * V4.119：新增「分类归并 · 模板沉淀」Tab——12 类主分类 + 目的 + 钩子 + 信息结构相似度
+ * 给出候选组；人工确认归并后按框架完整度选 golden 并沉淀图片骨架模板（可覆盖 / 可撤销）。
+ *
  * 保留原「文本快速分析」Tab（V4.50 能力）作为兜底，避免破坏既有用户习惯。
- * 分类归并（V4.119）/ 工作坊模板模式（V4.120）/ 视频解构（V4.121）后续版本接入。
+ * 工作坊模板模式（V4.120）/ 视频解构（V4.121）后续版本接入。
  */
 
 const STATUS_LABEL: Record<string, string> = {
@@ -23,7 +26,7 @@ type Asset = {
   id: number; title: string; source_type: string; file?: string | null; thumb?: string | null;
   source_url?: string | null; platform?: string | null; media_kind: string;
   width?: number | null; height?: number | null; duration_sec?: number | null;
-  rights_note?: string | null; status: string; created_at?: string;
+  rights_note?: string | null; status: string; merged_template_id?: number | null; created_at?: string;
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -31,7 +34,7 @@ const SOURCE_LABEL: Record<string, string> = {
 }
 
 export default function CreativeAnalysis() {
-  const [tab, setTab] = useState<'library' | 'text'>('library')
+  const [tab, setTab] = useState<'library' | 'text' | 'merge'>('library')
 
   // ===== 素材库状态 =====
   const [assets, setAssets] = useState<Asset[]>([])
@@ -51,6 +54,20 @@ export default function CreativeAnalysis() {
   const [analyses, setAnalyses] = useState<Record<number, any>>({})
   const [analyzingId, setAnalyzingId] = useState<number | null>(null)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+
+  // ===== V4.119 分类归并 / 模板沉淀状态 =====
+  const [taxonomy, setTaxonomy] = useState<any>(null)
+  const [templates, setTemplates] = useState<any[]>([])
+  const [candidates, setCandidates] = useState<any>(null)
+  const [candLoading, setCandLoading] = useState(false)
+  const [selectedMembers, setSelectedMembers] = useState<Record<string, number[]>>({})
+  const [goldenPicks, setGoldenPicks] = useState<Record<string, number>>({})
+  const [templateNames, setTemplateNames] = useState<Record<string, string>>({})
+  const [mergingKey, setMergingKey] = useState('')
+  const [workingTemplateId, setWorkingTemplateId] = useState<number | null>(null)
+  const [catEdits, setCatEdits] = useState<Record<number, any>>({})
+  const [mergeMsg, setMergeMsg] = useState('')
+  const [mergeErr, setMergeErr] = useState('')
 
   // ===== 原文本快速分析状态（保留）=====
   const [urls, setUrls] = useState('')
@@ -73,7 +90,39 @@ export default function CreativeAnalysis() {
     }
   }
 
-  useEffect(() => { if (tab === 'library') loadAssets() }, [tab])
+  // V4.119：最新解构 / 模板 / 分类字典（一个素材多次解构只取最新一条）。
+  async function loadLibraryMeta() {
+    try {
+      const [list, tpls, tax] = await Promise.all([
+        api.tlAnalyses({ limit: 300 }), api.tlTemplates({ limit: 300 }), api.tlTaxonomy(),
+      ])
+      const latest: Record<number, any> = {}
+      for (const a of (Array.isArray(list) ? list : [])) {
+        if (a.asset_id && !latest[a.asset_id]) latest[a.asset_id] = a
+      }
+      setAnalyses(latest)
+      setTemplates(Array.isArray(tpls) ? tpls : [])
+      setTaxonomy(tax)
+    } catch (e: any) {
+      setMergeErr(e?.message || '加载分类字典 / 模板失败')
+    }
+  }
+
+  async function loadCandidates() {
+    setCandLoading(true)
+    try {
+      const r = await api.tlMergeCandidates()
+      setCandidates(r)
+      setSelectedMembers({}); setGoldenPicks({}); setTemplateNames({})
+    } catch (e: any) {
+      setMergeErr(e?.message || '加载归并候选失败')
+    } finally { setCandLoading(false) }
+  }
+
+  useEffect(() => {
+    if (tab === 'library') { loadAssets(); loadLibraryMeta() }
+    if (tab === 'merge') { loadCandidates(); loadLibraryMeta() }
+  }, [tab])
 
   function resetImportMsg() { setImportMsg(''); setImportErr('') }
 
@@ -164,7 +213,7 @@ export default function CreativeAnalysis() {
     try {
       const a = await api.tlAnalyze(asset.id)
       setAnalyses(prev => ({ ...prev, [asset.id]: a }))
-      await loadAssets()
+      await Promise.all([loadAssets(), loadLibraryMeta()])
     } catch (e: any) {
       setAnalyses(prev => ({ ...prev, [asset.id]: { status_text: '解构失败', reason: e?.message || '' } }))
     } finally { setAnalyzingId(null) }
@@ -175,8 +224,69 @@ export default function CreativeAnalysis() {
     try {
       await api.tlDeleteAsset(asset.id)
       setAnalyses(prev => { const n = { ...prev }; delete n[asset.id]; return n })
-      await loadAssets()
+      await Promise.all([loadAssets(), loadLibraryMeta()])
     } catch (e: any) { setImportErr(e?.message || '删除失败') }
+  }
+
+  // ---- V4.119 人工确认分类 ----
+  async function saveCategory(analysis: any) {
+    const edit = catEdits[analysis.id]
+    if (!edit?.primary || !edit.purposes?.length || !edit.hooks?.length) {
+      setMergeErr('请选择主分类、至少一个推广目的与一个钩子类型')
+      return
+    }
+    setWorkingTemplateId(analysis.id * -1)
+    setMergeErr(''); setMergeMsg('')
+    try {
+      await api.tlConfirmCategory(analysis.id, edit)
+      setMergeMsg('分类已确认，归并时以人工值为准（AI 原始建议保留可追溯）')
+      await loadLibraryMeta()
+    } catch (e: any) { setMergeErr(e?.message || '分类确认失败') }
+    finally { setWorkingTemplateId(null) }
+  }
+
+  function membersOf(g: any): number[] {
+    return selectedMembers[g.key] || g.members.map((m: any) => m.asset_id)
+  }
+  function toggleMember(g: any, id: number) {
+    const current = membersOf(g)
+    const next = current.includes(id) ? current.filter(x => x !== id) : [...current, id]
+    setSelectedMembers(prev => ({ ...prev, [g.key]: next }))
+  }
+  async function confirmMerge(g: any) {
+    const ids = membersOf(g)
+    if (!ids.length) { setMergeErr('请至少勾选一条素材'); return }
+    const golden = goldenPicks[g.key] || g.golden_asset_id
+    if (!ids.includes(golden)) { setMergeErr('golden 必须在已勾选素材中'); return }
+    setMergingKey(g.key); setMergeErr(''); setMergeMsg('')
+    try {
+      const t = await api.tlMergeConfirm({
+        asset_ids: ids, golden_asset_id: golden,
+        name: (templateNames[g.key] || '').trim() || g.suggested_name,
+      })
+      setMergeMsg(`已沉淀模板「${t.name}」：${ids.length} 条素材软归并，golden 素材 #${t.golden_asset_id}（原件保留）`)
+      await Promise.all([loadCandidates(), loadLibraryMeta(), loadAssets()])
+    } catch (e: any) { setMergeErr(e?.message || '归并失败') }
+    finally { setMergingKey('') }
+  }
+  async function setGolden(t: any, assetId: number) {
+    setWorkingTemplateId(t.id); setMergeErr(''); setMergeMsg('')
+    try {
+      await api.tlSetGolden(t.id, { asset_id: assetId })
+      setMergeMsg(`模板「${t.name}」的唯一表达已改为素材 #${assetId}`)
+      await Promise.all([loadLibraryMeta(), loadAssets()])
+    } catch (e: any) { setMergeErr(e?.message || '改选 golden 失败') }
+    finally { setWorkingTemplateId(null) }
+  }
+  async function unmerge(t: any, assetId: number) {
+    if (!window.confirm(`撤销素材 #${assetId} 到「${t.name}」的归并？原件与解构保留。`)) return
+    setWorkingTemplateId(t.id); setMergeErr(''); setMergeMsg('')
+    try {
+      await api.tlUnmerge(t.id, { asset_ids: [assetId] })
+      setMergeMsg(`已撤销归并：素材 #${assetId} 回到已解构`)
+      await Promise.all([loadCandidates(), loadLibraryMeta(), loadAssets()])
+    } catch (e: any) { setMergeErr(e?.message || '撤销归并失败') }
+    finally { setWorkingTemplateId(null) }
   }
 
   // ---- 原文本快速分析 ----
@@ -202,6 +312,9 @@ export default function CreativeAnalysis() {
       <div className="cwb-tabbar" style={{ marginBottom: 16 }}>
         <button className={`cwb-tab ${tab === 'library' ? 'active' : ''}`} onClick={() => setTab('library')}>
           素材库 · 导入与解构
+        </button>
+        <button className={`cwb-tab ${tab === 'merge' ? 'active' : ''}`} onClick={() => setTab('merge')}>
+          分类归并 · 模板沉淀
         </button>
         <button className={`cwb-tab ${tab === 'text' ? 'active' : ''}`} onClick={() => setTab('text')}>
           文本快速分析
@@ -309,8 +422,19 @@ export default function CreativeAnalysis() {
                     </div>
                     <div style={{ marginTop: 6 }}>
                       <span className={`tl-status status-${a.status}`}>{STATUS_LABEL[a.status] || a.status}</span>
+                      {a.merged_template_id && (
+                        <span className="tl-merged-tag">已归并到 {templates.find(t => t.id === a.merged_template_id)?.name || `模板 #${a.merged_template_id}`}</span>
+                      )}
                       {a.rights_note && <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>{a.rights_note.slice(0, 30)}</span>}
                     </div>
+                    {analysis?.category_json && (
+                      <div className="tl-cat-line">
+                        {analysis.category_json.primary && <span className="chip">{analysis.category_json.primary}</span>}
+                        {(analysis.category_json.purposes || []).map((p: string) => <span key={p} className="chip">{p}</span>)}
+                        {(analysis.category_json.hooks || []).map((h: string) => <span key={h} className="chip">{h}</span>)}
+                        {analysis.category_json.confirmed && <span className="muted" style={{ fontSize: 11 }}>人工已确认</span>}
+                      </div>
+                    )}
                     <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                       {a.media_kind === 'image' && (
                         <button className="btn primary" onClick={() => runAnalyze(a)} disabled={analyzingId === a.id}>
@@ -347,12 +471,52 @@ export default function CreativeAnalysis() {
                         <DimBlock title="效果推断（非投放数据）" data={analysis.dims_json?.effect} />
                         {analysis.category_json && (
                           <div className="tl-dim">
-                            <div className="tl-dim-title">分类</div>
+                            <div className="tl-dim-title">分类（V4.119 可人工确认 / 修正）</div>
                             <div className="muted" style={{ fontSize: 13 }}>
                               主分类：<b>{analysis.category_json.primary || '—'}</b>
                               {(analysis.category_json.purposes || []).length > 0 && <> · 目的：{analysis.category_json.purposes.join('、')}</>}
                               {(analysis.category_json.hooks || []).length > 0 && <> · 钩子：{analysis.category_json.hooks.join('、')}</>}
+                              {analysis.category_json.confirmed && <span className="tl-ok-inline">已人工确认</span>}
                             </div>
+                            {(() => {
+                              const ce = catEdits[analysis.id] || categoryEditOf(analysis)
+                              return (
+                                <div className="tl-cat-edit">
+                                  <label className="field">
+                                    <span className="label">主分类（12 类）</span>
+                                    <select value={ce.primary} onChange={e => setCatEdits(prev => ({
+                                      ...prev, [analysis.id]: { ...(prev[analysis.id] || categoryEditOf(analysis)), primary: e.target.value },
+                                    }))}>
+                                      <option value="">— 请选择 —</option>
+                                      {(taxonomy?.primary_categories || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                  </label>
+                                  <div className="tl-cat-options">
+                                    <div><b>推广目的</b>：{(taxonomy?.purposes || []).map((p: string) => (
+                                      <label key={p} className="tl-check">
+                                        <input type="checkbox" checked={ce.purposes.includes(p)} onChange={e => setCatEdits(prev => {
+                                          const cur = prev[analysis.id] || categoryEditOf(analysis)
+                                          return { ...prev, [analysis.id]: { ...cur,
+                                            purposes: e.target.checked ? [...cur.purposes, p] : cur.purposes.filter((x: string) => x !== p) } }
+                                        })} />{p}
+                                      </label>
+                                    ))}</div>
+                                    <div><b>钩子类型</b>：{(taxonomy?.hooks || []).map((h: string) => (
+                                      <label key={h} className="tl-check">
+                                        <input type="checkbox" checked={ce.hooks.includes(h)} onChange={e => setCatEdits(prev => {
+                                          const cur = prev[analysis.id] || categoryEditOf(analysis)
+                                          return { ...prev, [analysis.id]: { ...cur,
+                                            hooks: e.target.checked ? [...cur.hooks, h] : cur.hooks.filter((x: string) => x !== h) } }
+                                        })} />{h}
+                                      </label>
+                                    ))}</div>
+                                  </div>
+                                  <button className="btn" onClick={() => saveCategory(analysis)} disabled={workingTemplateId === analysis.id * -1}>
+                                    {workingTemplateId === analysis.id * -1 ? '保存中…' : '确认分类'}
+                                  </button>
+                                </div>
+                              )
+                            })()}
                           </div>
                         )}
                         {analysis.template_guess?.name && (
@@ -375,6 +539,120 @@ export default function CreativeAnalysis() {
                         )}
                       </div>
                     )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </>
+      ) : tab === 'merge' ? (
+        /* ===== V4.119 分类归并 + golden 沉淀 ===== */
+        <>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="tl-section-title">归并规则（Q4 冻结口径）</div>
+            <div className="muted" style={{ fontSize: 13, lineHeight: 1.7 }}>
+              主分类相同 + 推广目的相同 + 钩子类型相同 + 信息结构相似度 ≥ {Math.round((taxonomy?.similarity_threshold ?? 0.45) * 100)}%
+              → 归并候选组。只有「已解构 + 框架完整度 ≥ {Math.round((taxonomy?.min_completeness ?? 0.5) * 100)}% + 分类已归一」的素材进候选。
+              golden 默认选完整度最高（并列时最近导入），人工可覆盖；归并为软标记，原件与解构永久保留、可撤销。
+            </div>
+            {mergeMsg && <div className="tl-ok">{mergeMsg}</div>}
+            {mergeErr && <div className="err">{mergeErr}</div>}
+            <div style={{ marginTop: 10 }}>
+              <button className="btn" onClick={() => { loadCandidates(); loadLibraryMeta() }} disabled={candLoading}>
+                {candLoading ? '刷新中…' : '刷新候选组'}
+              </button>
+            </div>
+          </div>
+
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="tl-section-title">
+              ① 归并候选 <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>
+                （{(candidates?.groups || []).length} 组；{candidates?.excluded?.length || 0} 条未进候选）
+              </span>
+            </div>
+            {(candidates?.excluded || []).length > 0 && (
+              <div className="tl-warn">
+                未进候选：{candidates.excluded.slice(0, 8).map((x: any) => `${x.title}（${x.reason}）`).join('；')}
+                {candidates.excluded.length > 8 ? ` 等 ${candidates.excluded.length} 条` : ''}。可在「素材库 · 导入与解构」的「看解构」中确认分类或重新解构。
+              </div>
+            )}
+            {(candidates?.groups || []).length === 0 && !candLoading && (
+              <div className="muted">暂无候选组。先在素材库解构素材，并确认主分类 / 目的 / 钩子。</div>
+            )}
+            <div className="tl-merge-list">
+              {(candidates?.groups || []).map((g: any) => {
+                const ids = membersOf(g)
+                const golden = goldenPicks[g.key] || g.golden_asset_id
+                return (
+                  <div key={g.key} className="tl-merge-group">
+                    <div className="tl-merge-head">
+                      <b>{g.suggested_name}</b>
+                      <span className="muted">{g.size} 条 · 信息结构相似度 {Math.round(g.similarity * 100)}% · {g.category_source === 'manual' ? '人工分类' : 'AI 建议'}</span>
+                    </div>
+                    <div className="tl-merge-members">
+                      {g.members.map((m: any) => (
+                        <label key={m.asset_id} className={`tl-merge-member ${m.asset_id === golden ? 'is-golden' : ''}`}>
+                          <input type="checkbox" checked={ids.includes(m.asset_id)} onChange={() => toggleMember(g, m.asset_id)} />
+                          <input type="radio" name={`golden-${g.key}`} checked={m.asset_id === golden}
+                            onChange={() => setGoldenPicks(prev => ({ ...prev, [g.key]: m.asset_id }))} title="选为 golden" />
+                          <span className="tl-merge-member-title">{m.title}</span>
+                          <span className="muted">完整度 {Math.round(m.completeness * 100)}%</span>
+                          {m.asset_id === g.golden_asset_id && <span className="tl-golden-tag">建议 golden</span>}
+                          {m.merged_template_id && <span className="muted">已归并 #{m.merged_template_id}</span>}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="tl-merge-actions">
+                      <label className="field">
+                        <span className="label">模板名称（可留空用建议名）</span>
+                        <input value={templateNames[g.key] || ''} onChange={e => setTemplateNames(prev => ({ ...prev, [g.key]: e.target.value }))}
+                          placeholder={g.suggested_name} />
+                      </label>
+                      <button className="btn primary" onClick={() => confirmMerge(g)} disabled={mergingKey === g.key}>
+                        {mergingKey === g.key ? '沉淀中…' : '确认归并并沉淀模板'}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="tl-section-title">② 已沉淀模板 <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>（{templates.length} 条）</span></div>
+            {templates.length === 0 && <div className="muted">还没有模板。确认一组候选后即可沉淀。</div>}
+            <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14 }}>
+              {templates.map(t => {
+                const goldenAsset = assets.find(a => a.id === t.golden_asset_id)
+                return (
+                  <div key={t.id} className="card tl-template-card">
+                    <div className="tl-template-head">
+                      <b>{t.name}</b>
+                      <span className="muted">{t.primary_category} · {(t.purpose || []).join('、')} · v{t.version}</span>
+                    </div>
+                    <div className="tl-template-golden">
+                      {goldenAsset?.file ? <img src={api.fileUrl(goldenAsset.thumb || goldenAsset.file)} alt="golden" /> : <span className="muted">无 golden 预览</span>}
+                      <div>
+                        <div className="muted" style={{ fontSize: 12 }}>唯一表达（golden）</div>
+                        <div>{goldenAsset?.title || `素材 #${t.golden_asset_id || '—'}`}</div>
+                        <div className="muted" style={{ fontSize: 11 }}>骨架字段 {Object.keys(t.image_skeleton_json || {}).length} 项 · 归并 {(t.merged_asset_ids || []).length} 条</div>
+                      </div>
+                    </div>
+                    <div className="tl-template-members">
+                      {(t.merged_asset_ids || []).map((id: number) => (
+                        <div key={id} className="tl-template-member">
+                          <span>素材 #{id}{id === t.golden_asset_id ? '（golden）' : ''}</span>
+                          {id !== t.golden_asset_id && (
+                            <>
+                              <button className="btn" disabled={workingTemplateId === t.id}
+                                onClick={() => setGolden(t, id)}>设为 golden</button>
+                              <button className="btn" disabled={workingTemplateId === t.id}
+                                onClick={() => unmerge(t, id)}>撤销归并</button>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )
               })}
@@ -465,6 +743,16 @@ export default function CreativeAnalysis() {
       )}
     </div>
   )
+}
+
+/** V4.119：分类编辑初值——人工确认值优先，否则取 AI 解构建议。 */
+function categoryEditOf(analysis: any) {
+  const cat = analysis?.category_json || {}
+  return {
+    primary: cat.primary || '',
+    purposes: Array.isArray(cat.purposes) ? cat.purposes : [],
+    hooks: Array.isArray(cat.hooks) ? cat.hooks : [],
+  }
 }
 
 /** 一个维度分区：把 {key:{value,confidence,caveat}} 渲染成可读列表。 */

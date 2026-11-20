@@ -1226,6 +1226,19 @@ export const api = {
     req<any>('/api/template-library/import', { method: 'POST', body: JSON.stringify(payload) }),
   tlAnalyze: (assetId: number) =>
     req<any>(`/api/template-library/analyze/${assetId}`, { method: 'POST' }),
+  // V4.119 素材创意模板库：分类字典 / 归并候选 / 人工确认沉淀 / golden 覆盖 / 撤销归并
+  tlTaxonomy: () =>
+    req<any>('/api/template-library/taxonomy'),
+  tlMergeCandidates: () =>
+    req<any>('/api/template-library/merge-candidates'),
+  tlMergeConfirm: (payload: any) =>
+    req<any>('/api/template-library/merge/confirm', { method: 'POST', body: JSON.stringify(payload) }),
+  tlConfirmCategory: (analysisId: number, payload: any) =>
+    req<any>(`/api/template-library/analyses/${analysisId}/category`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  tlSetGolden: (templateId: number, payload: any) =>
+    req<any>(`/api/template-library/templates/${templateId}/golden`, { method: 'POST', body: JSON.stringify(payload) }),
+  tlUnmerge: (templateId: number, payload: any) =>
+    req<any>(`/api/template-library/templates/${templateId}/unmerge`, { method: 'POST', body: JSON.stringify(payload) }),
   // V4.52 创意工作台 · 创意策略 / 路线规划 + 历史库
   creativePlan: (payload: { title?: string; analysis: any; platforms: string[]; gen_image?: boolean; gen_video?: boolean }) =>
     req<any>('/api/creative-plan', { method: 'POST', body: JSON.stringify(payload) }),

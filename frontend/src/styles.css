@@ -2433,3 +2433,35 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .tl-dim-val { flex: 1; }
 .tl-dim-conf { color: var(--primary, #2563eb); font-variant-numeric: tabular-nums; }
 .tl-dim-caveat { color: var(--muted, #6b7280); font-size: 11px; }
+
+/* ===== V4.119 素材创意模板库：分类确认 + 归并候选 + golden 沉淀 ===== */
+.tl-merged-tag { display: inline-block; margin-left: 6px; padding: 2px 8px; border-radius: 999px;
+  background: rgba(124,58,237,.12); color: #6d28d9; font-size: 11px; font-weight: 600; }
+.tl-cat-line { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 6px; }
+.tl-cat-line .chip { font-size: 11px; padding: 1px 7px; }
+.tl-ok-inline { margin-left: 6px; color: #16803c; font-size: 11px; }
+.tl-cat-edit { margin-top: 10px; padding: 10px; border-radius: 8px; background: var(--card-2, rgba(0,0,0,.03)); }
+.tl-cat-edit .field { margin-bottom: 8px; }
+.tl-cat-options { display: grid; gap: 6px; margin-bottom: 8px; font-size: 12px; }
+.tl-check { display: inline-flex; align-items: center; gap: 3px; margin-right: 10px; cursor: pointer; }
+.tl-merge-list { display: grid; gap: 12px; }
+.tl-merge-group { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--card-2, rgba(0,0,0,.02)); }
+.tl-merge-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.tl-merge-head b { font-size: 14px; }
+.tl-merge-members { display: grid; gap: 6px; }
+.tl-merge-member { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 7px 9px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card, #fff); font-size: 12px; cursor: pointer; }
+.tl-merge-member.is-golden { border-color: #7c3aed; background: rgba(124,58,237,.06); }
+.tl-merge-member-title { flex: 1; min-width: 140px; font-weight: 600; }
+.tl-golden-tag { padding: 2px 7px; border-radius: 999px; background: rgba(124,58,237,.14); color: #6d28d9; font-size: 11px; }
+.tl-merge-actions { display: flex; gap: 12px; align-items: flex-end; margin-top: 10px; }
+.tl-merge-actions .field { flex: 1; }
+.tl-template-card { border: 1px solid var(--line); box-shadow: none; }
+.tl-template-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline; }
+.tl-template-golden { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+.tl-template-golden img { width: 92px; height: 92px; object-fit: contain; border-radius: 8px;
+  background: var(--card-2, rgba(0,0,0,.04)); }
+.tl-template-members { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 6px; }
+.tl-template-member { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
+  padding: 4px 0; font-size: 12px; }
+.tl-template-member .btn { height: 26px; padding: 0 9px; font-size: 12px; }

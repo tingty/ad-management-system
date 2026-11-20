@@ -24,7 +24,8 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      WorkshopAnalyzeRequest, WorkshopGenerateRequest,
                      MediaImageSlot, MediaCopyVariant,
                      AssetSourceOut, AssetSourceCreate, AssetAnalysisOut, AssetAnalysisCreate,
-                     AssetImportRequest, TemplateOut, TemplateCreate, TemplateUpdate)
+                     AssetImportRequest, TemplateOut, TemplateCreate, TemplateUpdate,
+                     CategoryConfirmIn, MergeConfirmIn, GoldenOverrideIn, UnmergeIn)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import (get_llm_with_info, finalize_invocation, parse_json, get_video,
@@ -3624,7 +3625,7 @@ def _asset_source_out(r: "CreativeAssetSource") -> dict:
         "file": r.file, "thumb": r.thumb, "source_url": r.source_url, "platform": r.platform,
         "media_kind": r.media_kind or "image", "width": r.width, "height": r.height,
         "duration_sec": r.duration_sec, "rights_note": r.rights_note,
-        "status": r.status or "imported",
+        "status": r.status or "imported", "merged_template_id": r.merged_template_id,
         "created_at": _iso(r.created_at), "updated_at": _iso(r.updated_at),
     }
 
@@ -3696,6 +3697,8 @@ async def tl_delete_asset(asset_id: int, db: Session = Depends(get_db),
         (CreativeTemplate.golden_asset_id == asset_id)).first()
     if used:
         raise HTTPException(400, "该素材为模板的唯一表达，请先移除引用再删除")
+    if r.merged_template_id:
+        raise HTTPException(400, "该素材已归并到模板，请先撤销归并再删除（原件不会被自动清理）")
     db.delete(r)
     db.query(CreativeAssetAnalysis).filter(CreativeAssetAnalysis.asset_id == asset_id).delete(synchronize_session=False)
     db.commit()
@@ -3796,6 +3799,21 @@ async def tl_delete_template(tid: int, db: Session = Depends(get_db),
     r = db.query(CreativeTemplate).filter_by(id=tid, owner_id=user.id).first()
     if not r:
         raise HTTPException(404, "模板不存在或无权删除")
+    # V4.119：删除模板只解除软归并标记，素材原件与解构记录永久保留。
+    ids = list(r.merged_asset_ids or [])
+    if r.golden_asset_id and r.golden_asset_id not in ids:
+        ids.append(r.golden_asset_id)
+    if ids:
+        db.query(CreativeAssetSource).filter(
+            CreativeAssetSource.owner_id == user.id,
+            CreativeAssetSource.id.in_(ids),
+            CreativeAssetSource.merged_template_id == tid).update(
+                {"merged_template_id": None}, synchronize_session=False)
+        db.query(CreativeAssetSource).filter(
+            CreativeAssetSource.owner_id == user.id,
+            CreativeAssetSource.id.in_(ids),
+            CreativeAssetSource.status == "merged").update(
+                {"status": "analyzed"}, synchronize_session=False)
     db.delete(r); db.commit()
     return {"ok": True}
 
@@ -3886,3 +3904,189 @@ async def tl_analyze_asset(asset_id: int, db: Session = Depends(get_db),
     asset.status = st if st != "unavailable" else "unavailable"
     db.commit()
     return _asset_analysis_out(r)
+
+
+# ===========================================================================
+# V4.119 素材创意模板库：分类确认 + 归并候选 + golden 沉淀（AI 建议 / 人工确认）
+# ===========================================================================
+def _tl_latest_analyses(db: Session, owner_id: int) -> dict:
+    """一个素材可能多次解构，归并只用最新一条，避免旧结论污染候选。"""
+    rows = db.query(CreativeAssetAnalysis).filter(
+        CreativeAssetAnalysis.owner_id == owner_id).order_by(CreativeAssetAnalysis.id.desc()).all()
+    out: dict = {}
+    for row in rows:
+        if row.asset_id and row.asset_id not in out:
+            out[row.asset_id] = row
+    return out
+
+
+@router.get("/template-library/taxonomy")
+async def tl_taxonomy(user: User = Depends(require_roles(*CAN_EDIT))):
+    """Q4 冻结的分类字典与归并阈值（前端下拉 / 规则说明的唯一来源）。"""
+    import asset_merge as am
+    return am.taxonomy()
+
+
+@router.get("/template-library/merge-candidates")
+async def tl_merge_candidates(db: Session = Depends(get_db), user: User = Depends(require_roles(*CAN_EDIT))):
+    """按归并键 12 类 + 目的 + 钩子 + 信息结构相似度，给出候选组与排除原因。"""
+    import asset_merge as am
+    assets = db.query(CreativeAssetSource).filter(CreativeAssetSource.owner_id == user.id).all()
+    latest = _tl_latest_analyses(db, user.id)
+    items = []
+    for asset in assets:
+        row = latest.get(asset.id)
+        analysis = _asset_analysis_out(row) if row else {"status": "", "completeness": 0, "category_json": {}}
+        items.append({"asset": _asset_source_out(asset), "analysis": analysis,
+                      "merged_template_id": asset.merged_template_id})
+    return am.build_candidates(items)
+
+
+@router.patch("/template-library/analyses/{analysis_id}/category", response_model=AssetAnalysisOut)
+async def tl_confirm_analysis_category(analysis_id: int, body: CategoryConfirmIn,
+                                       db: Session = Depends(get_db),
+                                       user: User = Depends(require_roles(*CAN_EDIT))):
+    """人工确认 / 修正分类：AI 原始建议保留在 category_json.ai_suggestion，可追溯。"""
+    import asset_merge as am
+    row = db.query(CreativeAssetAnalysis).filter_by(id=analysis_id, owner_id=user.id).first()
+    if not row:
+        raise HTTPException(404, "解构记录不存在或无权编辑")
+    primary = (body.primary or "").strip()
+    if primary not in am.taxonomy()["primary_categories"]:
+        raise HTTPException(400, "主分类必须来自 12 类冻结字典")
+    purposes = list(dict.fromkeys(str(x).strip() for x in (body.purposes or []) if str(x).strip() in am.PURPOSES))
+    hooks = list(dict.fromkeys(str(x).strip() for x in (body.hooks or []) if str(x).strip() in am.HOOK_TYPES))
+    if not purposes or not hooks:
+        raise HTTPException(400, "请至少选择一个推广目的与一个钩子类型")
+    row.category_json = am.confirm_category(
+        _asset_analysis_out(row), primary, purposes, hooks, user.username, utcnow().isoformat())
+    # 同步维度展示，但 complete 分数仍为视觉解构原始分，人工确认不虚增完整度。
+    dims = dict(row.dims_json or {})
+    dims["category"] = {
+        "primary": {"value": primary, "confidence": 1.0, "in_taxonomy": True},
+        "purpose": {"value": purposes, "confidence": 1.0},
+        "hook": {"value": hooks, "confidence": 1.0},
+    }
+    row.dims_json = dims
+    db.commit(); db.refresh(row)
+    return _asset_analysis_out(row)
+
+
+@router.post("/template-library/merge/confirm", response_model=TemplateOut)
+async def tl_merge_confirm(body: MergeConfirmIn, db: Session = Depends(get_db),
+                           user: User = Depends(require_roles(*CAN_EDIT))):
+    """人工确认归并候选，沉淀一条图片模板（golden 默认按完整度选，可人工覆盖）。"""
+    import asset_merge as am
+    ids = [int(x) for x in (body.asset_ids or []) if isinstance(x, int) or str(x).isdigit()]
+    ids = list(dict.fromkeys(ids))
+    if len(ids) < 1:
+        raise HTTPException(400, "请至少选择一条素材")
+    assets = db.query(CreativeAssetSource).filter(
+        CreativeAssetSource.owner_id == user.id, CreativeAssetSource.id.in_(ids)).all()
+    if len(assets) != len(ids):
+        raise HTTPException(404, "包含不属于你的素材，或素材不存在")
+    for asset in assets:
+        if asset.merged_template_id:
+            raise HTTPException(400, f"素材「{asset.title or asset.id}」已归并，请先撤销归并")
+
+    latest = _tl_latest_analyses(db, user.id)
+    by_id: dict = {}
+    items = []
+    for asset in assets:
+        row = latest.get(asset.id)
+        if not row:
+            raise HTTPException(400, f"素材「{asset.title or asset.id}」尚未解构，无法沉淀模板")
+        analysis = _asset_analysis_out(row)
+        e = am.eligibility(analysis)
+        if not e["eligible"]:
+            raise HTTPException(400, f"素材「{asset.title or asset.id}」不可归并：{e['reason']}")
+        by_id[asset.id] = {"asset": asset, "analysis": analysis, "eligibility": e}
+        items.append({"asset": _asset_source_out(asset), "analysis": analysis,
+                      "merged_template_id": None})
+
+    # 信息结构相似度不足时拒绝：所选 Must 落在同一个自动聚类里，不允许人工硬凑。
+    candidate = am.build_candidates(items)
+    target = None
+    for group in candidate["groups"]:
+        if {m["asset_id"] for m in group["members"]} == set(ids):
+            target = group
+            break
+    if not target:
+        raise HTTPException(400, "所选素材的信息结构相似度低于阈值或归并键不同，请重新选择候选组")
+
+    golden_id = int(body.golden_asset_id) if body.golden_asset_id else int(target["golden_asset_id"])
+    if golden_id not in by_id:
+        raise HTTPException(400, "golden 素材必须在所选范围内")
+    golden_analysis = by_id[golden_id]["analysis"]
+    name = (body.name or target["suggested_name"]).strip()[:255]
+    platforms = sorted({str(a.platform).strip() for a in assets if a.platform and str(a.platform).strip()})
+    t = CreativeTemplate(
+        owner_id=user.id, owner_name=user.username, name=name or target["suggested_name"],
+        primary_category=target["primary"], purpose=[target["purpose"]], platform_tags=platforms,
+        image_skeleton_json=am.build_skeleton(golden_analysis), variables_json=am.build_variables(),
+        golden_asset_id=golden_id, merged_asset_ids=ids, edit_note=body.edit_note,
+        status="active", version=1)
+    db.add(t); db.flush()
+    for asset in assets:
+        asset.merged_template_id = t.id
+        if asset.id != golden_id:
+            asset.status = "merged"  # golden 仍为「已解构」，作为唯一表达可被单独检索
+    db.commit(); db.refresh(t)
+    return _template_out(t)
+
+
+@router.post("/template-library/templates/{tid}/golden", response_model=TemplateOut)
+async def tl_set_golden(tid: int, body: GoldenOverrideIn, db: Session = Depends(get_db),
+                        user: User = Depends(require_roles(*CAN_EDIT))):
+    """人工覆盖 golden：只允许在本模板已归并素材中选，且不放宽候选资格。"""
+    import asset_merge as am
+    t = db.query(CreativeTemplate).filter_by(id=tid, owner_id=user.id).first()
+    if not t:
+        raise HTTPException(404, "模板不存在或无权编辑")
+    member_ids = list(t.merged_asset_ids or [])
+    if t.golden_asset_id and t.golden_asset_id not in member_ids:
+        member_ids.append(t.golden_asset_id)
+    if body.asset_id not in member_ids:
+        raise HTTPException(400, "golden 必须属于本模板已归并的素材")
+    row = _tl_latest_analyses(db, user.id).get(body.asset_id)
+    if not row:
+        raise HTTPException(400, "该素材没有可用解构结果")
+    analysis = _asset_analysis_out(row)
+    e = am.eligibility(analysis)
+    if not e["eligible"]:
+        raise HTTPException(400, f"该素材不可作为 golden：{e['reason']}")
+    t.golden_asset_id = body.asset_id
+    t.image_skeleton_json = am.build_skeleton(analysis)
+    if body.edit_note:
+        t.edit_note = body.edit_note[:500]
+    t.version = (t.version or 1) + 1
+    db.commit(); db.refresh(t)
+    return _template_out(t)
+
+
+@router.post("/template-library/templates/{tid}/unmerge", response_model=TemplateOut)
+async def tl_unmerge(tid: int, body: UnmergeIn, db: Session = Depends(get_db),
+                     user: User = Depends(require_roles(*CAN_EDIT))):
+    """撤销软归并：原件与解构永久保留，仅清除归属标记；golden 需先改选。"""
+    t = db.query(CreativeTemplate).filter_by(id=tid, owner_id=user.id).first()
+    if not t:
+        raise HTTPException(404, "模板不存在或无权编辑")
+    ids = list(dict.fromkeys(int(x) for x in (body.asset_ids or []) if str(x).isdigit()))
+    if not ids:
+        raise HTTPException(400, "请选择要撤销归并的素材")
+    if t.golden_asset_id in ids:
+        raise HTTPException(400, "golden 是模板的唯一表达，请先改选 golden 再撤销")
+    assets = db.query(CreativeAssetSource).filter(
+        CreativeAssetSource.owner_id == user.id, CreativeAssetSource.id.in_(ids)).all()
+    if len(assets) != len(ids):
+        raise HTTPException(404, "包含无效素材")
+    for asset in assets:
+        if asset.merged_template_id != tid:
+            raise HTTPException(400, f"素材「{asset.title or asset.id}」未归并到本模板")
+        asset.merged_template_id = None
+        if asset.status == "merged":
+            asset.status = "analyzed"
+    t.merged_asset_ids = [x for x in (t.merged_asset_ids or []) if int(x) not in ids]
+    t.version = (t.version or 1) + 1
+    db.commit(); db.refresh(t)
+    return _template_out(t)

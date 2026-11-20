@@ -564,6 +564,7 @@ class AssetSourceOut(BaseModel):
     duration_sec: Optional[float] = None
     rights_note: Optional[str] = None
     status: str = "imported"
+    merged_template_id: Optional[int] = None  # V4.119 软归并归属模板（原件保留）
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -679,6 +680,37 @@ class TemplateUpdate(BaseModel):
     edit_note: Optional[str] = None
     status: Optional[str] = None
     reset_to_ai: bool = False   # 为 true 时清空 edit_note，回到 AI 原始建议（V4.119 用，此处预留）
+
+
+# ============ V4.119 素材创意模板库：分类确认 / 归并候选 / golden 沉淀 ============
+class CategoryConfirmIn(BaseModel):
+    """人工确认或修正一条解构的分类（12 类主分类 + 目的 + 钩子）。"""
+    model_config = {"protected_namespaces": ()}
+    primary: str
+    purposes: List[str] = []
+    hooks: List[str] = []
+
+
+class MergeConfirmIn(BaseModel):
+    """人工确认归并候选组，沉淀为一条图片模板（golden 可人工覆盖）。"""
+    model_config = {"protected_namespaces": ()}
+    asset_ids: List[int]
+    name: Optional[str] = None
+    golden_asset_id: Optional[int] = None
+    edit_note: Optional[str] = None
+
+
+class GoldenOverrideIn(BaseModel):
+    """人工覆盖 golden：只能从本模板已归并素材中选，且必须满足候选资格。"""
+    model_config = {"protected_namespaces": ()}
+    asset_id: int
+    edit_note: Optional[str] = None
+
+
+class UnmergeIn(BaseModel):
+    """撤销软归并：原件与解构保留，仅清除归并归属标记。"""
+    model_config = {"protected_namespaces": ()}
+    asset_ids: List[int]
 
 
 class CWRoute(BaseModel):
