@@ -15,6 +15,9 @@ npm-debug.log*
 backend/*.db
 backend/*.db-wal
 backend/*.db-shm
+/ad_material.db
+/ad_material.db-wal
+/ad_material.db-shm
 backend/*.sqlite
 backend/*.bak*
 backend/uploads/

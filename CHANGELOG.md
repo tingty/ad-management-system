@@ -2,6 +2,31 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.127 广告主数据 P1-A：统一事实表建表与版本化迁移骨架
+
+**发布日期**：2026-11-24 15:12
+**变更类型**：新增 / 发布
+**涉及模块**：广告主数据统一数据存储层、数据模型与轻量迁移、版本化迁移工具、展示名配置层、订单最终视图、后端接口与迁移脚本、回滚工具、功能开发文档、专项测试、发版数据、发版流程、系统版本
+**变更摘要**：按唯一维护文档第六 / 七 / 八章落地 P1-A：一次性建齐原始层、统一事实表（20 业务字段）、商品/扩展/映射/展示名等表与定期任务预留表，创建订单最终视图 `v_api_order_final`，并兑现三条保障中的保障一（展示名配置种子）与保障三（版本化列迁移 + `rename_column()` 四处同步 + 迁移前自动备份）。本版只建结构与配置，不改任何现有表与业务、不写入真实拉取数据；映射落库与订单回填留待 P1-B/C。
+**更新要点**
+- 【新增】`models.py` 新增 10 张表：`api_source_record`（原始 JSON + SHA256 + 唯一幂等键）、`api_unified_fact`（20 业务字段 + 技术列，金额 `Numeric(18,6)`）、`api_fact_item`、`api_fact_ext`、`api_field_map`（含 version/effective_from）、`api_field_label`、`schema_migrations`、`schema_view_def`、`api_fetch_task` / `api_fetch_run`（P2 预留）。冲突消解按定稿：commissionId 复用已有列、correctionReason/postingDate 提升可见、6 列新建、不建 `item_quantity`。
+- 【新增】订单最终视图 `v_api_order_final`：按 `(template_id, connection_id, order_id)` 聚合净销售 / 净佣金 / 明细条数，正负相抵净额归零判 `is_void`；不使用 CJ 官方不存在的 `REVERSED` 枚举；视图定义存 `schema_view_def`，改名时同步重建。
+- 【新增】保障一：`api_field_label` 幂等种子 20 行 fact 配置（含中文名、单位、格式、枚举中文映射、排序、可见性）+ 6 行 order_final 配置；`correction_reason` / `posting_date` 按 V3.1 定稿为可见。报表前端仍不硬编码中文字段名。
+- 【新增】保障三：`migrations.py` 版本函数注册 + `schema_migrations` 版本记录（V4.127.1），`ensure_schema()` 可重复执行；`rename_column(old,new)` 一次同步物理列 → `api_field_map.target_field` → `api_field_label` → 视图定义，并审计写入代码/报表查询中的旧名引用，有残留则拒绝迁移（除非显式 force）。
+- 【新增】`scripts/migrate_column.py`：`audit` 只检查引用、`rename` 默认预演，加 `--yes` 才写库且自动先做数据库在线快照；`rollback.py` 的 `restore-db` 可回滚。只改「叫法」仍优先改展示名，不动物理列。
+- 【新增】`tests/test_advertiser_schema_v4127.py`：15 项专项，覆盖空库建表 / 9 张表 + 视图 / 20 字段与 Numeric 精度 / 历史库补列 / 幂等 / 冲突比对 / 种子可见性 / 视图净额与取消单 / 改名四处同步与非法输入。
+**本次优化与更改的功能 / 模块**
+- 【新增】广告主数据从「只有模板和连接」升级为「具备统一数据存储骨架」：后续 P1-B 可按映射写历史、P1-C 可合并回填、P3 报表可读展示名配置，无需再改表结构。
+**影响范围**
+- 兼容：只新增表、视图与迁移工具，不修改既有 `api_channel_template` / `api_connection` / 其他业务表结构与数据；菜单、页面、接口契约完全不变。
+- 边界：本版无数据拉取、无报表界面变更、无自动调度执行；真实 CJ 数据验收仍依赖有效 Token/CID，模拟测试不能替代。
+- 部署：无新增 pip 依赖；真实环境执行 `git pull && docker compose up -d --build`，启动时 `ensure_schema()` 自动建表并写版本记录。需要改列名时按 `scripts/migrate_column.py` 流程先备份再迁移。
+**验证**
+- 专项：`test_advertiser_schema_v4127.py` 15/15 通过。
+- 全量回归：全绿（含 V4.124/V4.125/V4.126 既有契约测试无回归）；前端 `tsc --noEmit` 与 `vite build` 通过（本版无前端改动）。
+- 隔离库实测：空库两次 `ensure_schema()` 幂等、版本只应用一次；模拟旧库缺列自动补齐；正负相抵订单视图 `is_void=1` 且净额为 0；改名 `sale_amount_usd → net_sale_amount_usd` 后物理列 / 映射 / 展示名 / 视图 SQL 四处一致，版本表有记录；`verify_schema()` 返回 tables_ok / view_ok / 20 字段 / 20 标签。
+- `prepare_release --sync` 后独立进程 `prepare_release --check` 通过，系统版本 / CHANGELOG / 发布数据一致为 V4.127。
+
 ## V4.126 API对接：弹窗表单组件样式统一
 
 **发布日期**：2026-11-24 14:58

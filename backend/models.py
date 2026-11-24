@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, Float
+from sqlalchemy import (Column, Integer, String, Text, Boolean, DateTime, JSON, Float,
+                        Date, Numeric, UniqueConstraint, Index)
 from datetime import datetime, timezone
 from database import Base
 
@@ -423,3 +424,179 @@ class ApiConnection(Base):
     schedule_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+# ============ V4.127 统一数据存储层（P1-A：建表 + 迁移骨架） ============
+# 设计权威：docs/广告主数据模块功能开发文档_20261124.html 第六章 / 第七章 / 第八章。
+# 只新增表，不改动任何既有表与既有业务；视图 v_api_order_final 在 migrations.py 中创建。
+
+class SchemaMigration(Base):
+    """保障三：版本化列迁移记录。每次结构变更一行，ensure_schema 幂等执行。"""
+    __tablename__ = "schema_migrations"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    version = Column(String(32), nullable=False, unique=True, index=True)  # 如 V4.127.1
+    name = Column(String(128), nullable=True)
+    applied_at = Column(DateTime, default=utcnow)
+    note = Column(Text, nullable=True)
+
+
+class SchemaViewDef(Base):
+    """保障三：视图定义版本化存储。rename_column 同步更新这里，避免视图仍引用旧列。"""
+    __tablename__ = "schema_view_def"
+    name = Column(String(64), primary_key=True)          # 如 v_api_order_final
+    sql = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ApiSourceRecord(Base):
+    """原始层：每条 commission 原样 JSON 留痕，零丢失、可对账、可 replay。"""
+    __tablename__ = "api_source_record"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    template_id = Column(String(64), nullable=False, index=True)
+    connection_id = Column(Integer, nullable=True, index=True)
+    external_id = Column(String(128), nullable=False, index=True)   # commissionId（幂等键）
+    payload_json = Column(JSON, nullable=False)                     # 上游原始响应，不删字段
+    payload_sha256 = Column(String(64), nullable=True)              # 内容哈希，检测上游变更
+    first_seen = Column(DateTime, default=utcnow)
+    last_seen = Column(DateTime, default=utcnow, onupdate=utcnow)
+    __table_args__ = (
+        UniqueConstraint("template_id", "connection_id", "external_id", name="uq_api_source_ext"),
+    )
+
+
+class ApiUnifiedFact(Base):
+    """统一事实表：一条 commission 一行。20 个业务字段 + 技术列；金额一律 Numeric(18,6)。"""
+    __tablename__ = "api_unified_fact"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # ---- 技术列（报表默认隐藏）----
+    source_record_id = Column(Integer, nullable=True, index=True)
+    external_id = Column(String(128), nullable=True, index=True)
+    template_id = Column(String(64), nullable=True, index=True)
+    connection_id = Column(Integer, nullable=True, index=True)
+    run_id = Column(Integer, nullable=True, index=True)
+    original = Column(Boolean, nullable=True)          # original=true 原始单 / false 修正 delta
+    original_action_id = Column(String(128), nullable=True, index=True)
+    # ---- 20 个业务字段 ----
+    commission_id = Column(String(64), nullable=True, index=True)      # 1 ID（复用，兼幂等键）
+    advertiser_name = Column(String(255), nullable=True)               # 2 广告主名称
+    order_id = Column(String(128), nullable=True, index=True)          # 3 订单号 / 合并键
+    event_date = Column(Date, nullable=True, index=True)               # 4 事件日期
+    campaign_name = Column(String(255), nullable=True)                 # 5 品牌名 ← advertiserName
+    action_status = Column(String(32), nullable=True)                  # 6 订单状态（官方小写枚举）
+    event_name = Column(String(255), nullable=True)                    # 7 事件名 ← actionTrackerName
+    sale_amount_usd = Column(Numeric(18, 6), nullable=True)            # 8 销售金额
+    commission_amount_usd = Column(Numeric(18, 6), nullable=True)      # 9 发布者佣金
+    unit_price_usd = Column(Numeric(18, 6), nullable=True)             # 10 订单级均价（派生）
+    validation_status = Column(String(32), nullable=True)              # 11 审核状态
+    is_void = Column(Boolean, nullable=True, default=False, server_default="0")            # 12 合并后取消单（派生）
+    ad_id = Column(String(64), nullable=True)                          # 13 aid（可空）
+    click_date = Column(DateTime, nullable=True)                       # 14 clickDate（可空）
+    correction_reason = Column(String(64), nullable=True)              # 15 原技术列→提升可见（可空）
+    country = Column(String(16), nullable=True)                        # 16 顶层 country（可空）
+    coupon = Column(String(255), nullable=True)                        # 17 顶层 coupon（可空）
+    posting_date = Column(DateTime, nullable=True, index=True)         # 18 原技术列→提升可见 + 增量水位
+    publisher_id = Column(String(64), nullable=True, index=True)       # 19 渠道商 CID（与连接校验）
+    publisher_name = Column(String(255), nullable=True)                # 20 渠道商名称
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    __table_args__ = (
+        UniqueConstraint("template_id", "external_id", name="uq_api_fact_external"),
+        Index("ix_api_fact_order", "template_id", "connection_id", "order_id"),
+    )
+
+
+class ApiFactItem(Base):
+    """商品子表：quantity 只存这里，不进统一事实表。"""
+    __tablename__ = "api_fact_item"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    fact_id = Column(Integer, nullable=False, index=True)
+    sku = Column(String(128), nullable=True)
+    quantity = Column(Integer, nullable=True)
+    unit_price_usd = Column(Numeric(18, 6), nullable=True)   # perItemSaleAmountUsd 精确值
+    commission_usd = Column(Numeric(18, 6), nullable=True)
+    ext_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+
+class ApiFactExt(Base):
+    """模板特有字段扩展层：新兴字段先落原始层 + 这里，不急着改主表。"""
+    __tablename__ = "api_fact_ext"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    fact_id = Column(Integer, nullable=False, index=True)
+    template_id = Column(String(64), nullable=True, index=True)
+    data_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+
+
+class ApiFieldMap(Base):
+    """字段映射配置（一一映射载体）。加字段 = 加行；version/effective_from 支持 replay 回放。"""
+    __tablename__ = "api_field_map"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    template_id = Column(String(64), nullable=False, index=True)
+    source_path = Column(String(128), nullable=False)    # 上游路径，如 publisherName / items[].sku
+    target_field = Column(String(128), nullable=False)   # 如 fact.publisher_name / __skip__
+    transform = Column(String(32), nullable=True)        # direct / decimal / utc_date / derived / skip ...
+    version = Column(Integer, default=1, server_default="1", nullable=False)
+    effective_from = Column(DateTime, nullable=True)
+    enabled = Column(Boolean, default=True, server_default="1")
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    __table_args__ = (
+        UniqueConstraint("template_id", "source_path", "target_field", "version", name="uq_api_field_map"),
+    )
+
+
+class ApiFieldLabel(Base):
+    """保障一：展示名配置层。报表表头 / 顺序 / 单位 / 格式全部读这里，前端不硬编码中文名。"""
+    __tablename__ = "api_field_label"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scope = Column(String(32), nullable=False, default="fact")  # fact / order_final / item
+    column_key = Column(String(128), nullable=False)
+    label = Column(String(128), nullable=False)
+    unit = Column(String(32), nullable=True)
+    format = Column(String(32), nullable=True)              # decimal2 / date / datetime / bool / enum ...
+    enum_map_json = Column(JSON, nullable=True)             # 枚举值 → 中文展示
+    sort_no = Column(Integer, default=0, server_default="0")
+    visible = Column(Boolean, default=True, server_default="1")
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    __table_args__ = (
+        UniqueConstraint("scope", "column_key", name="uq_api_field_label"),
+    )
+
+
+class ApiFetchTask(Base):
+    """P2 预留：定期拉取任务。V4.127 只建表，调度逻辑在 P2 接入；保留 connection.schedule_json 兼容。"""
+    __tablename__ = "api_fetch_task"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    connection_id = Column(Integer, nullable=False, index=True)
+    name = Column(String(128), nullable=True)
+    enabled = Column(Boolean, default=False)
+    frequency = Column(String(16), default="daily")       # daily / 6h
+    hour = Column(Integer, default=2)
+    lookback_days = Column(Integer, default=7)
+    backfill_days = Column(Integer, default=90)
+    status = Column(String(24), default="idle")           # idle / running / error
+    last_run_at = Column(DateTime, nullable=True)
+    next_run_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ApiFetchRun(Base):
+    """P2 预留：每次拉取的运行记录（条数 / 游标 / 错误），重启可续跑、失败不静默。"""
+    __tablename__ = "api_fetch_run"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(Integer, nullable=True, index=True)
+    connection_id = Column(Integer, nullable=True, index=True)
+    status = Column(String(24), default="running")        # running / success / failed
+    window_from = Column(DateTime, nullable=True)
+    window_to = Column(DateTime, nullable=True)
+    fetched_count = Column(Integer, default=0)
+    inserted_count = Column(Integer, default=0)
+    updated_count = Column(Integer, default=0)
+    cursor_json = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=utcnow)
+    finished_at = Column(DateTime, nullable=True)
