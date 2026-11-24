@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>广告素材体系 · 自学习 / 自探索 / 自升级方案（待确认稿 · 2026-11-23）</title>
+<style>
+  :root{
+    --bg:#f5f7fb; --paper:#ffffff; --ink:#1f2937; --muted:#6b7280;
+    --line:#e5e7eb; --blue:#2563eb; --blue-soft:#eff6ff;
+    --green:#059669; --green-soft:#ecfdf5; --amber:#d97706; --amber-soft:#fffbeb;
+    --red:#dc2626; --red-soft:#fef2f2;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:36px 22px 72px}
+  header{background:linear-gradient(120deg,#1e3a8a,#2563eb);color:#fff;border-radius:16px;padding:30px 34px;margin-bottom:26px}
+  header h1{margin:0 0 8px;font-size:27px;line-height:1.35}
+  header p{margin:0;color:#dbeafe;font-size:14px}
+  .badge{display:inline-block;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);
+    border-radius:99px;padding:3px 12px;font-size:12px;margin-right:8px}
+  section{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:20px;margin:0 0 16px;padding-bottom:10px;border-bottom:2px solid var(--blue-soft);color:#1e3a8a}
+  h3{font-size:16px;margin:22px 0 8px;color:#1e40af}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0;padding-left:24px}
+  li{margin:5px 0}
+  .lead{background:var(--blue-soft);border-left:4px solid var(--blue);border-radius:8px;padding:14px 18px;margin:14px 0}
+  .note{background:var(--amber-soft);border-left:4px solid var(--amber);border-radius:8px;padding:12px 16px;margin:12px 0;font-size:14px}
+  .ok{background:var(--green-soft);border-left:4px solid var(--green);border-radius:8px;padding:12px 16px;margin:12px 0;font-size:14px}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+  th{background:#f8fafc;font-weight:600;color:#334155}
+  td code, p code, li code{background:#f1f5f9;border-radius:4px;padding:1px 5px;font-size:12.5px;color:#0f172a}
+  .tag{display:inline-block;border-radius:5px;padding:1px 8px;font-size:12px;font-weight:600;white-space:nowrap}
+  .t-yes{background:var(--red-soft);color:var(--red)}
+  .t-have{background:var(--green-soft);color:var(--green)}
+  .t-new{background:var(--blue-soft);color:var(--blue)}
+  .t-wait{background:var(--amber-soft);color:var(--amber)}
+  .svgbox{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:12px;margin:16px 0;overflow-x:auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin:14px 0}
+  .card{border:1px solid var(--line);border-radius:10px;padding:16px;background:#fff}
+  .card h4{margin:0 0 8px;font-size:15px;color:#1e40af}
+  .card p{font-size:13.5px;color:var(--muted);margin:4px 0}
+  .phase{display:flex;gap:14px;align-items:flex-start;border-left:3px solid var(--blue);padding:4px 0 16px 18px;margin-left:8px;position:relative}
+  .phase::before{content:"";position:absolute;left:-8px;top:8px;width:13px;height:13px;border-radius:50%;background:var(--blue);border:3px solid #fff;box-shadow:0 0 0 2px var(--blue)}
+  .phase b{color:#1e40af}
+  .q{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:8px 0}
+  .q b{color:#1e40af}
+  footer{text-align:center;color:var(--muted);font-size:12px;padding:16px}
+  @media print{body{background:#fff}section{break-inside:avoid;box-shadow:none}header{background:#1e3a8a !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div><span class="badge">待确认稿</span><span class="badge">仅方案 · 不进入开发</span><span class="badge">2026-11-23</span></div>
+  <h1>广告素材体系：自学习 · 自探索 · 自升级</h1>
+  <p>基于现有《广告管理系统》的最小改动演进方案 —— 解决风格趋同、冷启动无数据、趋势捕捉与人工缺口</p>
+</header>
+
+<section>
+  <h2>一、先自查：你的困惑是否真实存在？</h2>
+  <p>我按当前代码逐项核对，四个困惑<b>都真实存在</b>，且能定位到具体机制；同时发现系统已具备约六成的基础能力，不需要重做。</p>
+  <table>
+    <tr><th width="20%">困惑</th><th width="10%">核实</th><th>代码层面的真实原因</th></tr>
+    <tr><td>① 输出风格统一、不理想</td><td><span class="tag t-yes">真实</span></td>
+      <td><code>CONCEPT_AXES</code> 固定三轴、<code>SCENE_TEXT</code> 按行业写死、<code>concept_count</code> 默认 1；按模板创作一次只注入 <code>routes:[1条]</code>；提示词库 <code>BEST_PRACTICES</code>（AIDA/PAS…）是静态人工预设。输入固定 → 输出必然趋同。</td></tr>
+    <tr><td>② 无数据佐证</td><td><span class="tag t-yes">真实</span></td>
+      <td>数据模型中没有任何效果或评分表；但 <code>CreationHistory</code> 已存 <code>prompt_hash / config_snapshot</code>，具备做版本化追溯的基础。</td></tr>
+    <tr><td>③ 无专业研究员跟进</td><td><span class="tag t-yes">真实</span></td>
+      <td>解构与归并目前依赖逐条人工确认，没有批量趋势判断与优先级排序。</td></tr>
+    <tr><td>④ 捕捉不到设计动向</td><td><span class="tag t-yes">真实</span></td>
+      <td><code>fetchers</code> 只抓落地页做事实取证，<code>web_screenshot</code> 只做网页截图；没有定期外部素材采集，也没有跨批次差异分析。</td></tr>
+  </table>
+  <div class="ok"><b>已经具备、可直接复用的基础：</b>素材三表（原件 / 解构 / 模板）、12 类主分类 + 目的/钩子/信息结构相似度、golden 完整度择优、真实视觉模型与 unavailable 降级、D0 证据门、品牌文字三道防线、现成的定时调度模式（<code>model_health</code> 日调度 / <code>creative_tasks</code> worker）。</div>
+</section>
+
+<section>
+  <h2>二、对你方案的综合判断：方向对，但要做三处关键升级</h2>
+  <p>你提出的「采集 → 解构归档 → 模板库 → 创作 →（未来）反馈」三段式划分是正确的，也符合现有系统结构。但按原样实施会卡在三个地方：</p>
+  <div class="grid">
+    <div class="card"><h4>升级 1 · 采集不是一次性建库</h4><p>素材设计会随时间变化。必须给每批采集打时间标签，做跨批次差异对比，否则模板库会固化在某一时段的风格上。</p></div>
+    <div class="card"><h4>升级 2 · 不等投放数据才开始学习</h4><p>冷启动期用「结构完整度 / 多样性 / 合规 / 一键采用」等弱信号先跑起来，把学习定义为知识资产的积累，而不是等数据回流。</p></div>
+    <div class="card"><h4>升级 3 · 创作端要从「套模板」改成「选范式」</h4><p>当前一条模板 = 一种风格。改成按场景检索多条候选范式、每条路线绑定不同骨架，才能从根上打破趋同。</p></div>
+  </div>
+  <div class="lead"><b>重新定义「自学习」：</b>不是模型自己改代码，而是三件事形成闭环 —— ① 外部优秀素材被解构成可检索的结构化范式；② 每次创作沉淀可度量的弱信号；③ 弱信号调整范式的检索权重。每一次调整都有版本号、可回滚、可追溯。</div>
+</section>
+
+<section>
+  <h2>三、整体使用流程与设计目的</h2>
+  <div class="svgbox">
+    <svg viewBox="0 0 1000 330" width="100%" role="img" aria-label="四层闭环流程图">
+      <defs>
+        <marker id="ar" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#64748b"/></marker>
+      </defs>
+      <rect x="20" y="30" width="210" height="112" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+      <text x="125" y="58" text-anchor="middle" font-size="16" font-weight="700" fill="#1e3a8a">L1 采集</text>
+      <text x="125" y="82" text-anchor="middle" font-size="12" fill="#334155">媒体平台 / 素材站 / 上传</text>
+      <text x="125" y="103" text-anchor="middle" font-size="12" fill="#334155">定期任务 + 批次时间标签</text>
+      <text x="125" y="124" text-anchor="middle" font-size="11" fill="#64748b">目的：持续获得外部优秀样本</text>
+
+      <rect x="270" y="30" width="210" height="112" rx="10" fill="#ecfdf5" stroke="#059669"/>
+      <text x="375" y="58" text-anchor="middle" font-size="16" font-weight="700" fill="#065f46">L2 归纳</text>
+      <text x="375" y="82" text-anchor="middle" font-size="12" fill="#334155">解构 → 分类 → 归并 → golden</text>
+      <text x="375" y="103" text-anchor="middle" font-size="12" fill="#334155">趋势 diff → 场景化范式文档</text>
+      <text x="375" y="124" text-anchor="middle" font-size="11" fill="#64748b">目的：把素材变成可检索的知识</text>
+
+      <rect x="520" y="30" width="210" height="112" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+      <text x="625" y="58" text-anchor="middle" font-size="16" font-weight="700" fill="#1e3a8a">L3 创作</text>
+      <text x="625" y="82" text-anchor="middle" font-size="12" fill="#334155">按场景检索 N 条范式</text>
+      <text x="625" y="103" text-anchor="middle" font-size="12" fill="#334155">动态概念轴 + 反例约束</text>
+      <text x="625" y="124" text-anchor="middle" font-size="11" fill="#64748b">目的：差异化产出，而非统一风格</text>
+
+      <rect x="770" y="30" width="210" height="112" rx="10" fill="#fffbeb" stroke="#d97706"/>
+      <text x="875" y="58" text-anchor="middle" font-size="16" font-weight="700" fill="#92400e">L4 评估</text>
+      <text x="875" y="82" text-anchor="middle" font-size="12" fill="#334155">完整度 / 多样性 / 合规</text>
+      <text x="875" y="103" text-anchor="middle" font-size="12" fill="#334155">一键采用 / 弃用</text>
+      <text x="875" y="124" text-anchor="middle" font-size="11" fill="#64748b">目的：无投放数据也能形成信号</text>
+
+      <path d="M230,86 L265,86" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <path d="M480,86 L515,86" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <path d="M730,86 L765,86" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <path d="M875,142 L875,205 L375,205 L375,145" stroke="#059669" stroke-width="2" fill="none" marker-end="url(#ar)"/>
+      <text x="625" y="198" text-anchor="middle" font-size="12" fill="#065f46" font-weight="600">弱信号回流 → 调整范式检索权重（版本化 · 可回滚）</text>
+
+      <rect x="270" y="240" width="460" height="62" rx="9" fill="#f8fafc" stroke="#e5e7eb"/>
+      <text x="500" y="264" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">横跨全程的硬约束（不因学习而放宽）</text>
+      <text x="500" y="286" text-anchor="middle" font-size="12" fill="#64748b">D0 证据门 · 外部素材只学表达结构不继承事实 · 品牌零文字三道防线 · 模型不可用标 unavailable</text>
+
+      <rect x="770" y="240" width="210" height="62" rx="9" fill="#f8fafc" stroke="#e5e7eb" stroke-dasharray="5 4"/>
+      <text x="875" y="264" text-anchor="middle" font-size="13" fill="#92400e">L5 投放与反馈</text>
+      <text x="875" y="286" text-anchor="middle" font-size="12" fill="#92400e">本期不涉及 · 仅预留关联键</text>
+    </svg>
+  </div>
+</section>
+
+<section>
+  <h2>四、四个困惑的逐项解法</h2>
+  <table>
+    <tr><th width="22%">困惑</th><th>解法</th><th width="16%">依赖</th></tr>
+    <tr><td>① 风格趋同、输出不理想</td>
+      <td>三处改动：<b>(a)</b> 概念轴从模板库钩子类目动态选取，替代固定 <code>CONCEPT_AXES</code>；<b>(b)</b> <code>creative_plan.routes</code> 由 1 条改为按场景检索的 N 条，每条绑定不同范式骨架；<b>(c)</b> 把高频但不适配本次目标的范式作为反例提示。外部素材只借表达结构，产品事实仍走证据门。</td>
+      <td><span class="tag t-new">P0 新增</span></td></tr>
+    <tr><td>② 无数据佐证</td>
+      <td>建立代理指标：结构完整度（复用 <code>completeness</code>）、表达多样性（复用 <code>information_similarity</code> 距离）、合规一致性（复用品牌词典 / 视觉审核）、创作者一键采用/弃用。加权成「范式成功率」，作为检索排序依据。真实投放数据到来后，只需替换权重来源，不改结构。</td>
+      <td><span class="tag t-new">P2 新增</span></td></tr>
+    <tr><td>③ 无研究员实时跟进</td>
+      <td>把研究员工作拆成机器可做与人工少量确认：机器批量解构、归类、算频率变化并生成「趋势简报」；人只做两件事 —— 确认归并建议、对产出一键采纳/弃用。不做复杂评审界面。</td>
+      <td><span class="tag t-new">P1+P2</span></td></tr>
+    <tr><td>④ 捕捉不到设计动向</td>
+      <td>复用现有 scheduler 做定期采集，每批打时间标签；对最近 N 批与前 N 批做特征频率 diff，输出上升/下降的钩子、构图、配色、信息结构，形成趋势简报并写入模板的时效权重。</td>
+      <td><span class="tag t-new">P1 新增</span></td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>五、与你三大板块的对应关系</h2>
+  <table>
+    <tr><th width="26%">板块</th><th>本期做法</th><th width="18%">状态</th></tr>
+    <tr><td>素材分析与总结</td><td>在现有模板库上加「定期采集调度 + 跨批次趋势 diff + 场景化范式文档」。原有导入/解构/归并/golden 全部保留不动。</td><td><span class="tag t-new">P1 增强</span></td></tr>
+    <tr><td>素材创作与管理</td><td>在现有工作坊「按模板创作」上加「多范式检索 + 动态概念轴 + 反例约束」；默认创作原样保留。</td><td><span class="tag t-new">P0 增强</span></td></tr>
+    <tr><td>素材投放与反馈</td><td>按你的备注不开发。仅在范式/评分记录上预留 <code>job_id</code> 与内容哈希关联键，将来接数据时无需改表结构。</td><td><span class="tag t-wait">暂不开发</span></td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>六、落地边界：严格遵守你的设计要求</h2>
+  <ul>
+    <li><b>不改菜单配置：</b>不新增一级菜单，不改名、不重定向旧 hash。采集任务与趋势简报作为现有「素材创意模板库」页面内的卡片/分区呈现；多范式选择嵌在现有「按模板创作」内。</li>
+    <li><b>不改界面风格：</b>复用现有 CSS 变量与卡片样式，新增元素沿用同一视觉语言。</li>
+    <li><b>不改现有功能：</b>默认创作链路、解构/归并结果、模板编辑、下载导出全部保持原行为；新能力以增量方式接入，可单独关闭。</li>
+    <li><b>数据模型最小增量：</b>只增加三张轻量表 —— 采集批次、范式统计、轻评分；现有三表只加字段不重建。旧库可平滑迁移。</li>
+    <li><b>诚实原则不变：</b>视觉模型不可用时标 unavailable，不静默 Mock；外部素材不自动采信为事实；所有输出保留可追溯链路。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>七、建议实施顺序</h2>
+  <div class="phase"><div><b>P0 · 先解决最痛的趋同问题</b><br>多范式检索 + 动态概念轴 + 反例约束。只用库内已有素材，不依赖外部采集与数据，投入最小、见效最快。</div></div>
+  <div class="phase"><div><b>P1 · 让外部优秀素材持续进来</b><br>定期采集调度 + 批次标签 + 趋势 diff + 趋势简报，接入现有模板库。</div></div>
+  <div class="phase"><div><b>P2 · 让「自学习」真正闭环</b><br>轻评分 + 代理指标 + 范式成功率排序 + 版本回滚。</div></div>
+  <div class="phase"><div><b>P3 · 预留，不开发</b><br>投放数据关联键与字段占位，等传输机制建立后再接。</div></div>
+  <div class="note">每一阶段独立成版（V4.124 起）、独立测试、独立发版，沿用现有 CHANGELOG / 发布数据 / 提交推送流程。任何阶段可单独暂停，不影响已上线功能。</div>
+</section>
+
+<section>
+  <h2>八、需要你确认的决策点</h2>
+  <div class="q"><b>Q1 · 采集源优先级</b><br>先做哪类来源？（A）媒体广告库公开素材 （B）第三方素材分析平台 （C）竞品落地页自动截图 （D）仅人工上传。建议先做 D+C，合规风险最低、实现最快。</div>
+  <div class="q"><b>Q2 · 采集频率与规模</b><br>每周一次 / 每日一次？每批上限多少条？建议每周一次、每批 50 条，先观察质量再调。</div>
+  <div class="q"><b>Q3 · 外部素材的合规边界</b><br>原图是否长期归档？建议沿用现有策略：原图长期归档、只学表达结构、不继承品牌与事实；如你要求不落原图，可改为只存解构结果。</div>
+  <div class="q"><b>Q4 · 新增入口形式</b><br>「采集任务 / 趋势简报」放在模板库页面内独立分区，还是嵌进现有 Tab？建议独立分区，不动现有 Tab 结构。</div>
+  <div class="q"><b>Q5 · 轻评分是否接受</b><br>创作者对产出做「采用 / 弃用」一键点选，作为冷启动学习信号。若不接受，则 P2 只能等投放数据，自学习闭环会延后。</div>
+  <div class="q"><b>Q6 · 是否按 P0 → P1 → P2 顺序开发</b><br>还是希望先做采集（P1）？建议 P0 优先，因为它不依赖任何外部条件且直接针对「输出不理想」。</div>
+</section>
+
+<footer>本稿仅为方案，未修改任何代码。确认后再按版本流程进入开发。</footer>
+</div>
+</body>
+</html>

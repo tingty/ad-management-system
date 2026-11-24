@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>广告主API 统一数据存储表结构设计（修订版 V3 · 2026-11-24）</title>
+<style>
+  :root{
+    --bg:#f5f7fb;--paper:#fff;--ink:#1f2937;--muted:#6b7280;--line:#e5e7eb;
+    --blue:#2563eb;--blue-soft:#eff6ff;--green:#059669;--green-soft:#ecfdf5;
+    --amber:#d97706;--amber-soft:#fffbeb;--red:#dc2626;--red-soft:#fef2f2;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:36px 22px 72px}
+  header{background:linear-gradient(120deg,#1e3a8a,#2563eb);color:#fff;border-radius:16px;padding:30px 34px;margin-bottom:22px}
+  header h1{margin:0 0 8px;font-size:25px;line-height:1.35}
+  header p{margin:0;color:#dbeafe;font-size:14px}
+  .badge{display:inline-block;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);
+    border-radius:99px;padding:3px 12px;font-size:12px;margin:0 8px 6px 0}
+  section{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:20px;margin:0 0 14px;padding-bottom:10px;border-bottom:2px solid var(--blue-soft);color:#1e3a8a}
+  h3{font-size:16px;margin:20px 0 8px;color:#1e40af}
+  h4{font-size:14px;margin:16px 0 6px;color:#334155}
+  p{margin:8px 0} ul,ol{margin:8px 0;padding-left:24px} li{margin:5px 0}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#f8fafc;font-weight:600;color:#334155}
+  code{background:#f1f5f9;border-radius:4px;padding:1px 5px;font-size:12.5px;color:#0f172a;word-break:break-word}
+  .lead{background:var(--blue-soft);border-left:4px solid var(--blue);border-radius:8px;padding:14px 18px;margin:14px 0}
+  .warn{background:var(--red-soft);border-left:4px solid var(--red);border-radius:8px;padding:12px 16px;margin:12px 0;font-size:14px}
+  .note{background:var(--amber-soft);border-left:4px solid var(--amber);border-radius:8px;padding:12px 16px;margin:12px 0;font-size:14px}
+  .ok{background:var(--green-soft);border-left:4px solid var(--green);border-radius:8px;padding:12px 16px;margin:12px 0;font-size:14px}
+  .tag{display:inline-block;border-radius:5px;padding:1px 8px;font-size:12px;font-weight:600;white-space:nowrap}
+  .t-core{background:var(--blue-soft);color:var(--blue)}
+  .t-tech{background:#eef2ff;color:#4338ca}
+  .t-derive{background:var(--green-soft);color:var(--green)}
+  .t-ext{background:var(--amber-soft);color:var(--amber)}
+  .t-skip{background:var(--red-soft);color:var(--red)}
+  .svgbox{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:12px;margin:16px 0;overflow-x:auto}
+  .sqlbox{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:16px 18px;margin:12px 0;
+    font:12.5px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow-x:auto}
+  .sqlbox .cm{color:#94a3b8} .sqlbox .kw{color:#93c5fd} .sqlbox .ty{color:#6ee7b7}
+  .q{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:8px 0}
+  .q b{color:#1e40af}
+  .legend span{margin-right:16px;font-size:12.5px}
+  footer{text-align:center;color:var(--muted);font-size:12px;padding:16px}
+  @media print{body{background:#fff}section{break-inside:avoid}header{background:#1e3a8a !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}.sqlbox{background:#1e293b !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+  @media(max-width:720px){header,section{padding:20px}table{font-size:12px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 18px;margin-bottom:18px;font-size:14px;color:#92400e">
+  <b>已合并归档：</b>本设计已并入 <a href="广告主数据模块功能开发文档_20261124.html" style="color:#1e40af">《广告主数据模块 · 功能开发文档》</a>，今后以该文档为唯一维护来源，本文不再更新。
+</div>
+
+<header>
+  <div><span class="badge">修订版 V3</span><span class="badge">仅设计 · 未开发</span><span class="badge">2026-11-24</span></div>
+  <h1>广告主 API 统一数据存储表结构设计</h1>
+  <p>按 <b>publisherCommission（订单佣金明细）</b> 粒度 · <b>12 个</b>确认字段 · 字段级一一映射 · 兼容后续任意 API 模板</p>
+</header>
+
+<section>
+  <h2>〇、修订说明与已确认决策</h2>
+  <div class="warn">
+    <b>纠正 1 · 读取对象：</b>CJ 佣金接口读的是 <code>publisherCommissions</code> 返回的<b>每一条 <code>PublisherCommission</code></b>——官方定义它就是"<b>一个订单的一笔佣金明细</b>"（含原始单与修正单）。统一表为<b>订单明细粒度</b>，不是汇总。
+  </div>
+  <div class="warn">
+    <b>纠正 2 · 表结构：</b>按你确认的口径，统一表收敛为 <b>12 个业务字段</b>（原 13 项中的"订单商品数量 <code>item_quantity</code>"已删除）；血缘/幂等所需的技术列单独分组，报表默认不展示。
+  </div>
+  <h3>本轮已确认决策（Q1–Q6）</h3>
+  <table>
+    <tr><th width="10%">编号</th><th width="24%">事项</th><th>最终决策</th></tr>
+    <tr><td>Q1</td><td>ID 口径</td><td>采用默认：报表 ID 用上游 <code>commissionId</code>，内部另设自增主键 <code>id</code></td></tr>
+    <tr><td>Q2</td><td>日期口径</td><td>用 <code>eventDate</code>（UTC 转业务时区）；<code>postingDate</code> 另留作增量水位</td></tr>
+    <tr><td>Q3</td><td>品牌名称来源</td><td><code>campaign_name</code> 映射为 <code>advertiserName</code>（见下方说明）</td></tr>
+    <tr><td>Q4</td><td>事件名称来源</td><td><code>event_name</code> 映射为 <code>actionTrackerName</code></td></tr>
+    <tr><td>Q5</td><td>单价口径</td><td>采用默认：主表订单级均价，item 子表存每项精确单价（见 5.2 与字段删除后的协调说明）</td></tr>
+    <tr><td>—</td><td>订单商品数量</td><td><b>删除该字段</b>，统一表不再存 <code>item_quantity</code></td></tr>
+    <tr><td>Q6</td><td>取消单判定</td><td>采用默认：净额归零或 <code>REVERSED</code>，每次拉取后按订单重算回填</td></tr>
+  </table>
+  <div class="note"><b>Q3 说明：</b>按你的决策，<code>campaign_name</code>（品牌名称）与 <code>advertiser_name</code>（广告主名称）都取自 <code>advertiserName</code>，因此两列当前<b>同值</b>。这是有意为之的口径，不是映射错误。若未来 CJ 上报了独立的 campaign 标识，只需在 <code>api_field_map</code> 把 <code>campaign_name</code> 改指向该字段即可，<b>不改表结构、不改报表</b>。</div>
+</section>
+
+<section>
+  <h2>一、读取对象与数据粒度</h2>
+  <p>CJ <code>publisherCommissions</code>（GraphQL，只读）返回的核心对象是 <code>PublisherCommission</code>。关键事实：</p>
+  <ul>
+    <li><b>一条 = 一个订单的一笔佣金事件</b>：以 <code>commissionId</code> 唯一标识，携带 <code>orderId</code>（广告主订单号）、金额、状态、商品明细 <code>items[]</code>。</li>
+    <li><b>一个订单可能有多条</b>：原始单 <code>original=true</code> 与其后所有修正单 <code>original=false</code> 共用同一个 <code>orderId</code>、不同 <code>commissionId</code>；修正记录是<b>增量（delta）</b>，必须合并才是订单最终金额。</li>
+    <li><b>游标分页</b>：<code>maxCommissionId → sinceCommissionId</code>，直到 <code>payloadComplete=true</code>；窗口 ≤31 天、单次 ≤10,000 条、200 次/5 分钟。</li>
+  </ul>
+  <div class="note"><b>粒度决策：</b>统一事实表以<b>一条 <code>publisherCommission</code> = 一行</b>（明细粒度），保证与 API 一一映射、修正记录零丢失；"订单最终金额 / 是否取消单"通过<b>合并视图</b>按 <code>(orderId, originalActionId)</code> 聚合得出。</div>
+
+  <h3>CJ 官方给出的修正 / 取消示例</h3>
+  <div class="sqlbox"><span class="cm">// 同一 orderId=69461063 的两条明细，合并后净额为 0 → 取消单</span>
+{ "original": true,  "pubCommissionAmountUsd": "1.852",  "saleAmountUsd": "61.742",  "orderId": "69461063" }
+{ "original": false, "pubCommissionAmountUsd": "-1.852", "saleAmountUsd": "-61.742", "orderId": "69461063" }</div>
+  <p><b>简单销售</b>直接把金额相加；<b>高级销售（含 item）</b>按 SKU 合并数量后再乘单价与单项佣金。只取"最新一条"或只看"原始单"都会算错。</p>
+</section>
+
+<section>
+  <h2>二、统一事实表 <code>api_unified_fact</code>（12 个确认业务字段）</h2>
+  <p>下表即确认后的字段。列名沿用英文 snake_case，中文为报表展示名。<span class="tag t-derive">派生</span> 表示不是上游直取、由规则计算；<span class="tag t-core">直取</span> 表示上游字段直接落列。</p>
+  <table>
+    <tr><th width="5%">#</th><th width="17%">字段名（展示名）</th><th width="21%">数据库列</th><th width="12%">类型</th><th width="9%">来源</th><th>口径 / 转换</th></tr>
+    <tr><td>1</td><td>ID</td><td><code>commission_id</code></td><td>String(64)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>commissionId</code>；业务唯一标识，同时作幂等键 <code>external_id</code>（Q1 默认）</td></tr>
+    <tr><td>2</td><td>广告主名称</td><td><code>advertiser_name</code></td><td>String(255)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>advertiserName</code>（发布者侧为广告主项目名称）</td></tr>
+    <tr><td>3</td><td>订单号</td><td><code>order_id</code></td><td>String(128)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>orderId</code>；合并修正与取消单的核心分组键</td></tr>
+    <tr><td>4</td><td>日期</td><td><code>event_date</code></td><td>Date</td><td><span class="tag t-core">直取</span></td><td>CJ <code>eventDate</code>（UTC）转业务时区日期（Q2）；另存 <code>posting_date</code> 作增量水位</td></tr>
+    <tr><td>5</td><td>品牌名称（campaign name）</td><td><code>campaign_name</code></td><td>String(255)</td><td><span class="tag t-core">直取</span></td><td>映射为 <code>advertiserName</code>（Q3），与广告主名称同值；未来有独立 campaign 字段时仅改映射</td></tr>
+    <tr><td>6</td><td>订单状态</td><td><code>action_status</code></td><td>String(32)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>actionStatus</code> 枚举归一化：<code>PENDING/BOOKED/PAID/REVERSED</code></td></tr>
+    <tr><td>7</td><td>事件名称</td><td><code>event_name</code></td><td>String(255)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>actionTrackerName</code>（Q4），广告主定义的转化动作名称</td></tr>
+    <tr><td>8</td><td>销售金额</td><td><code>sale_amount_usd</code></td><td>Numeric(18,6)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>saleAmountUsd</code>；USD 归一化口径，Decimal 精确运算</td></tr>
+    <tr><td>9</td><td>佣金金额</td><td><code>commission_amount_usd</code></td><td>Numeric(18,6)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>pubCommissionAmountUsd</code>（发布者佣金）；USD，Decimal</td></tr>
+    <tr><td>10</td><td>单价</td><td><code>unit_price_usd</code></td><td>Numeric(18,6)</td><td><span class="tag t-derive">派生</span></td><td>订单级均价 <code>sale_amount_usd / qty_internal</code>（Q5 默认）；<code>qty_internal</code> 为<b>计算中间量</b>、不落为业务字段；子表存每项精确单价</td></tr>
+    <tr><td>11</td><td>审核状态</td><td><code>validation_status</code></td><td>String(32)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>validationStatus</code> 枚举归一化：<code>PENDING/VALID/INVALID/...</code></td></tr>
+    <tr><td>12</td><td>合并后是否为取消单</td><td><code>is_void</code></td><td>Boolean</td><td><span class="tag t-derive">派生</span></td><td>按订单合并全部明细后判定（规则见第五节），非上游字段</td></tr>
+  </table>
+  <div class="warn"><b>金额精度：</b>CJ 金额如 <code>1.852</code>、<code>61.742</code> 有三位小数。数据库列用 <code>Numeric(18,6)</code>，应用层一律 <code>Decimal</code>，<b>禁止 Float</b>，否则佣金对账会出现分厘误差。</div>
+  <div class="ok"><b>字段删除的协调：</b>你要求删除"订单商品数量"，故统一表<b>没有</b> <code>item_quantity</code> 列。但 Q5 的均价口径仍需数量作分母，因此把数量保留为<b>计算中间量</b> <code>qty_internal = Σ items[].quantity</code>（简单销售为 1），仅用于算 <code>unit_price_usd</code>，<b>不落为统一表字段、不在报表展示</b>；item 子表仍存每项 <code>quantity</code> 供明细追溯。若你希望连这个中间计算也不要，可改为单价直接取首个 item 的 <code>perItemSaleAmountUsd</code>，一个映射改动即可。</div>
+</section>
+
+<section>
+  <h2>三、配套技术列与子表（不纳入 12 业务字段）</h2>
+  <p>以下列为<b>幂等、追溯、合并</b>所必需，建议保留但报表默认隐藏；它们不影响那 12 个业务字段的一一映射关系。</p>
+  <h3>3.1 主表补充的技术列</h3>
+  <table>
+    <tr><th width="30%">列</th><th>作用</th></tr>
+    <tr><td><code>id</code> (Integer PK)</td><td>内部自增主键，与业务"ID"(<code>commission_id</code>)区分</td></tr>
+    <tr><td><code>source_record_id</code></td><td>回连原始层 JSON，任意数值可下钻到上游原文</td></tr>
+    <tr><td><code>external_id</code></td><td>= <code>commission_id</code>，唯一约束 <code>(template_id, external_id)</code> 保证幂等</td></tr>
+    <tr><td><code>original</code> / <code>original_action_id</code> / <code>correction_reason</code></td><td>原始/修正标记与合并关联键，取消单判定的依据</td></tr>
+    <tr><td><code>posting_date</code></td><td>过账时间，作增量拉取水位（避免漏掉迟到修正）</td></tr>
+    <tr><td><code>template_id</code> / <code>connection_id</code> / <code>run_id</code></td><td>来源模板、连接、运行批次，全链路可追溯</td></tr>
+    <tr><td><code>created_at</code> / <code>updated_at</code></td><td>标准时间戳（naive UTC）</td></tr>
+  </table>
+  <h3>3.2 商品明细子表 <code>api_fact_item</code></h3>
+  <p>承载 <code>items[]</code> 的逐 SKU 精确值，支撑"单价"字段的明细追溯（高级销售含多 SKU 时，订单级单价只是均价）。<b>注意：quantity 仅存在于子表用于追溯与均价计算，不进入统一表业务字段。</b></p>
+  <table>
+    <tr><th width="30%">列</th><th>说明</th></tr>
+    <tr><td><code>id</code> / <code>fact_id</code></td><td>自增主键 / 回连主表</td></tr>
+    <tr><td><code>sku</code> / <code>quantity</code></td><td>商品 SKU（CJ <code>sku</code>）/ 数量（CJ <code>quantity</code>，仅子表留存）</td></tr>
+    <tr><td><code>unit_price_usd</code></td><td>该项精确单价（CJ <code>perItemSaleAmountUsd</code>）</td></tr>
+    <tr><td><code>commission_usd</code></td><td>该项佣金（CJ <code>totalCommissionUsd</code>）</td></tr>
+    <tr><td><code>ext_json</code></td><td>item 级扩展（situations 等，默认不取）</td></tr>
+  </table>
+  <h3>3.3 原始层 <code>api_source_record</code> 与映射表 <code>api_field_map</code></h3>
+  <ul>
+    <li><b>原始层</b>：每条 <code>publisherCommission</code> 原样 JSON + SHA256 + <code>first_seen/last_seen</code>，零丢失、可对账、可重放。唯一约束 <code>(template_id, connection_id, external_id)</code>。</li>
+    <li><b>映射表</b>：逐行登记"上游路径 → 目标列 → 转换规则"，是第四节一一映射的<b>数据化载体</b>（配置，不是代码）。新增模板 = 新增映射行。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>四、CJ 字段 ↔ 统一字段 一一映射表（核心）</h2>
+  <p>这是 <code>api_field_map</code> 针对 CJ 模板的实际登记内容。每一行都能双向追溯：给定统一列能查到来自哪个上游字段，给定上游字段能查落到哪一列。</p>
+  <table>
+    <tr><th width="8%">#</th><th width="29%">CJ 上游字段（PublisherCommission）</th><th width="24%">统一目标</th><th width="14%">转换 transform</th><th>说明</th></tr>
+    <tr><td>1</td><td><code>commissionId</code></td><td><code>fact.commission_id</code><br><code>source_record.external_id</code></td><td>direct</td><td>ID / 幂等键</td></tr>
+    <tr><td>2</td><td><code>advertiserName</code></td><td><code>fact.advertiser_name</code><br><code>fact.campaign_name</code></td><td>direct</td><td>广告主名称；<b>品牌名称同取此字段</b>（Q3）</td></tr>
+    <tr><td>3</td><td><code>orderId</code></td><td><code>fact.order_id</code></td><td>direct</td><td>订单号 / 合并键</td></tr>
+    <tr><td>4</td><td><code>eventDate</code></td><td><code>fact.event_date</code></td><td>utc_date</td><td>日期（UTC→业务时区，Q2）</td></tr>
+    <tr><td>5</td><td>—</td><td><code>fact.campaign_name</code></td><td>—</td><td>见 #2，同源映射</td></tr>
+    <tr><td>6</td><td><code>actionStatus</code></td><td><code>fact.action_status</code></td><td>enum_map</td><td>订单状态</td></tr>
+    <tr><td>7</td><td><code>actionTrackerName</code></td><td><code>fact.event_name</code></td><td>direct</td><td>事件名称（Q4）</td></tr>
+    <tr><td>8</td><td><code>saleAmountUsd</code></td><td><code>fact.sale_amount_usd</code></td><td>decimal</td><td>销售金额</td></tr>
+    <tr><td>9</td><td><code>pubCommissionAmountUsd</code></td><td><code>fact.commission_amount_usd</code></td><td>decimal</td><td>佣金金额</td></tr>
+    <tr><td>10</td><td><code>saleAmountUsd</code> + <code>items[].quantity</code>（中间量）</td><td><code>fact.unit_price_usd</code><br><code>item.unit_price_usd</code></td><td>derived</td><td>单价：主表均价 / 子表取 <code>perItemSaleAmountUsd</code></td></tr>
+    <tr><td>11</td><td><code>validationStatus</code></td><td><code>fact.validation_status</code></td><td>enum_map</td><td>审核状态</td></tr>
+    <tr><td>12</td><td><span class="tag t-derive">派生</span> 合并规则</td><td><code>fact.is_void</code></td><td>derived</td><td>合并后是否取消单</td></tr>
+    <tr><td>—</td><td><code>original</code></td><td><code>fact.original</code></td><td>bool</td><td>技术列：原始/修正</td></tr>
+    <tr><td>—</td><td><code>originalActionId</code></td><td><code>fact.original_action_id</code></td><td>direct</td><td>技术列：合并关联键</td></tr>
+    <tr><td>—</td><td><code>postingDate</code></td><td><code>fact.posting_date</code></td><td>utc_datetime</td><td>技术列：增量水位</td></tr>
+    <tr><td>—</td><td><code>items[].sku</code> / <code>items[].quantity</code> / <code>items[].totalCommissionUsd</code></td><td><code>item.sku</code> / <code>item.quantity</code> / <code>item.commission_usd</code></td><td>direct</td><td>商品子表（quantity 不进统一表）</td></tr>
+    <tr><td>—</td><td><code>actionType</code> / <code>verticalAttributes.campaignName</code></td><td><code>__skip__</code>（原始层仍保留）</td><td>skip</td><td>本轮改口径后不再使用，显式忽略并说明</td></tr>
+    <tr><td>—</td><td><code>situations</code> / <code>situationDetails</code> / <code>clickReferringURL</code></td><td><code>__skip__</code>（原始层仍保留）</td><td>skip</td><td>解析慢/非必需，显式忽略并注明原因</td></tr>
+  </table>
+  <div class="note"><b>覆盖检查：</b>入库前校验"上游字段集合 ⊆ 映射登记集合（含显式 __skip__）"；出现未登记新字段时写入原始层并告警，不静默丢弃、不擅自改表结构。</div>
+</section>
+
+<section>
+  <h2>五、派生字段的计算规则</h2>
+
+  <h3>5.1 单价（unit_price_usd）</h3>
+  <ol>
+    <li><b>中间量</b>：<code>qty_internal = Σ items[].quantity</code>（高级销售）；简单销售无 item 明细时 <code>qty_internal = 1</code>。<b>该值不落为统一表字段</b>，仅用于计算。</li>
+    <li><b>主表均价</b>：<code>unit_price_usd = sale_amount_usd / qty_internal</code>（<code>qty_internal = 0</code> 时为 0）。</li>
+    <li><b>子表精确值</b>：每项存 <code>items[].perItemSaleAmountUsd</code>，多 SKU 时以子表为准。</li>
+    <li><b>修正记录</b>： quantity 为增量（可为负），均价按该条明细自身的金额与数量计算；订单最终单价以合并视图的净额为准。</li>
+  </ol>
+
+  <h3>5.2 合并后是否为取消单（is_void）—— 关键规则</h3>
+  <div class="lead">按 <code>(template_id, order_id, original_action_id)</code> 分组，把该订单的<b>全部明细（原始 + 所有修正）</b>合并后才判定：</div>
+  <div class="sqlbox">net_commission = SUM(commission_amount_usd)   <span class="cm">-- 原始 + 各修正增量</span>
+net_sale      = SUM(sale_amount_usd)
+has_reversed  = ANY(action_status = 'REVERSED')
+
+is_void = (net_commission == 0 <span class="kw">AND</span> net_sale == 0) <span class="kw">OR</span> has_reversed</div>
+  <ul>
+    <li><b>完全取消</b>：正负增量相抵，净佣金与净销售均为 0 → <code>is_void=true</code>（对应官方示例）。</li>
+    <li><b>显式反转</b>：任一条状态为 <code>REVERSED</code> → <code>is_void=true</code>。</li>
+    <li><b>部分修正未归零</b>：净额 ≠0 → <code>is_void=false</code>，报表按<b>净额</b>显示最终金额，而非原始单金额。</li>
+    <li><b>回填机制</b>：修正单可能晚于原始单到达。因此 <code>is_void</code> 由每次拉取后的合并任务重算并回填到该订单所有明细行，保证历史行同步更新。</li>
+  </ul>
+  <div class="ok"><b>订单最终视图 <code>v_api_order_final</code>：</b>按订单聚合输出"最终销售 / 最终佣金 / is_void"，报表默认查这个视图看订单结果，需要追明细时下钻到 <code>api_unified_fact</code> → 原始 JSON。</div>
+</section>
+
+<section>
+  <h2>六、写入与合并流程</h2>
+  <div class="svgbox">
+    <svg viewBox="0 0 1000 250" width="100%" role="img" aria-label="写入与合并流程图">
+      <defs><marker id="ar" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#64748b"/></marker></defs>
+      <rect x="10" y="30" width="175" height="66" rx="10" fill="#f1f5f9" stroke="#94a3b8"/>
+      <text x="97" y="56" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">① 拉取</text>
+      <text x="97" y="78" text-anchor="middle" font-size="11" fill="#64748b">publisherCommissions</text>
+      <rect x="215" y="30" width="175" height="66" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+      <text x="302" y="56" text-anchor="middle" font-size="13" font-weight="700" fill="#1e3a8a">② 原始层</text>
+      <text x="302" y="78" text-anchor="middle" font-size="11" fill="#64748b">原样JSON · 哈希去重</text>
+      <rect x="420" y="30" width="175" height="66" rx="10" fill="#fffbeb" stroke="#d97706"/>
+      <text x="507" y="56" text-anchor="middle" font-size="13" font-weight="700" fill="#92400e">③ 映射</text>
+      <text x="507" y="78" text-anchor="middle" font-size="11" fill="#64748b">按 field_map 分发</text>
+      <rect x="625" y="30" width="175" height="66" rx="10" fill="#ecfdf5" stroke="#059669"/>
+      <text x="712" y="56" text-anchor="middle" font-size="13" font-weight="700" fill="#065f46">④ 事实表</text>
+      <text x="712" y="78" text-anchor="middle" font-size="11" fill="#64748b">12 字段 + 技术列</text>
+      <rect x="830" y="30" width="160" height="66" rx="10" fill="#eef2ff" stroke="#4338ca"/>
+      <text x="910" y="56" text-anchor="middle" font-size="13" font-weight="700" fill="#3730a3">⑤ 合并回填</text>
+      <text x="910" y="78" text-anchor="middle" font-size="11" fill="#64748b">is_void / 净额</text>
+      <path d="M185,63 L210,63" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <path d="M390,63 L415,63" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <path d="M595,63 L620,63" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <path d="M800,63 L825,63" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <rect x="420" y="145" width="380" height="66" rx="10" fill="#f8fafc" stroke="#94a3b8"/>
+      <text x="610" y="172" text-anchor="middle" font-size="13" font-weight="700" fill="#334155">报表 / 分析</text>
+      <text x="610" y="194" text-anchor="middle" font-size="11.5" fill="#64748b">订单视图看净额与取消单，明细可下钻原始 JSON</text>
+      <path d="M910,96 L910,178 L805,178" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#ar)"/>
+      <path d="M712,96 L712,140" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <text x="500" y="238" text-anchor="middle" font-size="12.5" fill="#1e40af" font-weight="600">任意报表数值 → 事实行 → 原始 JSON；任意字段 → 映射表 → 上游路径与转换规则</text>
+    </svg>
+  </div>
+  <ol>
+    <li><b>拉取</b>：按模板规则（Bearer Token + CID + Endpoint），游标分页拉全，7 天重叠窗口回溯迟到修正。</li>
+    <li><b>原始留痕</b>：每条 commission 原样 JSON 入库，哈希检测内容变化（修正会变）。</li>
+    <li><b>映射</b>：读 CJ 模板的 <code>api_field_map</code>，分发到 12 业务列 / 技术列 / item 子表 / ext；做覆盖检查。</li>
+    <li><b>事实入库</b>：按 <code>(template_id, external_id)</code> upsert，同一 commission 重复拉取只更新。</li>
+    <li><b>合并回填</b>：按订单重算净额与 <code>is_void</code>，回填到该订单所有明细行。</li>
+    <li><b>报表</b>：订单视图查最终口径，明细视图查原始逐笔，全程不需要知道来自哪个模板。</li>
+  </ol>
+</section>
+
+<section>
+  <h2>七、扩展性：第二个模板如何复用同一张表</h2>
+  <p>假设接入某广告主自有 API，其字段为 <code>txn_id / adv_name / payout / conv_ts / action / status</code>：</p>
+  <table>
+    <tr><th width="34%">新模板字段</th><th>统一列（同一组 12 字段）</th><th>转换</th></tr>
+    <tr><td><code>txn_id</code></td><td><code>commission_id</code></td><td>direct</td></tr>
+    <tr><td><code>adv_name</code></td><td><code>advertiser_name</code> 与 <code>campaign_name</code>（同 Q3 口径）</td><td>direct</td></tr>
+    <tr><td>—</td><td><code>order_id</code>（无订单概念则 = <code>txn_id</code>）</td><td>fallback</td></tr>
+    <tr><td><code>conv_ts</code></td><td><code>event_date</code></td><td>utc_date</td></tr>
+    <tr><td><code>action</code></td><td><code>event_name</code>（动作名，同 Q4 口径）</td><td>direct</td></tr>
+    <tr><td><code>payout</code></td><td><code>commission_amount_usd</code>（若已含销售额则同时填 <code>sale_amount_usd</code>）</td><td>decimal</td></tr>
+    <tr><td><code>status</code></td><td><code>action_status</code></td><td>enum_map</td></tr>
+  </table>
+  <ul>
+    <li>它没有的字段（如 <code>unit_price_usd</code> 无法计算时）留空；它特有字段进 <code>api_fact_ext</code>。</li>
+    <li><b>结论：只新增映射行，不新增表、不改表结构、不改报表代码</b>，CJ 与新渠道可在同一张表、同一套字段上统一查询。</li>
+    <li>若某扩展键被多个模板长期共用，可通过 <code>ensure_schema()</code> 升级为规范列并从 ext 回填历史数据。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>八、范围边界</h2>
+  <div class="note">
+    <b>本版范围：</b>统一表结构、字段映射、订单合并与取消单判定。<b>不涉及</b>投放花费/曝光/点击数据，因此 ROAS / ROI / CTR / CVR 无法由本 API 计算，仅做<b>佣金收入视角</b>。
+  </div>
+  <div class="ok"><b>全部 7 项决策已确认（Q1–Q6 + 删除数量字段）</b>，无遗留待确认项。可直接进入开发；如后续调整单价口径或品牌来源，仅需改 <code>api_field_map</code> 映射行，不动表结构与报表。</div>
+</section>
+
+<section>
+  <h2>九、可维护性保障：三条硬性设计约束</h2>
+  <div class="lead">
+    上线后仍需持续纠正三类内容——<b>展示字段名、映射关系、数据库列名</b>。为使这三类修改都能低成本完成且不留遗漏，开发时<b>必须</b>落实以下三条保障，缺一不可，均列入第十节开发任务清单并作为验收项。
+  </div>
+
+  <h3>保障一 · 展示名配置层（展示名与物理列解耦）</h3>
+  <p><b>目的：</b>报表中文展示名不得硬编码在前端组件里。改名 = 改配置行，零数据迁移、零停机、无需重新发版。</p>
+  <table>
+    <tr><th width="26%">字段</th><th width="18%">类型</th><th>说明</th></tr>
+    <tr><td><code>id</code></td><td>Integer PK</td><td>自增</td></tr>
+    <tr><td><code>scope</code></td><td>String</td><td>作用范围：<code>global</code> 或某 <code>template_id</code>（渠道可覆盖全局展示名）</td></tr>
+    <tr><td><code>column_key</code></td><td>String</td><td>对应物理列名 / 视图列名，如 <code>commission_amount_usd</code></td></tr>
+    <tr><td><code>label</code></td><td>String</td><td>展示名，如"佣金金额"；改这里即改报表表头</td></tr>
+    <tr><td><code>unit</code> / <code>format</code></td><td>String</td><td>单位（USD/无）与格式（金额两位小数、日期 YYYY-MM-DD）</td></tr>
+    <tr><td><code>sort_no</code> / <code>visible</code></td><td>Integer / Boolean</td><td>列顺序、是否展示，可独立调整</td></tr>
+  </table>
+  <ul>
+    <li>报表表头、字段顺序、单位、格式化<b>全部由这张表驱动</b>，前端渲染时不写死任何中文字段名。</li>
+    <li>新增/隐藏列、改展示名 → 只改配置行，不动数据库、不动数据、不发版。</li>
+  </ul>
+  <div class="ok"><b>验收：</b>报表所有表头均来自 <code>api_field_label</code>；代码全局搜索不到硬编码的字段中文展示名；改一行配置后刷新页面表头即变。</div>
+
+  <h3>保障二 · replay 工具（映射变更可重放历史）</h3>
+  <p><b>目的：</b>改了 <code>api_field_map</code> 映射后，历史数据仍按旧映射落库。必须从原始 JSON 重放，才能把新映射同步到历史。</p>
+  <div class="sqlbox">replay_mapping(template_id, since, until, order_ids=None, dry_run=True)   <span class="cm"># 预览差异</span>
+  ① 读 api_source_record.payload_json（未映射的原始记录）
+  ② 用当前（或指定版本）api_field_map 重新映射
+  ③ 按 (template_id, external_id) upsert 回 api_unified_fact
+  ④ 触发订单合并回填（净额 / is_void）</div>
+  <ul>
+    <li>依赖原始层<b>零丢失</b>的原样 JSON——这是能保证"改了映射不丢历史"的根本前提。</li>
+    <li>必须<b>幂等、可断点续跑</b>；支持 <code>dry_run</code> 预览将变更哪些行、变更前后值。</li>
+    <li>映射表增 <code>version</code> / <code>effective_from</code> 字段（可选但推荐），支持按映射版本回放与审计。</li>
+    <li>触发时机：映射变更保存后提示"是否重放历史"，或管理端手动执行；口径变更（如日期、单价、取消单规则）后必须执行。</li>
+  </ul>
+  <div class="ok"><b>验收：</b>改完映射后 replay 一次，历史报表数值与预期一致；<code>dry_run=true</code> 能列出变更行且不写库；重复执行结果一致（幂等）。</div>
+
+  <h3>保障三 · 版本化列迁移（表结构变更可追溯、可重复）</h3>
+  <p><b>目的：</b>数据库列名/类型变更不得手工临时执行，必须走版本化迁移脚本，避免遗漏引用、无法重复、无版本记录。</p>
+  <ul>
+    <li>所有结构变更（加列、改列名、改类型）写入 <code>backend/migrations.py</code> 的版本化迁移函数，由 <code>ensure_schema()</code> 统一执行。</li>
+    <li>用 <code>ALTER TABLE ... RENAME COLUMN</code> 改列名（SQLite 3.25+），并把迁移版本号记录到 <code>schema_migrations</code> 表，防止重复执行。</li>
+    <li>提供一个 <code>rename_column(old, new)</code> 助手，一次性串联四处同步修改：<code>api_field_map.target_field</code> → 合并视图 <code>v_api_order_final</code> → 写入代码 → 报表查询。避免只改一处导致其他处引用旧列名。</li>
+    <li>迁移前自动备份 DB；保留回滚说明；升级后跑字段一致性校验（映射表/视图/报表三处列名一致）。</li>
+  </ul>
+  <div class="ok"><b>验收：</b>迁移可重复执行不报错且有版本记录；改列名后映射表、视图、报表三处一致；回滚方案可执行。</div>
+  <div class="note"><b>优先级建议：</b>只是"叫法不顺"时，优先用保障一改展示名，<b>不要动物理列名</b>。物理列名保持稳定，仅在语义确需变更时才用保障三。</div>
+</section>
+
+<section>
+  <h2>十、开发任务清单（三条保障作为验收项）</h2>
+  <p>下列任务按依赖顺序排列。带 <span class="tag t-derive">保障</span> 标记的三项为硬性要求，不得因工期省略。</p>
+  <table>
+    <tr><th width="8%">序号</th><th width="26%">开发任务</th><th width="30%">交付物</th><th>验收标准</th></tr>
+    <tr><td>1</td><td>建表与迁移骨架</td><td><code>api_unified_fact</code> 12 字段、技术列、item 子表、ext 表、原始层、<code>api_field_map</code>、<code>schema_migrations</code></td><td><code>ensure_schema()</code> 可重复执行；字段类型与精度（Numeric(18,6)）正确</td></tr>
+    <tr><td>2</td><td>CJ 模板与连接</td><td>预置 CJ 模板（Bearer/CID/Endpoint）<code>api_channel_template</code>、<code>api_connection</code>，测试连接</td><td>三项必填即可建连；测试连接返回有效数据；Token 脱敏不回显</td></tr>
+    <tr><td>3</td><td>定期拉取任务</td><td><code>api_fetch_task</code>/<code>api_fetch_run</code>，startup 协程调度，游标分页 + 7 天回溯</td><td>按频率自动拉取；运行记录完整；修正记录能被回溯到</td></tr>
+    <tr><td>4</td><td>映射写入与覆盖检查</td><td>按 <code>api_field_map</code> 分发到 12 列/技术列/item/ext；未登记字段告警</td><td>CJ 12 字段一一映射正确；Q2–Q4 口径符合决策；不静默丢字段</td></tr>
+    <tr><td>5</td><td>订单合并与取消单回填</td><td><code>v_api_order_final</code> 视图；净额与 <code>is_void</code> 重算回填</td><td>正负相抵示例判为取消单；修正迟到后回填同步；报表按净额</td></tr>
+    <tr><td>6</td><td>报表界面（一级菜单「广告主API」）</td><td>独立页面、订单视图 + 明细下钻，读 <code>api_field_label</code> 渲染表头</td><td>不影响现有功能；表头来自配置；可下钻原始 JSON</td></tr>
+    <tr><td>7 <span class="tag t-derive">保障</span></td><td>展示名配置层</td><td><code>api_field_label</code> 表 + 报表读配置改造</td><td>见保障一验收：无硬编码中文名，改配置即生效</td></tr>
+    <tr><td>8 <span class="tag t-derive">保障</span></td><td>replay 工具</td><td><code>replay_mapping()</code> + 管理端入口 + dry_run 预览</td><td>见保障二验收：改映射后可重放历史、幂等、可预览差异</td></tr>
+    <tr><td>9 <span class="tag t-derive">保障</span></td><td>版本化列迁移</td><td><code>migrations.py</code> 版本函数 + <code>rename_column()</code> 助手 + 一致性校验</td><td>见保障三验收：可重复、有版本记录、四处引用同步</td></tr>
+  </table>
+  <div class="warn"><b>红线：</b>任务 7/8/9 与任务 1/4/6 强相关——展示名层要在报表（任务 6）落地前建好，replay 依赖原始层（任务 1）与映射表（任务 4），版本化迁移是任务 1 的组成部分。任何一项缺失，上线后"继续修改纠正"的承诺都无法兑现。</div>
+</section>
+
+<footer>本稿为技术设计修订版 V3（决策已确认 + 三条可维护性保障），未修改任何代码与配置。可进入开发，任务 7/8/9 为硬性验收项。</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CJ 联盟佣金 API 对接与报表方案（待确认稿 · 2026-11-24）</title>
+<style>
+  :root{
+    --bg:#f5f7fb; --paper:#fff; --ink:#1f2937; --muted:#6b7280; --line:#e5e7eb;
+    --blue:#2563eb; --blue-soft:#eff6ff; --green:#059669; --green-soft:#ecfdf5;
+    --amber:#d97706; --amber-soft:#fffbeb; --red:#dc2626; --red-soft:#fef2f2;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:36px 22px 72px}
+  header{background:linear-gradient(120deg,#1e3a8a,#2563eb);color:#fff;border-radius:16px;padding:30px 34px;margin-bottom:22px}
+  header h1{margin:0 0 8px;font-size:26px;line-height:1.35}
+  header p{margin:0;color:#dbeafe;font-size:14px}
+  .badge{display:inline-block;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);
+    border-radius:99px;padding:3px 12px;font-size:12px;margin:0 8px 6px 0}
+  section{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:20px;margin:0 0 14px;padding-bottom:10px;border-bottom:2px solid var(--blue-soft);color:#1e3a8a}
+  h3{font-size:16px;margin:20px 0 8px;color:#1e40af}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0;padding-left:24px} li{margin:5px 0}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#f8fafc;font-weight:600;color:#334155}
+  code{background:#f1f5f9;border-radius:4px;padding:1px 5px;font-size:12.5px;color:#0f172a;word-break:break-all}
+  .lead{background:var(--blue-soft);border-left:4px solid var(--blue);border-radius:8px;padding:14px 18px;margin:14px 0}
+  .warn{background:var(--red-soft);border-left:4px solid var(--red);border-radius:8px;padding:14px 18px;margin:14px 0}
+  .note{background:var(--amber-soft);border-left:4px solid var(--amber);border-radius:8px;padding:12px 16px;margin:12px 0;font-size:14px}
+  .ok{background:var(--green-soft);border-left:4px solid var(--green);border-radius:8px;padding:12px 16px;margin:12px 0;font-size:14px}
+  .tag{display:inline-block;border-radius:5px;padding:1px 8px;font-size:12px;font-weight:600;white-space:nowrap}
+  .t-must{background:var(--red-soft);color:var(--red)}
+  .t-fact{background:var(--green-soft);color:var(--green)}
+  .t-new{background:var(--blue-soft);color:var(--blue)}
+  .t-q{background:var(--amber-soft);color:var(--amber)}
+  .svgbox{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:12px;margin:16px 0;overflow-x:auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin:14px 0}
+  .card{border:1px solid var(--line);border-radius:10px;padding:16px;background:#fff}
+  .card h4{margin:0 0 8px;font-size:15px;color:#1e40af}
+  .card p{font-size:13.5px;color:var(--muted);margin:4px 0}
+  .phase{border-left:3px solid var(--blue);padding:2px 0 16px 18px;margin-left:8px;position:relative}
+  .phase::before{content:"";position:absolute;left:-8px;top:7px;width:13px;height:13px;border-radius:50%;background:var(--blue);border:3px solid #fff;box-shadow:0 0 0 2px var(--blue)}
+  .phase b{color:#1e40af}
+  .q{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:8px 0}
+  .q b{color:#1e40af}
+  .wire{border:1px dashed #94a3b8;border-radius:8px;background:#fff;padding:14px;font-size:13px}
+  .wire .bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .wire .bar span{background:#e0e7ff;color:#3730a3;border-radius:5px;padding:4px 10px}
+  .wire .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}
+  .wire .kpi{border:1px solid var(--line);border-radius:7px;padding:10px;text-align:center}
+  .wire .kpi b{display:block;color:#1e40af;font-size:18px}
+  .wire .kpi small{color:var(--muted)}
+  .wire .cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .wire .box{border:1px solid var(--line);border-radius:7px;padding:10px;min-height:96px;color:var(--muted)}
+  footer{text-align:center;color:var(--muted);font-size:12px;padding:16px}
+  @media print{body{background:#fff}section{break-inside:avoid}header{background:#1e3a8a !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+  @media(max-width:640px){.wire .cols{grid-template-columns:1fr}header,section{padding:20px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div><span class="badge">待确认稿</span><span class="badge">仅方案 · 未开发</span><span class="badge">2026-11-24</span></div>
+  <h1>CJ 联盟佣金 API 对接、定期拉取与报表方案</h1>
+  <p>基于官方 Commission Detail（GraphQL）文档核查结果 · 面向现有《广告管理系统》的最小增量设计</p>
+</header>
+
+<section>
+  <h2>〇、先行结论与安全处理</h2>
+  <div class="lead">
+    <b>结论：</b>CJ 提供的是<b>佣金明细明细流</b>（GraphQL），不是现成报表接口。方案为：用个人访问令牌按 <code>publisherCommissions</code> 增量拉取 → 原始落库 → 合并修正记录形成事实表 → 本地聚合出报表。技术上可行，且能复用现有系统的调度、SystemState 与前端框架。
+  </div>
+  <div class="warn">
+    <b>安全提醒（请立即处理）：</b>你在本对话中明文提供了登录密码和 API Token。<br>
+    1) 建议<b>马上在 CJ 后台重新生成一枚个人访问令牌</b>，并作废旧令牌——对话记录不等于安全渠道。<br>
+    2) 本方案<b>未把任何凭据写入文件</b>；正式实现中令牌只通过环境变量 <code>CJ_API_TOKEN</code> 注入后端，不入库、不进 git、不下发前端、不打印日志。<br>
+    3) 登录密码在本对接中<b>完全用不到</b>——API 只认 Bearer Token。
+  </div>
+  <div class="note">
+    <b>首要阻断项：</b>API 的 <code>forPublishers</code> 参数要的是<b>发布者公司 ID（CID）</b>，不是登录邮箱。你给的 <code>partners@cocomob.com</code> 是登录账号，需先在 CJ 后台查到对应 CID 才能发出第一条有效请求。这是开发前必须拿到的输入。
+  </div>
+</section>
+
+<section>
+  <h2>一、API 核查结果（均已对照官方来源）</h2>
+  <table>
+    <tr><th width="20%">项目</th><th>已核实内容</th></tr>
+    <tr><td>端点 / 协议</td><td><code>POST https://commissions.api.cj.com/query</code>，GraphQL 单端点，只读（无 mutation）。</td></tr>
+    <tr><td>认证</td><td><code>Authorization: Bearer &lt;个人访问令牌&gt;</code>。Developer Key 已弃用。令牌在 CJ 开发者后台「Personal Access Tokens」页管理。</td></tr>
+    <tr><td>查询对象</td><td>我们是发布者（流量方），用 <code>publisherCommissions</code>；<code>advertiserCommissions</code> 是广告主视角，本期不用。</td></tr>
+    <tr><td>分页</td><td>游标式。响应 <code>payloadComplete=false</code> 时，取 <code>maxCommissionId</code> 作为下次 <code>sinceCommissionId</code>，循环到 true。</td></tr>
+    <tr><td>硬性限制</td><td>日期跨度 ≤ 31 天；单次 ≤ 10,000 条；200 次 / 5 分钟；并发上限 120；不支持压缩。只给日期一端时另一端默认 ±24 小时，不传参数默认近 24 小时。</td></tr>
+    <tr><td>修正机制</td><td><code>original=true</code> 原始、<code>false</code> 修正；同一 <code>orderId</code>、不同 <code>commissionId</code>，用 <code>originalActionId</code> 关联。两条都是增量，需相加才是最终金额；简单销售直接加金额，含 item 的销售按 SKU 合并数量后再乘单价与佣金。</td></tr>
+    <tr><td>过滤维度</td><td><code>forPublishers</code>(必填)、<code>advertiserIds</code>、<code>websiteIds</code>、<code>adIds</code>、<code>actionStatuses</code>、<code>actionTypes</code>、<code>validationStatuses</code>、<code>lockingMethods</code>、<code>commissionIds</code>，以及 posting / event / locking 三组日期区间。</td></tr>
+    <tr><td>官方来源</td><td>
+      <div>developers.cj.com/graphql/reference/Commission%20Detail</div>
+      <div>developers.cj.com/graphql/voyager/Commission%20Detail（字段全集）</div>
+      <div>docs.cj.com/docs/parameter-details（参数与对象定义）</div>
+      <div>developers.cj.com/authentication/overview（认证）</div>
+    </td></tr>
+  </table>
+
+  <h3>有效字段定位（按用途分组）</h3>
+  <table>
+    <tr><th width="22%">用途</th><th>字段</th></tr>
+    <tr><td>佣金 / 金额</td><td><code>pubCommissionAmountUsd</code>、<code>pubCommissionAmountPubCurrency</code>、<code>saleAmountUsd</code>、<code>saleAmountPubCurrency</code>、<code>orderDiscountUsd</code>；item 级 <code>perItemSaleAmountUsd</code>、<code>totalCommissionUsd</code>、<code>quantity</code></td></tr>
+    <tr><td>身份 / 去重</td><td><code>commissionId</code>(唯一键)、<code>orderId</code>、<code>originalActionId</code>、<code>original</code>、<code>correctionReason</code></td></tr>
+    <tr><td>时间</td><td><code>postingDate</code>(拉取水位)、<code>eventDate</code>、<code>lockingDate</code>、<code>clickDate</code></td></tr>
+    <tr><td>归因维度</td><td><code>advertiserId/Name</code>、<code>websiteId/Name</code>、<code>aid</code>(广告 ID)、<code>actionTrackerId/Name</code>、<code>actionType</code>、<code>country</code>、<code>source</code>、<code>verticalAttributes.campaignId/campaignName</code></td></tr>
+    <tr><td>状态 / 质控</td><td><code>actionStatus</code>、<code>validationStatus</code>、<code>reviewedStatus</code>、<code>lockingMethod</code></td></tr>
+    <tr><td>暂不取</td><td><code>situations</code>／<code>situationDetails</code>（官方标注解析较慢，首版不取）；<code>customPixel</code>、<code>sid</code> 已弃用</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>二、四个必须先说清的边界</h2>
+  <div class="grid">
+    <div class="card"><h4>1 · CID 缺失</h4><p>API 不认邮箱。必须先从 CJ 后台拿到发布者 CID，否则请求恒返回 count=0 或认证/参数错误。</p></div>
+    <div class="card"><h4>2 · 没有花费数据</h4><p>CJ 只回传收入侧（销售额、佣金），<b>不含广告花费、曝光、点击</b>。因此真正的 ROI / ROAS / CTR / CVR 单靠此 API 算不出。</p></div>
+    <div class="card"><h4>3 · 修正会回改历史</h4><p>订单可能在数天后被取消或调整。只拉「昨日新增」会漏掉修正，必须按 postingDate 回溯重叠窗口。</p></div>
+    <div class="card"><h4>4 · 素材归因需预埋</h4><p>佣金天然带 <code>aid</code>（CJ 广告 ID）与网站维度；要归因到「我们自己的素材编号」，需在 CJ 追踪链接里提前埋标识并验证能否从 <code>source</code> / <code>verticalAttributes</code> 回读。</p></div>
+  </div>
+  <div class="ok"><b>因此第一版报表的定位：</b>做「佣金收入视角」——总佣金、销售额、订单数、佣金率、AOV、按广告主 / 网站 / 广告 / 国家 / 时间的分布与趋势。投入产出（ROI）先预留字段与接口，等广告平台花费数据接入后再补，不编造分母。</div>
+</section>
+
+<section>
+  <h2>三、数据链路设计</h2>
+  <div class="svgbox">
+    <svg viewBox="0 0 1000 250" width="100%" role="img" aria-label="CJ数据流转图">
+      <defs><marker id="ar" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#64748b"/></marker></defs>
+      <rect x="15" y="40" width="175" height="96" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+      <text x="102" y="66" text-anchor="middle" font-size="15" font-weight="700" fill="#1e3a8a">① 增量拉取</text>
+      <text x="102" y="90" text-anchor="middle" font-size="11.5" fill="#334155">Bearer + CID</text>
+      <text x="102" y="110" text-anchor="middle" font-size="11.5" fill="#334155">31天切片 · 游标翻页</text>
+      <text x="102" y="128" text-anchor="middle" font-size="11" fill="#64748b">限流 200/5min</text>
+
+      <rect x="225" y="40" width="175" height="96" rx="10" fill="#f8fafc" stroke="#94a3b8"/>
+      <text x="312" y="66" text-anchor="middle" font-size="15" font-weight="700" fill="#334155">② 原始层</text>
+      <text x="312" y="90" text-anchor="middle" font-size="11.5" fill="#334155">commission_id 幂等 upsert</text>
+      <text x="312" y="110" text-anchor="middle" font-size="11.5" fill="#334155">原样保留每条记录</text>
+      <text x="312" y="128" text-anchor="middle" font-size="11" fill="#64748b">含 original 标记</text>
+
+      <rect x="435" y="40" width="175" height="96" rx="10" fill="#ecfdf5" stroke="#059669"/>
+      <text x="522" y="66" text-anchor="middle" font-size="15" font-weight="700" fill="#065f46">③ 事实层</text>
+      <text x="522" y="90" text-anchor="middle" font-size="11.5" fill="#334155">按 order+action 合并</text>
+      <text x="522" y="110" text-anchor="middle" font-size="11.5" fill="#334155">正负增量求和 · 标取消单</text>
+      <text x="522" y="128" text-anchor="middle" font-size="11" fill="#64748b">SKU 数量合并</text>
+
+      <rect x="645" y="40" width="175" height="96" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+      <text x="732" y="66" text-anchor="middle" font-size="15" font-weight="700" fill="#1e3a8a">④ 聚合层</text>
+      <text x="732" y="90" text-anchor="middle" font-size="11.5" fill="#334155">按日 / 广告主 / 网站</text>
+      <text x="732" y="110" text-anchor="middle" font-size="11.5" fill="#334155">广告 / 国家 / 状态</text>
+      <text x="732" y="128" text-anchor="middle" font-size="11" fill="#64748b">指标口径统一</text>
+
+      <rect x="855" y="40" width="130" height="96" rx="10" fill="#fffbeb" stroke="#d97706"/>
+      <text x="920" y="66" text-anchor="middle" font-size="15" font-weight="700" fill="#92400e">⑤ 报表</text>
+      <text x="920" y="92" text-anchor="middle" font-size="11.5" fill="#334155">概览 / 趋势</text>
+      <text x="920" y="112" text-anchor="middle" font-size="11.5" fill="#334155">明细 / 健康</text>
+
+      <path d="M190,88 L220,88" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <path d="M400,88 L430,88" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <path d="M610,88 L640,88" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <path d="M820,88 L850,88" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+
+      <rect x="225" y="170" width="385" height="58" rx="9" fill="#fff" stroke="#e5e7eb"/>
+      <text x="417" y="192" text-anchor="middle" font-size="12.5" font-weight="700" fill="#334155">⑥ 调度器（复用现有 startup scheduler 模式）</text>
+      <text x="417" y="213" text-anchor="middle" font-size="11.5" fill="#64748b">每日定时 → 回溯 7 天重叠窗口 → 失败重试与告警 → 水位写 SystemState</text>
+
+      <rect x="645" y="170" width="340" height="58" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-dasharray="5 4"/>
+      <text x="815" y="192" text-anchor="middle" font-size="12.5" fill="#b91c1c">硬约束：令牌只入环境变量 · 原始数据不删 · 重跑幂等</text>
+      <text x="815" y="213" text-anchor="middle" font-size="11.5" fill="#b91c1c">修正回改历史不动原始层，只重算事实层</text>
+    </svg>
+  </div>
+
+  <h3>新增数据表（3 张，轻量）</h3>
+  <table>
+    <tr><th width="24%">表</th><th>关键字段</th><th>作用</th></tr>
+    <tr><td><code>cj_sync_run</code></td><td>id, window_from/to, cursor, fetched_count, status, error, started_at/finished_at</td><td>记录每次拉取，便于排查「获取难点」与失败重跑</td></tr>
+    <tr><td><code>cj_commission_raw</code></td><td>commission_id(唯一), order_id, original_action_id, original, posting_date, payload_json, run_id</td><td>原始留痕，幂等 upsert，永不删除</td></tr>
+    <tr><td><code>cj_commission_fact</code></td><td>order_key, sale_amount_usd, commission_usd, is_void, item_json, 各维度键</td><td>合并修正后的唯一事实，报表唯一数据源</td></tr>
+  </table>
+  <p class="muted">配置（CID、回溯天数、启用开关）复用现有 <code>SystemState</code> KV；令牌走环境变量，不进 KV 明文。</p>
+
+  <h3>定期拉取策略</h3>
+  <ul>
+    <li><b>增量水位：</b>按 <code>postingDate</code> 拉「最近 7 天」重叠窗口（可配），覆盖修正延迟；每天定时一次，重跑幂等。</li>
+    <li><b>历史回填：</b>首次按 ≤31 天分段回溯（如 90 天 = 3 段），逐段游标翻页。</li>
+    <li><b>限流：</b>串行请求、批次间限速（保守 ≥1.5 秒/次），远低于 200/5min 上限；失败按指数退避重试。</li>
+    <li><b>失败可见：</b>每次运行写 <code>cj_sync_run</code>；认证失败、count=0、字段异常分别给出明确错误，不静默空跑。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>四、报表界面（低保真）</h2>
+  <p>沿用现有卡片与 CSS 变量，单页分区，不新增复杂菜单。建议作为现有分组下的一个入口，名称与位置见 Q2。</p>
+  <div class="wire">
+    <div class="bar"><span>概览</span><span>趋势</span><span>维度分析</span><span>佣金明细</span><span>拉取状态</span></div>
+    <div class="kpis">
+      <div class="kpi"><b>—</b><small>总佣金 (USD)</small></div>
+      <div class="kpi"><b>—</b><small>总销售额 (USD)</small></div>
+      <div class="kpi"><b>—</b><small>订单数</small></div>
+      <div class="kpi"><b>—</b><small>佣金率</small></div>
+      <div class="kpi"><b>—</b><small>平均订单金额</small></div>
+    </div>
+    <div class="cols">
+      <div class="box">【趋势图】按日：佣金 / 销售额 / 订单数（可切换）</div>
+      <div class="box">【维度排行】广告主 / 网站 / 广告(aid) / 国家，横向条形</div>
+    </div>
+    <div class="box" style="margin-top:12px">【明细表】日期 · 广告主 · 网站 · 广告ID · 订单号 · 状态 · 销售额 · 佣金 · 是否修正 · 是否取消　｜　筛选 + 导出 CSV</div>
+  </div>
+
+  <h3>指标口径（先统一，避免歧义）</h3>
+  <table>
+    <tr><th width="26%">指标</th><th>口径</th><th width="18%">数据来源</th></tr>
+    <tr><td>总佣金</td><td>事实层 <code>SUM(commission_usd)</code>，已合并修正、已剔除取消单</td><td><span class="tag t-fact">CJ 可算</span></td></tr>
+    <tr><td>总销售额 / 订单数</td><td><code>SUM(sale_amount_usd)</code> / <code>COUNT(DISTINCT order_key)</code></td><td><span class="tag t-fact">CJ 可算</span></td></tr>
+    <tr><td>佣金率 / AOV</td><td>总佣金÷总销售额；总销售额÷订单数</td><td><span class="tag t-fact">CJ 可算</span></td></tr>
+    <tr><td>ROAS / ROI / CTR / CVR / EPC</td><td>需要花费、曝光、点击作分母；CJ 不提供</td><td><span class="tag t-q">需外部数据</span></td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>五、复用现有系统（最小改动）</h2>
+  <ul>
+    <li><b>调度：</b>沿用 <code>model_health.start_daily_scheduler()</code> 的 startup 协程模式，新增一个佣金拉取协程，启停对称。</li>
+    <li><b>配置：</b>复用 <code>SystemState</code> KV 存 CID、回溯天数、开关；令牌仅环境变量。</li>
+    <li><b>数据：</b>沿用 <code>ensure_schema()</code> 轻量迁移与 <code>utcnow</code> 时间口径，旧库平滑升级。</li>
+    <li><b>前端：</b>沿用现有 hash 路由与 <code>api.ts</code> 分层；图表用轻量本地方案，无外部 CDN 依赖。</li>
+    <li><b>权限：</b>复用现有角色控制，报表按 editor/manager/admin 可见，viewer 只读。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>六、实施顺序</h2>
+  <div class="phase"><b>P0 · 打通与验证（先做）</b><br>拿到 CID + 新令牌；实现单次手动拉取（选 1 天窗口），核对返回字段与金额；确认能否回读素材标识。产出：一条可追溯的真实数据。</div>
+  <div class="phase"><b>P1 · 落库与修正合并</b><br>三张表、幂等 upsert、correction 合并、取消单识别；补历史回填与限流重试。</div>
+  <div class="phase"><b>P2 · 定时拉取与健康</b><br>每日调度、7 天重叠窗口、运行记录与失败告警、手动补拉按钮。</div>
+  <div class="phase"><b>P3 · 报表界面</b><br>概览 KPI、趋势、维度排行、明细筛选导出。</div>
+  <div class="phase"><b>P4 · 投入产出（暂缓）</b><br>等广告平台花费数据接入后再补 ROI；本版只留字段与接口。</div>
+  <div class="note">每阶段独立成版（自 V4.124 起）、独立测试与发版，沿用 CHANGELOG / 发布数据 / 提交推送流程；任一阶段可暂停，不影响已上线功能。</div>
+</section>
+
+<section>
+  <h2>七、待确认决策点</h2>
+  <div class="q"><b>Q1 · 发布者 CID（阻断项）</b><br>请从 CJ 后台提供 <code>partners@cocomob.com</code> 对应的发布者 CID；并确认令牌是否已重新生成、旧令牌是否已作废。</div>
+  <div class="q"><b>Q2 · 菜单位置</b><br>报表入口放哪里？（A）现有「创意工作台」分组下新增二级项；（B）现有「系统设置」之外新增独立一级项；（C）嵌入「素材历史」页内 Tab。建议 A，改动最小。</div>
+  <div class="q"><b>Q3 · 回溯范围</b><br>首次回填多少天历史？（建议 90 天）每日重叠窗口几天？（建议 7 天）</div>
+  <div class="q"><b>Q4 · 归因粒度</b><br>是否需要把佣金归因到「我们自己的素材编号」？若需要，请提供 CJ 追踪链接的现有埋点方式，我们再验证 <code>aid</code> / <code>source</code> / <code>verticalAttributes</code> 的可回读性。</div>
+  <div class="q"><b>Q5 · 投入数据来源</b><br>是否有 Meta / Google / TikTok 等平台的花费数据可接？若暂无，第一版按"佣金收入视角"交付，ROI 留空不编造。</div>
+  <div class="q"><b>Q6 · 拉取频率</b><br>每日一次是否足够？是否需要每 6 小时一次以更快捕捉修正？（建议先每日）</div>
+</section>
+
+<footer>本稿仅方案，未修改任何代码与配置。确认 Q1–Q6 后再进入开发。</footer>
+</div>
+</body>
+</html>

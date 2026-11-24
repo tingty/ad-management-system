@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>广告主API 对接模板化 · 定期请求任务与界面设计需求方案（新增一级菜单 · 2026-11-24）</title>
+<style>
+  :root{
+    --bg:#f5f7fb;--paper:#fff;--ink:#1f2937;--muted:#6b7280;--line:#e5e7eb;
+    --blue:#2563eb;--blue-soft:#eff6ff;--green:#059669;--green-soft:#ecfdf5;
+    --amber:#d97706;--amber-soft:#fffbeb;--red:#dc2626;--red-soft:#fef2f2;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:36px 22px 72px}
+  header{background:linear-gradient(120deg,#1e3a8a,#2563eb);color:#fff;border-radius:16px;padding:30px 34px;margin-bottom:22px}
+  header h1{margin:0 0 8px;font-size:25px;line-height:1.35}
+  header p{margin:0;color:#dbeafe;font-size:14px}
+  .badge{display:inline-block;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);
+    border-radius:99px;padding:3px 12px;font-size:12px;margin:0 8px 6px 0}
+  section{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:20px}
+  h2{font-size:20px;margin:0 0 14px;padding-bottom:10px;border-bottom:2px solid var(--blue-soft);color:#1e3a8a}
+  h3{font-size:16px;margin:20px 0 8px;color:#1e40af}
+  p{margin:8px 0} ul,ol{margin:8px 0;padding-left:24px} li{margin:5px 0}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#f8fafc;font-weight:600;color:#334155}
+  code{background:#f1f5f9;border-radius:4px;padding:1px 5px;font-size:12.5px;color:#0f172a;word-break:break-all}
+  .lead{background:var(--blue-soft);border-left:4px solid var(--blue);border-radius:8px;padding:14px 18px;margin:14px 0}
+  .warn{background:var(--red-soft);border-left:4px solid var(--red);border-radius:8px;padding:14px 18px;margin:14px 0}
+  .note{background:var(--amber-soft);border-left:4px solid var(--amber);border-radius:8px;padding:12px 16px;margin:12px 0;font-size:14px}
+  .ok{background:var(--green-soft);border-left:4px solid var(--green);border-radius:8px;padding:12px 16px;margin:12px 0;font-size:14px}
+  .tag{display:inline-block;border-radius:5px;padding:1px 8px;font-size:12px;font-weight:600;white-space:nowrap}
+  .t-fact{background:var(--green-soft);color:var(--green)}
+  .t-new{background:var(--blue-soft);color:var(--blue)}
+  .t-q{background:var(--amber-soft);color:var(--amber)}
+  .svgbox{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:12px;margin:16px 0;overflow-x:auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(225px,1fr));gap:14px;margin:14px 0}
+  .card{border:1px solid var(--line);border-radius:10px;padding:16px;background:#fff}
+  .card h4{margin:0 0 8px;font-size:15px;color:#1e40af}
+  .card p{font-size:13.5px;color:var(--muted);margin:4px 0}
+  .phase{border-left:3px solid var(--blue);padding:2px 0 16px 18px;margin-left:8px;position:relative}
+  .phase::before{content:"";position:absolute;left:-8px;top:7px;width:13px;height:13px;border-radius:50%;background:var(--blue);border:3px solid #fff;box-shadow:0 0 0 2px var(--blue)}
+  .phase b{color:#1e40af}
+  .q{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:8px 0}
+  .q b{color:#1e40af}
+  .wire{border:1px solid #94a3b8;border-radius:10px;background:#fff;padding:16px;font-size:13px}
+  .wire h5{margin:0 0 10px;font-size:14px;color:#1e3a8a;background:#e0e7ff;border-radius:6px;padding:6px 10px}
+  .wire table{border-color:#cbd5e1}
+  .wire .btn{display:inline-block;border:1px solid var(--blue);color:var(--blue);border-radius:5px;padding:2px 9px;font-size:12px}
+  .wire .btn-solid{background:var(--blue);color:#fff}
+  .wire .field{margin:6px 0}
+  .wire .field span{display:inline-block;width:96px;color:var(--muted)}
+  .wire input{border:1px solid #cbd5e1;border-radius:4px;padding:3px 8px;width:260px;color:var(--ink);background:#fff}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  footer{text-align:center;color:var(--muted);font-size:12px;padding:16px}
+  @media print{body{background:#fff}section{break-inside:avoid}header{background:#1e3a8a !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+  @media(max-width:720px){.two{grid-template-columns:1fr}header,section{padding:20px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 18px;margin-bottom:18px;font-size:14px;color:#92400e">
+  <b>已合并归档：</b>本方案已并入 <a href="广告主数据模块功能开发文档_20261124.html" style="color:#1e40af">《广告主数据模块 · 功能开发文档》</a>，今后以该文档为唯一维护来源，本文不再更新。
+</div>
+
+<header>
+  <div><span class="badge">方案已更新</span><span class="badge">新增一级菜单 · 独立界面</span><span class="badge">仅方案 · 未开发</span><span class="badge">2026-11-24</span></div>
+  <h1>广告主 API 对接模板化：定期请求任务与界面设计需求方案</h1>
+  <p>全新一级功能模块 · 独立界面布局 · 把 CJ 联盟佣金接口抽象为标准模板，用户只填必填信息即可创建请求任务</p>
+</header>
+
+<section>
+  <h2>〇、需求定位与隔离边界</h2>
+  <div class="lead">
+    <b>已确认的定位：</b>这是一个<b>全新一级功能模块</b>——新增一级菜单入口，界面布局与结构完全按本需求独立设计；<b>不改动任何现有功能模块的菜单、界面布局与功能实现</b>。现有模块（素材工作坊、创意工作台、素材创意模板库、素材标准库、提示词管理、素材历史、系统设置等）保持原样，新旧之间仅共享登录态与基础组件样式变量。
+  </div>
+  <p><b>设计目的：</b>把「某个渠道的接口怎么调」沉淀成<b>标准模板</b>，把「本次用哪个账号调」变成<b>实例配置</b>。以后接入新的联盟 / 广告主 API，只需新增一份模板，不改业务代码。CJ 是第一个落地模板。</p>
+  <div class="note"><b>关于凭据：</b>你提供的 API Token 未写入任何文件。正式实现中，Token 由界面密码框输入、加密存储、列表脱敏、不回显、不写日志、不下发前端。</div>
+  <div class="ok"><b>隔离保证：</b>新增一级路由与独立页面组件；现有页面的 Tab 枚举、菜单分组、布局与交互代码不做任何修改；新增数据表独立命名，通过 <code>ensure_schema()</code> 增量建表，不影响现有表结构。</div>
+</section>
+
+<section>
+  <h2>一、三层抽象：模板 → 实例 → 任务</h2>
+  <div class="svgbox">
+    <svg viewBox="0 0 1000 230" width="100%" role="img" aria-label="模板实例任务三层结构图">
+      <defs><marker id="ar" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#64748b"/></marker></defs>
+      <rect x="20" y="35" width="285" height="140" rx="11" fill="#eff6ff" stroke="#2563eb"/>
+      <text x="162" y="62" text-anchor="middle" font-size="16" font-weight="700" fill="#1e3a8a">① 渠道 API 模板（预置 · 只读）</text>
+      <text x="162" y="88" text-anchor="middle" font-size="12" fill="#334155">请求方法 / 认证方式 / 必填槽位</text>
+      <text x="162" y="110" text-anchor="middle" font-size="12" fill="#334155">查询骨架 / 分页协议 / 限流规则</text>
+      <text x="162" y="132" text-anchor="middle" font-size="12" fill="#334155">响应字段 → 统一字段映射</text>
+      <text x="162" y="156" text-anchor="middle" font-size="11.5" fill="#64748b">例：cj_publisher_commissions</text>
+
+      <rect x="355" y="35" width="285" height="140" rx="11" fill="#ecfdf5" stroke="#059669"/>
+      <text x="497" y="62" text-anchor="middle" font-size="16" font-weight="700" fill="#065f46">② API 连接实例（用户填写）</text>
+      <text x="497" y="88" text-anchor="middle" font-size="12" fill="#334155">只需填模板声明的必填项：</text>
+      <text x="497" y="110" text-anchor="middle" font-size="12" fill="#334155">API Token · CID · Endpoint</text>
+      <text x="497" y="132" text-anchor="middle" font-size="12" fill="#334155">其余规则自动继承模板</text>
+      <text x="497" y="156" text-anchor="middle" font-size="11.5" fill="#64748b">一个模板可建多个连接</text>
+
+      <rect x="690" y="35" width="290" height="140" rx="11" fill="#fffbeb" stroke="#d97706"/>
+      <text x="835" y="62" text-anchor="middle" font-size="16" font-weight="700" fill="#92400e">③ 定期请求任务（绑定实例）</text>
+      <text x="835" y="88" text-anchor="middle" font-size="12" fill="#334155">频率 / 回溯窗口 / 启停</text>
+      <text x="835" y="110" text-anchor="middle" font-size="12" fill="#334155">调度器驱动 → 拉取 → 落库</text>
+      <text x="835" y="132" text-anchor="middle" font-size="12" fill="#334155">运行记录 / 失败重试 / 告警</text>
+      <text x="835" y="156" text-anchor="middle" font-size="11.5" fill="#64748b">手动「立即拉取」并存</text>
+
+      <path d="M305,105 L350,105" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+      <path d="M640,105 L685,105" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>
+
+      <text x="500" y="210" text-anchor="middle" font-size="12.5" fill="#1e40af" font-weight="600">核心：表单字段由模板定义（schema-driven），新增渠道 = 新增模板 + 填表，不改代码</text>
+    </svg>
+  </div>
+
+  <h3>标准模板包含什么（一次定义，全局复用）</h3>
+  <table>
+    <tr><th width="26%">模板配置项</th><th>CJ 模板的取值</th><th>说明</th></tr>
+    <tr><td>模板标识 / 名称</td><td><code>cj_publisher_commissions</code> / CJ联盟 · 佣金明细</td><td>系统内唯一，预置只读</td></tr>
+    <tr><td>请求方法 / 端点</td><td><code>POST</code> / <code>https://commissions.api.cj.com/query</code></td><td>端点作为默认值，实例可覆盖</td></tr>
+    <tr><td>认证方式</td><td><code>Bearer Token</code>（请求头 <code>Authorization</code>）</td><td>模板声明"需要 Token"，不存具体值</td></tr>
+    <tr><td>必填槽位</td><td><b>API Token、CID、Endpoint</b></td><td>用户建实例时只需填这三项</td></tr>
+    <tr><td>查询骨架</td><td><code>publisherCommissions(forPublishers:$cid, sincePostingDate:$from, beforePostingDate:$to, sinceCommissionId:$cursor){...}</code></td><td>字段清单固化在模板，用户无需了解 GraphQL</td></tr>
+    <tr><td>分页协议</td><td>游标字段 <code>maxCommissionId</code> → <code>sinceCommissionId</code>；结束标志 <code>payloadComplete</code></td><td>调度器按协议自动翻页</td></tr>
+    <tr><td>限流规则</td><td>≤31 天窗口、≤10,000 条/次、200 次/5 分钟、串行 ≥1.5 秒</td><td>由模板下发，任务自动遵守</td></tr>
+    <tr><td>字段映射</td><td><code>commissionId→external_id</code>、<code>pubCommissionAmountUsd→commission_usd</code>、<code>saleAmountUsd→sale_usd</code>、<code>orderId/original/originalActionId→修正合并键</code>、广告主/网站/aid/国家→维度</td><td>决定原始数据如何落入统一事实表</td></tr>
+    <tr><td>修正合并规则</td><td>按 <code>orderId + originalActionId</code> 合并正负增量，识别取消单；item 按 SKU 合并数量</td><td>模板内置 CJ 特有的业务规则</td></tr>
+  </table>
+  <div class="ok"><b>价值：</b>用户视角只看到"选模板 → 填 3 项 → 测试 → 建任务"；复杂接口细节（GraphQL、游标、修正、限流）全部封装在模板里，且以后可复制到其他渠道。</div>
+</section>
+
+<section>
+  <h2>二、定期请求任务规划</h2>
+  <table>
+    <tr><th width="22%">任务项</th><th>规划</th></tr>
+    <tr><td>任务绑定</td><td>一个任务绑定一个 API 连接实例；一个实例可建多个任务（如"日报"与"历史回填"）。</td></tr>
+    <tr><td>调度方式</td><td>复用现有 <code>model_health</code> 的 startup 后台协程模式，新增佣金拉取协程；启停对称，不引入新调度框架。</td></tr>
+    <tr><td>触发频率</td><td>默认每日一次（可配置为每 6 小时）。任务配置含：频率、回溯窗口（默认 7 天）、首次回填天数（默认 90 天）。</td></tr>
+    <tr><td>执行流程</td><td>按模板窗口切片 → 游标翻页 → 限流等待 → 原始落库（幂等 upsert）→ 重算事实表 → 写运行记录。详见下表。</td></tr>
+    <tr><td>水位管理</td><td>按 <code>postingDate</code> 重叠窗口拉取；水位与游标写入 <code>SystemState</code> / 运行记录，重启后可续跑。</td></tr>
+    <tr><td>失败处理</td><td>认证失败 / count=0 / 字段异常 / 超限分别给出明确错误；指数退避重试；失败不静默，运行记录可见并可手动补拉。</td></tr>
+    <tr><td>数据落地</td><td>原始层 <code>cj_commission_raw</code>（永不删）→ 事实层 <code>cj_commission_fact</code>（修正合并、取消单识别）→ 报表聚合。共用上一版方案的数据设计。</td></tr>
+    <tr><td>可观测</td><td>每次运行记录：起止时间、窗口、拉取条数、游标位置、状态、错误；界面「运行记录」区可查，支持"获取难点排查"。</td></tr>
+  </table>
+
+  <h3>任务执行子步骤（模板驱动）</h3>
+  <ol>
+    <li>读取实例配置（Token / CID / Endpoint）与模板规则，校验必填项完整。</li>
+    <li>确定窗口：当日任务 = 最近 7 天；回填任务 = 从起始日按 ≤31 天分片。</li>
+    <li>用模板查询骨架发起请求，带 <code>sincePostingDate / beforePostingDate / forPublishers</code>。</li>
+    <li>解析响应，按模板字段映射写入原始层，<code>commissionId</code> 幂等去重。</li>
+    <li>若 <code>payloadComplete=false</code>，取 <code>maxCommissionId</code> 作游标继续；否则进入下一窗口。</li>
+    <li>全窗口完成后重算事实层（合并修正、标记取消单），更新水位与运行记录。</li>
+  </ol>
+</section>
+
+<section>
+  <h2>三、界面设计需求方案</h2>
+  <div class="lead">
+    <b>菜单与路由（已定稿）：</b>新增一级菜单项 <b>「广告主API」</b>，与现有分组平级；独立 hash 路由（建议 <code>#/advertiser-api</code>），独立页面组件。现有菜单分组与路由一项不改。权限：viewer 只读，editor 可建连接与任务，admin 可管理模板与查看全部运行记录。
+  </div>
+  <div class="note"><b>布局原则：</b>独立页面内单页分区、无多层弹窗；沿用全局 CSS 变量以保证视觉一致，但页面结构按本需求独立设计；现有各功能页的布局与交互不受影响。</div>
+
+  <h3>3.1 主界面（单页四区）</h3>
+  <div class="wire">
+    <h5>广告主 API 对接</h5>
+    <table>
+      <tr><th width="20%">① 可用模板（预置 · 只读）</th><th>必填信息</th><th width="16%">操作</th></tr>
+      <tr><td>CJ联盟 · 佣金明细 <code>cj_publisher_commissions</code></td><td>API Token / CID / Endpoint</td><td><span class="btn btn-solid">使用此模板</span></td></tr>
+      <tr><td colspan="3" class="muted">更多渠道模板陆续接入（模板只读，不可在本页修改）</td></tr>
+    </table>
+    <table style="margin-top:14px">
+      <tr><th width="20%">② 我的 API 连接</th><th>模板</th><th>状态</th><th>最后拉取</th><th width="20%">操作</th></tr>
+      <tr><td>CJ 主账号</td><td>CJ 佣金明细</td><td><span class="tag t-fact">已验证</span></td><td>今日 09:30 · 1,284 条</td><td><span class="btn">测试</span> <span class="btn">建任务</span> <span class="btn">编辑</span></td></tr>
+      <tr><td colspan="5"><span class="btn btn-solid">+ 新建连接</span></td></tr>
+    </table>
+    <table style="margin-top:14px">
+      <tr><th width="20%">③ 定期任务</th><th>频率 / 回溯</th><th>下次执行</th><th>状态</th><th width="20%">操作</th></tr>
+      <tr><td>CJ 每日拉取</td><td>每日 / 7 天</td><td>明日 02:00</td><td><span class="tag t-fact">运行中</span></td><td><span class="btn">立即拉取</span> <span class="btn">暂停</span></td></tr>
+    </table>
+    <table style="margin-top:14px">
+      <tr><th width="20%">④ 运行记录</th><th>时间</th><th>条数</th><th>耗时</th><th>状态 / 错误</th></tr>
+      <tr><td>#1024</td><td>今日 09:30</td><td>1,284</td><td>12s</td><td><span class="tag t-fact">成功</span></td></tr>
+      <tr><td>#1023</td><td>昨日 09:31</td><td>0</td><td>2s</td><td><span class="tag t-q">count=0 · 已核查 CID</span></td></tr>
+    </table>
+  </div>
+
+  <h3>3.2 新建连接弹窗（核心：只填 3 项）</h3>
+  <div class="two">
+    <div class="wire">
+      <h5>新建 API 连接 · CJ联盟 · 佣金明细</h5>
+      <div class="field"><span>连接名称</span><input value="CJ 主账号"></div>
+      <div class="field"><span>API Token</span><input type="password" value="••••••••（加密存储，不回显）"></div>
+      <div class="field"><span>CID</span><input placeholder="发布者公司 ID"></div>
+      <div class="field"><span>Endpoint</span><input value="https://commissions.api.cj.com/query"></div>
+      <p class="muted" style="margin:8px 0 0">其余规则（查询、分页、限流、字段映射）自动继承模板，无需填写。</p>
+      <p><span class="btn">测试连接</span> <span class="btn btn-solid">保存</span></p>
+    </div>
+    <div class="wire">
+      <h5>新建定期任务</h5>
+      <div class="field"><span>连接</span><input value="CJ 主账号"></div>
+      <div class="field"><span>频率</span><input value="每日 02:00 ▾"></div>
+      <div class="field"><span>回溯窗口</span><input value="7 天"></div>
+      <div class="field"><span>首次回填</span><input value="90 天（≤31天分片）"></div>
+      <div class="field"><span>数据落地</span><input value="CJ 佣金事实表"></div>
+      <p><span class="btn btn-solid">创建任务</span></p>
+      <p class="muted" style="margin:8px 0 0">测试连接通过后才可启用任务，避免无效凭据反复空跑。</p>
+    </div>
+  </div>
+
+  <h3>3.3 交互与状态要求</h3>
+  <ul>
+    <li><b>测试连接：</b>用 1 天窗口发真实请求，返回"成功 / 认证失败 / CID 无效 / count=0"，测试记录进日志；不通过不允许启用任务。</li>
+    <li><b>状态流转：</b>连接 = 未验证 / 已验证 / 失效；任务 = 草稿 / 运行中 / 暂停 / 失败；运行 = 成功 / 部分成功 / 失败。</li>
+    <li><b>脱敏：</b>Token 列表仅显示尾号，编辑时不回显原值，留空表示沿用已存值。</li>
+    <li><b>可追溯：</b>每次拉取可回看窗口、条数、游标与错误；支持手动"立即拉取"补数。</li>
+    <li><b>不改现有：</b>不改动素材工作坊 / 创意工作台 / 模板库等现有页面的菜单、布局与功能。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>四、数据结构（最小增量）</h2>
+  <table>
+    <tr><th width="30%">表 / 配置</th><th>用途</th></tr>
+    <tr><td><code>api_channel_template</code></td><td>模板定义（种子数据，预置 CJ 模板），只读；字段以 JSON 存请求骨架、分页协议、限流、映射规则。</td></tr>
+    <tr><td><code>api_connection</code></td><td>连接实例：名称、模板 ID、Endpoint、CID、加密 Token、状态、最后验证时间。</td></tr>
+    <tr><td><code>api_fetch_task</code></td><td>任务：实例 ID、频率、回溯窗口、回填天数、状态、下次执行时间。</td></tr>
+    <tr><td><code>api_fetch_run</code></td><td>运行记录：窗口、游标、条数、耗时、状态、错误详情。</td></tr>
+    <tr><td><code>cj_commission_raw</code> / <code>cj_commission_fact</code></td><td>原始数据与修正合并后的事实表，报表唯一数据源。</td></tr>
+    <tr><td><code>SystemState</code> KV</td><td>复用现有 KV 存水位、全局开关；Token 不进 KV 明文。</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>五、实施顺序</h2>
+  <div class="phase"><b>P0 · 一级菜单 + 模板与连接（先做）</b><br>新增一级菜单「广告主API」与独立路由/页面骨架（不动现有菜单与页面）；预置 CJ 模板；实现"新建连接 + 测试连接"；用 1 天窗口验证真实数据返回与字段映射。</div>
+  <div class="phase"><b>P1 · 落库与修正合并</b><br>原始层 / 事实层、幂等去重、修正合并、取消单识别；历史回填与限流重试。</div>
+  <div class="phase"><b>P2 · 定期任务与可观测</b><br>每日调度、7 天重叠窗口、运行记录、失败告警、手动补拉。</div>
+  <div class="phase"><b>P3 · 报表界面</b><br>概览 KPI、趋势、维度排行、明细导出（沿用上一版报表方案）。</div>
+  <div class="phase"><b>P4 · 第二模板验证通用性</b><br>接入第二个渠道模板，验证"加模板不改代码"的设计目标。</div>
+  <div class="note">每阶段独立成版（自 V4.124 起）、独立测试与发版，沿用 CHANGELOG / 发布数据 / 提交推送流程；任一阶段可暂停，不影响已上线功能。</div>
+</section>
+
+<section>
+  <h2>六、已确认事项与待确认项</h2>
+  <div class="ok"><b>已确认（本次明确）：</b>① 全新一级功能模块；② 新增一级菜单入口；③ 界面布局与结构按新需求独立设计；④ 不影响现有功能内的界面布局与功能。</div>
+  <h3>仍待你确认（Q1–Q5）</h3>
+  <div class="q"><b>Q1 · 模板只读 vs 可编辑</b><br>建议模板预置只读，避免误改接口规则；如需调整规则，由管理员在"模板管理"中改。是否接受"用户只读、管理员可改"？</div>
+  <div class="q"><b>Q2 · 必填项是否就这三项</b><br>按你的要求固定为 <b>API Token / CID / Endpoint</b>。是否需要增加"连接名称""拉取频率"等可选字段？（建议名称必填、其余交给任务配置）</div>
+  <div class="q"><b>Q3 · Token 存储方式</b><br>建议加密入库 + 列表脱敏 + 不回显；更严格可改为只存环境变量引用名、由运维注入。选哪种？</div>
+  <div class="q"><b>Q4 · 测试连接是否必须</b><br>建议"测试通过才能启用任务"，避免空跑。是否接受？</div>
+  <div class="q"><b>Q5 · 实施范围</b><br>本版是否只做 P0–P2（模板 / 连接 / 任务 / 落库），报表界面（P3）放到下一版？还是一次做到报表？</div>
+</section>
+
+<footer>本稿已按"新增一级菜单 + 独立界面"更新，仍未修改任何代码与配置。确认 Q1–Q5 后进入开发。</footer>
+</div>
+</body>
+</html>
