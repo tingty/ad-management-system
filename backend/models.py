@@ -416,5 +416,10 @@ class ApiConnection(Base):
     last_test_ok = Column(Boolean, nullable=True)
     last_test_at = Column(DateTime, nullable=True)
     last_test_error = Column(Text, nullable=True)        # 脱敏错误摘要
+    # V4.125：状态悬浮明细（HTTP code / 返回条数），由每次测试回写
+    last_test_http_code = Column(Integer, nullable=True)
+    last_test_count = Column(Integer, nullable=True)
+    # V4.125：定期任务设置（频率 / 回溯窗口 / 首次回填 / 启停），调度执行仍在 P2 接入
+    schedule_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

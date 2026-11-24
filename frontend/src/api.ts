@@ -1466,6 +1466,13 @@ export interface ApiTemplate {
   framework_version: string
   status: string
 }
+export interface ApiSchedule {
+  enabled: boolean
+  frequency: 'daily' | '6h'
+  hour: number
+  lookback_days: number
+  backfill_days: number
+}
 export interface ApiConnection {
   id: number
   name: string
@@ -1477,6 +1484,9 @@ export interface ApiConnection {
   last_test_ok: boolean | null
   last_test_at: string | null
   last_test_error: string
+  last_test_http_code: number | null
+  last_test_count: number | null
+  schedule: ApiSchedule
   created_at: string | null
 }
 export interface ApiTestResult {
@@ -1494,7 +1504,10 @@ export const advertiserApi = {
   connections: () => req<ApiConnection[]>('/api/advertiser-data/connections'),
   createConnection: (b: { name: string; template_code: string; token: string; cid: string; endpoint?: string }) =>
     req<ApiConnection>('/api/advertiser-data/connections', { method: 'POST', body: JSON.stringify(b) }),
-  updateConnection: (id: number, b: Partial<{ name: string; cid: string; endpoint: string; token: string; status: string }>) =>
+  // V4.125：弹窗一个「保存」按钮 = 创建 + 真实测试 + 状态回写
+  createAndTestConnection: (b: { name: string; template_code: string; token: string; cid: string; endpoint?: string }) =>
+    req<ApiConnection>('/api/advertiser-data/connections/create-and-test', { method: 'POST', body: JSON.stringify(b) }),
+  updateConnection: (id: number, b: Partial<{ name: string; cid: string; endpoint: string; token: string; status: string; schedule: ApiSchedule }>) =>
     req<ApiConnection>(`/api/advertiser-data/connections/${id}`, { method: 'PATCH', body: JSON.stringify(b) }),
   deleteConnection: (id: number) =>
     req<void>(`/api/advertiser-data/connections/${id}`, { method: 'DELETE' }),

@@ -899,6 +899,7 @@ class ApiConnectionUpdate(BaseModel):
     endpoint: Optional[str] = None
     token: Optional[str] = None
     status: Optional[str] = None
+    schedule: Optional[dict] = None          # V4.125 定期任务设置
 
 
 class ApiConnectionOut(BaseModel):
@@ -912,6 +913,9 @@ class ApiConnectionOut(BaseModel):
     last_test_ok: Optional[bool] = None
     last_test_at: Optional[str] = None
     last_test_error: str = ""
+    last_test_http_code: Optional[int] = None
+    last_test_count: Optional[int] = None
+    schedule: dict = {}
     created_at: Optional[str] = None
 
 

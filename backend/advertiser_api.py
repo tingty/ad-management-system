@@ -80,7 +80,7 @@ def mask_token(plain: str) -> str:
 PRESET_TEMPLATES: list[dict] = [
     {
         "code": "cj_publisher_commissions",
-        "name": "CJ 联盟 · 发布者佣金明细",
+        "name": "CJ联盟",
         "vendor": "CJ Affiliate",
         "description": "读取 publisherCommissions 返回的每条 PublisherCommission（一个订单的一笔佣金明细，含原始单与修正单）。",
         "method": "POST",

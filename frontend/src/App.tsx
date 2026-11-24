@@ -31,7 +31,7 @@ const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
 
-type NavItem = { key: Tab; label: string; desc: string; icon: string }
+type NavItem = { key: Tab; label: string; desc: string; icon: string; pageTitle?: string }
 type NavGroup = { name: string; icon: string; items: NavItem[] }
 
 /* 创意工作台：自动化创意素材创作中枢。
@@ -74,7 +74,8 @@ const GROUP_ADVERTISER_DATA: NavGroup = {
   icon: 'database',
   items: [
     { key: 'advertiserapi', label: '广告主API', icon: 'cloud',
-      desc: '把广告主 / 联盟的接口沉淀为标准模板，填 Token / CID / Endpoint 建连接，配置定期拉取任务。' },
+      // V4.125：页头标题改为「API对接」，顶部解释文案删除；侧栏菜单名保持不变。
+      pageTitle: 'API对接', desc: '' },
     { key: 'advertiserreports', label: '广告主报表', icon: 'chart',
       desc: '按订单佣金明细聚合，查看收入概览、趋势与维度排行，并下钻到原始记录。' },
   ],
@@ -390,7 +391,7 @@ export default function App() {
           <header className="page-head">
             <div className="ph-left">
               <div className="page-kicker">{curGroup?.name || '广告管理系统'}</div>
-              <h1 className="page-title">{cur.label}</h1>
+              <h1 className="page-title">{cur.pageTitle || cur.label}</h1>
               {cur.desc && <p className="page-desc">{cur.desc}</p>}
             </div>
             <div className="ph-right">

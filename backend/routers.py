@@ -4185,8 +4185,83 @@ def _connection_out(r: ApiConnection) -> dict:
         "status": r.status or "draft", "last_test_ok": r.last_test_ok,
         "last_test_at": r.last_test_at.isoformat() if r.last_test_at else None,
         "last_test_error": r.last_test_error or "",
+        # V4.125：状态悬浮明细 + 定期任务设置
+        "last_test_http_code": r.last_test_http_code,
+        "last_test_count": r.last_test_count,
+        "schedule": _normalize_schedule(r.schedule_json),
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }
+
+
+def _normalize_schedule(value) -> dict:
+    """V4.125：定期任务设置白名单规范化，避免任意对象写入 JSON 列。"""
+    if not isinstance(value, dict):
+        return {}
+
+    def _integer(key: str, default: int, lo: int, hi: int) -> int:
+        try:
+            n = int(value.get(key, default))
+        except (TypeError, ValueError):
+            n = default
+        return max(lo, min(hi, n))
+
+    frequency = value.get("frequency")
+    return {
+        "enabled": bool(value.get("enabled", False)),
+        "frequency": frequency if frequency in ("daily", "6h") else "daily",
+        "hour": _integer("hour", 2, 0, 23),
+        "lookback_days": _integer("lookback_days", 7, 1, 90),
+        "backfill_days": _integer("backfill_days", 90, 1, 365),
+    }
+
+
+def _create_connection_row(db: Session, user: User, body: ApiConnectionIn) -> ApiConnection:
+    """创建连接的唯一实现，供普通创建与「保存即测试」复用。"""
+    tpl = advertiser_api.template_by_code((body.template_code or "").strip())
+    if not tpl:
+        raise HTTPException(400, "模板不存在")
+    name = (body.name or "").strip() or tpl["name"]
+    token = (body.token or "").strip()
+    cid = (body.cid or "").strip()
+    if not token:
+        raise HTTPException(400, "API Token 必填")
+    if not cid:
+        raise HTTPException(400, "发布者 CID 必填")
+    r = ApiConnection(
+        owner_id=user.id, name=name[:128], template_code=tpl["code"], cid=cid[:64],
+        endpoint=(body.endpoint or "").strip()[:512] or tpl.get("default_endpoint", ""),
+        token_enc=advertiser_api.encrypt_token(token),
+        token_mask=advertiser_api.mask_token(token)[:64],
+        status="draft",
+    )
+    db.add(r); db.commit(); db.refresh(r)
+    return r
+
+
+def _record_test_result(r: ApiConnection, result: dict) -> None:
+    """把一次真实测试的结果回写到连接，状态明细包含 HTTP code 与返回条数。"""
+    r.last_test_ok = bool(result.get("ok"))
+    r.last_test_at = datetime.utcnow()
+    r.last_test_error = (result.get("error") or "")[:500]
+    r.last_test_http_code = int(result.get("http_code") or 0) or None
+    r.last_test_count = int(result.get("count") or 0) if result.get("ok") else None
+
+
+async def _test_saved_connection(db: Session, r: ApiConnection) -> dict:
+    """用已保存的加密凭据做一次真实测试并回写；Token 只在内存中解密。"""
+    from datetime import timedelta, timezone
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    before = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    token = advertiser_api.decrypt_token(r.token_enc or "")
+    if not token:
+        raise HTTPException(400, "Token 解密失败，请重新填写")
+    result = await advertiser_api.test_connection(
+        template_code=r.template_code or "", endpoint=r.endpoint or "", token=token,
+        cid=r.cid or "", since_event_date=since, before_event_date=before)
+    _record_test_result(r, result)
+    db.commit()
+    return result
 
 
 @router.get("/advertiser-data/status")
@@ -4221,24 +4296,17 @@ async def api_advertiser_connections(db: Session = Depends(get_db),
 async def api_advertiser_connection_create(body: ApiConnectionIn, db: Session = Depends(get_db),
                                            user: User = Depends(require_roles(*CAN_EDIT))):
     _ad_gate()
-    tpl = advertiser_api.template_by_code(body.template_code.strip())
-    if not tpl:
-        raise HTTPException(400, "模板不存在")
-    name = (body.name or "").strip() or tpl["name"]
-    token = (body.token or "").strip()
-    cid = (body.cid or "").strip()
-    if not token:
-        raise HTTPException(400, "API Token 必填")
-    if not cid:
-        raise HTTPException(400, "发布者 CID 必填")
-    r = ApiConnection(
-        owner_id=user.id, name=name[:128], template_code=tpl["code"], cid=cid[:64],
-        endpoint=(body.endpoint or "").strip()[:512] or tpl.get("default_endpoint", ""),
-        token_enc=advertiser_api.encrypt_token(token),
-        token_mask=advertiser_api.mask_token(token)[:64],
-        status="draft",
-    )
-    db.add(r); db.commit(); db.refresh(r)
+    return _connection_out(_create_connection_row(db, user, body))
+
+
+@router.post("/advertiser-data/connections/create-and-test", response_model=ApiConnectionOut, status_code=201)
+async def api_advertiser_connection_create_and_test(body: ApiConnectionIn, db: Session = Depends(get_db),
+                                                    user: User = Depends(require_roles(*CAN_EDIT))):
+    """V4.125：弹窗一次保存 = 创建连接 + 立即真实测试 + 状态回写，不产生无状态草稿。"""
+    _ad_gate()
+    r = _create_connection_row(db, user, body)
+    await _test_saved_connection(db, r)
+    db.refresh(r)
     return _connection_out(r)
 
 
@@ -4268,6 +4336,8 @@ async def api_advertiser_connection_update(cid: int, body: ApiConnectionUpdate,
         if body.status == "active" and not r.last_test_ok:
             raise HTTPException(400, "测试连接通过后才可启用")
         r.status = body.status
+    if body.schedule is not None:
+        r.schedule_json = _normalize_schedule(body.schedule)
     db.commit(); db.refresh(r)
     return _connection_out(r)
 
@@ -4311,10 +4381,8 @@ async def api_advertiser_connection_test(body: ApiTestIn, db: Session = Depends(
     result = await advertiser_api.test_connection(
         template_code=tpl_code, endpoint=endpoint, token=token, cid=cid,
         since_event_date=since, before_event_date=before)
-    # 测试结果回写连接（成功时间 / 脱敏错误）
+    # 测试结果回写连接（HTTP code / 返回条数 / 脱敏错误），供状态浮层展示
     if body.connection_id:
-        r.last_test_ok = bool(result.get("ok"))
-        r.last_test_at = datetime.utcnow()
-        r.last_test_error = (result.get("error") or "")[:500]
+        _record_test_result(r, result)
         db.commit()
     return result

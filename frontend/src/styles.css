@@ -2537,3 +2537,28 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .chip.ok { color: #15803d; background: rgba(22,163,74,.10); }
 .err { color: #b91c1c; }
 .ok { color: #15803d; }
+
+/* ===== V4.125 API对接：一张列表 + 新建/设置双弹窗 ===== */
+.ad-page-head { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin: 0 0 12px; }
+.ad-page-title { font-size: 18px; margin: 0; font-weight: 650; color: var(--text); }
+.ad-no { width: 52px; font-variant-numeric: tabular-nums; color: var(--muted, #6b7280); }
+.ad-status { display: inline-flex; align-items: center; justify-content: center; min-width: 52px; height: 24px;
+  padding: 0 9px; border-radius: 999px; font-size: 12px; cursor: help; outline: none; }
+.ad-status.ok { background: rgba(22,163,74,.12); color: #15803d; }
+.ad-status.fail { background: rgba(220,38,38,.12); color: #b91c1c; }
+.ad-status.idle { background: rgba(107,114,128,.14); color: var(--muted, #6b7280); }
+.ad-status-pop { position: fixed; z-index: 9999; display: flex; flex-direction: column; gap: 4px;
+  max-width: 340px; padding: 9px 12px; border-radius: 8px; background: var(--card);
+  border: 1px solid var(--border); box-shadow: 0 8px 24px rgba(0,0,0,.16);
+  font-size: 11.5px; line-height: 1.45; color: var(--text); pointer-events: none; }
+.ad-modal-mask { position: fixed; inset: 0; z-index: 9000; display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(15,23,42,.45); }
+.ad-modal { width: min(560px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; padding: 18px 20px;
+  border-radius: 12px; background: var(--card); border: 1px solid var(--border); box-shadow: 0 16px 40px rgba(0,0,0,.22); }
+.ad-modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.ad-modal-head h3 { margin: 0; font-size: 15px; color: var(--text); }
+.ad-modal-x { border: 0; background: transparent; font-size: 22px; line-height: 1; cursor: pointer; color: var(--muted, #6b7280); }
+.ad-modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.ad-modal-hint { font-size: 11.5px; margin: 12px 0 0; }
+.ad-check-line { flex-direction: row !important; align-items: center; gap: 8px !important; }
+.ad-check-line input { width: auto; }
