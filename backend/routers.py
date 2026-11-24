@@ -9,7 +9,7 @@ from database import get_db, SessionLocal
 from models import (ModelConfig, User, AuditLog, LoginLog, PromptConfig, SystemState,
                     CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, CreativePlan, CwLibrary,
                     CreativeAssetSource, CreativeAssetAnalysis, CreativeTemplate,
-                    ApiChannelTemplate, ApiConnection, utcnow)
+                    ApiChannelTemplate, ApiConnection, ApiFetchRun, utcnow)
 from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LoginRequest, UserOut, UserCreate, UserUpdate,
                      PromptOut, PromptUpdate, PromptDefaultIn, LayerMatchIn, ImageQualityAuditIn,
@@ -71,6 +71,7 @@ import creative_intent as cw_intent
 import workshop as cw_workshop
 from version import ENABLE_AUTO_CREATION_PLAN, ENABLE_ADVERTISER_DATA
 import advertiser_api
+import advertiser_ingest  # V4.132 / P1-B：映射写入与幂等落库
 # V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
 from video_claims import (video_evidence_context, audit_video_plan,
                           repair_video_plan, video_asset_gate)
@@ -4414,3 +4415,102 @@ async def api_advertiser_connection_test(body: ApiTestIn, db: Session = Depends(
         _record_test_result(r, result)
         db.commit()
     return result
+
+
+@router.post("/advertiser-data/connections/{cid}/fetch")
+async def api_advertiser_fetch(cid: int, body: ApiTestIn, db: Session = Depends(get_db),
+                               user: User = Depends(require_roles(*CAN_EDIT))):
+    """V4.132 / P1-B：手动拉取 PublisherCommission 明细，按 api_field_map 幂等落库。"""
+    _ad_gate()
+    r = db.query(ApiConnection).filter_by(id=cid, owner_id=user.id).first()
+    if not r:
+        raise HTTPException(404, "连接不存在或无权拉取")
+    if r.status == "disabled":
+        raise HTTPException(400, "连接已禁用，无法拉取")
+    token = advertiser_api.decrypt_token(r.token_enc or "")
+    if not token:
+        raise HTTPException(400, "Token 解密失败，请重新填写")
+    since, before = _test_window(body.since_event_date or "", body.before_event_date or "")
+    run = ApiFetchRun(
+        connection_id=cid, status="running", task_id=None,
+        window_from=datetime.strptime(since, "%Y-%m-%dT%H:%M:%SZ"),
+        window_to=datetime.strptime(before, "%Y-%m-%dT%H:%M:%SZ"),
+        started_at=datetime.utcnow())
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    result = await advertiser_api.test_connection(
+        template_code=r.template_code or "", endpoint=r.endpoint or "", token=token,
+        cid=r.cid or "", since_event_date=since, before_event_date=before,
+        full_records=True)
+    if not result.get("ok"):
+        run.status = "failed"
+        run.error = (result.get("error") or "上游请求失败")[:500]
+        run.finished_at = datetime.utcnow()
+        db.commit()
+        return {"run_id": run.id, "ok": False, "error": run.error,
+                "window_since": since, "window_before": before, "http_code": result.get("http_code", 0)}
+
+    records = result.get("all_records") or []
+    run.fetched_count = len(records)
+    try:
+        stats = advertiser_ingest.ingest_records(
+            db, records=records, connection_id=cid, run_id=run.id)
+    except Exception as exc:
+        run.status = "failed"
+        run.error = str(exc)[:500]
+        run.finished_at = datetime.utcnow()
+        db.commit()
+        raise HTTPException(500, "明细落库失败：" + run.error)
+    run.status = "success"
+    run.inserted_count = stats["inserted"]
+    run.updated_count = stats["updated"]
+    run.cursor_json = {
+        "max_commission_id": result.get("max_commission_id") or "",
+        "payload_complete": bool(result.get("payload_complete")),
+    }
+    run.finished_at = datetime.utcnow()
+    db.commit()
+    return {"run_id": run.id, "ok": True, "window_since": since, "window_before": before,
+            "http_code": result.get("http_code", 0), **stats}
+
+
+@router.get("/advertiser-data/fetch-runs")
+async def api_advertiser_fetch_runs(connection_id: Optional[int] = None, limit: int = 20,
+                                    db: Session = Depends(get_db),
+                                    _: User = Depends(require_roles(*ROLES))):
+    """P1-B：拉取运行记录，供对账与失败排查；只看当前用户自己的连接。"""
+    _ad_gate()
+    query = db.query(ApiFetchRun).join(
+        ApiConnection, ApiFetchRun.connection_id == ApiConnection.id
+    ).filter(ApiConnection.owner_id == _.id)
+    if connection_id is not None:
+        query = query.filter(ApiFetchRun.connection_id == connection_id)
+    rows = query.order_by(ApiFetchRun.id.desc()).limit(max(1, min(limit, 100))).all()
+    return [{
+        "id": row.id, "connection_id": row.connection_id, "status": row.status,
+        "window_from": row.window_from.isoformat() if row.window_from else None,
+        "window_to": row.window_to.isoformat() if row.window_to else None,
+        "fetched_count": row.fetched_count, "inserted_count": row.inserted_count,
+        "updated_count": row.updated_count, "cursor_json": row.cursor_json,
+        "error": row.error,
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+    } for row in rows]
+
+
+@router.post("/advertiser-data/replay")
+async def api_advertiser_replay(template_id: str = "cj_publisher_commissions",
+                                connection_id: Optional[int] = None, dry_run: bool = True,
+                                limit: Optional[int] = None, db: Session = Depends(get_db),
+                                _: User = Depends(require_roles(*CAN_EDIT))):
+    """保障二：改映射后从原始层重放，默认 dry_run 只预览不写库。"""
+    _ad_gate()
+    if connection_id is not None:
+        owned = db.query(ApiConnection).filter_by(id=connection_id, owner_id=_.id).first()
+        if not owned:
+            raise HTTPException(404, "连接不存在或无权重放")
+    return advertiser_ingest.replay_mapping(
+        db, template_id=template_id, connection_id=connection_id,
+        dry_run=dry_run, limit=limit)

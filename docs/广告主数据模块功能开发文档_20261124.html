@@ -171,7 +171,7 @@
     <tr><td>查询骨架</td><td><code>query PublisherCommission { publisherCommissions(forPublishers:$cid, sinceEventDate:$from, beforeEventDate:$to, sinceCommissionId:$cursor) { count payloadComplete maxCommissionId records { ... } } }</code></td><td>官方查询字段仍是 <code>publisherCommissions</code>（小写复数）；<code>records: [PublisherCommission!]!</code> 才是要取的明细，字段清单固化在模板</td></tr>
     <tr><td>分页协议</td><td>游标 <code>maxCommissionId</code> → <code>sinceCommissionId</code>；结束标志 <code>payloadComplete</code></td><td>调度器按协议自动翻页</td></tr>
     <tr><td>限流规则</td><td>≤31 天窗口、≤10,000 条/次、200 次/5 分钟、串行 ≥1.5 秒</td><td>由模板下发，任务自动遵守</td></tr>
-    <tr><td>字段映射</td><td>详见第六章 <code>api_field_map</code>；V4.130 起由 <code>migrations.CJ_FIELD_MAP_SEED</code> 幂等 seed（12 核心 + 6 新增 + 技术列 + item / ext / skip），请求字段全部登记</td><td>决定原始数据如何落入统一事实表；P1-B 落库前按此做覆盖检查，未登记字段告警</td></tr>
+    <tr><td>字段映射</td><td>详见第六章 <code>api_field_map</code>；V4.130 起由 <code>migrations.CJ_FIELD_MAP_SEED</code> 幂等 seed（12 核心 + 6 新增 + 技术列 + item / ext / skip），请求字段全部登记</td><td>决定原始数据如何落入统一事实表；V4.132 已按此分发落库并做覆盖检查，未登记字段写入原始层且告警</td></tr>
     <tr><td>修正合并规则</td><td>按 <code>orderId + originalActionId</code> 合并正负增量，识别取消单</td><td>模板内置 CJ 特有的业务规则</td></tr>
   </table>
   <div class="ok"><b>价值：</b>用户视角只看到"选模板 → 填 3 项 → 测试 → 建任务"；复杂接口细节（GraphQL、游标、修正、限流）全部封装在模板里，且以后可复制到其他渠道。</div>
@@ -246,8 +246,8 @@
       <div class="field"><span>执行小时</span><input value="2（0–23）"></div>
       <div class="field"><span>回溯窗口</span><input value="7 天（1–90）"></div>
       <div class="field"><span>首次回填</span><input value="90 天（1–365）"></div>
-      <p><span class="btn">重新测试</span> <span class="btn btn-solid">保存设置</span> <span class="btn">删除</span></p>
-      <p class="muted" style="margin:8px 0 0">V4.125 保存的是任务配置；自动调度执行与运行记录按规划在后续阶段接入，不提前承诺已运行。</p>
+      <p><span class="btn">立即拉取明细</span> <span class="btn">重新测试</span> <span class="btn btn-solid">保存设置</span> <span class="btn">删除</span></p>
+      <p class="muted" style="margin:8px 0 0">V4.132 新增「立即拉取明细」：按测试抽屉里的查询窗口真实拉取 PublisherCommission，按 <code>api_field_map</code> 幂等落库，并回显新增 / 更新 / 未变条数与未登记字段告警；<code>GET /advertiser-data/fetch-runs</code> 可查运行记录。自动调度仍按规划在 P2 接入，不提前承诺已运行。</p>
     </div>
   </div>
 
@@ -413,13 +413,14 @@
   <div class="ok"><b>验收：</b>全局无硬编码字段中文展示名；改一行配置刷新后表头即变。</div>
 
   <h3>保障二 · replay 重放工具</h3>
-  <div class="sqlbox">replay_mapping(template_id, since, until, order_ids=None, dry_run=True)
+  <div class="sqlbox">POST /advertiser-data/replay?template_id=...&connection_id=...&dry_run=true&limit=...
+advertiser_ingest.replay_mapping(...)
   ① 读 api_source_record.payload_json
   ② 用当前 api_field_map 重新映射
   ③ 按 (template_id, external_id) upsert 回 api_unified_fact
-  ④ 触发订单合并回填（净额 / is_void）</div>
-  <p>改映射后从原始 JSON 重放历史；必须幂等、可断点续跑、支持 <code>dry_run</code> 预览差异不写库；<code>api_field_map</code> 增 <code>version/effective_from</code> 支持按版本回放。</p>
-  <div class="ok"><b>验收：</b>改映射后 replay 历史报表数值正确、重复执行幂等、dry_run 列变更行。</div>
+  ④ 触发订单净额 / is_void 回填</div>
+  <p><b>V4.132 已实现。</b>改映射后从原始 JSON 重放历史；幂等、支持 <code>dry_run=true</code> 只预览覆盖告警而不写库（接口默认 dry_run）。<code>api_field_map</code> 已含 <code>version/effective_from</code> 字段，按版本回放留待后续按需启用。</p>
+  <div class="ok"><b>验收：</b>专项验证 dry_run 不写库、apply 重放幂等（第二次全部 unchanged）、覆盖告警可预览。</div>
 
   <h3>保障三 · 版本化列迁移</h3>
   <p>结构变更写 <code>backend/migrations.py</code> 版本函数 + <code>ensure_schema()</code>，版本号记入 <code>schema_migrations</code>；SQLite 用 <code>ALTER TABLE ... RENAME COLUMN</code>。<code>rename_column(old,new)</code> 助手一次同步四处：<code>api_field_map.target_field</code> → 合并视图 → 写入代码 → 报表查询。迁移前备份 + 回滚说明 + 一致性校验。</p>
@@ -458,7 +459,7 @@
   <h2>九、实施顺序与开发任务清单</h2>
   <h3>9.1 实施阶段（每阶段独立成版，自 V4.124 起）</h3>
   <div class="phase"><b>P0 · 一级菜单 + 模板与连接</b><br>新增一级菜单「广告主数据」及两个二级页面骨架（不动现有菜单与页面）；预置 CJ 模板；实现"新建连接 + 测试连接"；默认近 7 天可调整窗口验证真实明细返回与字段映射。</div>
-  <div class="phase"><b>P1 · 统一表与落库</b><br><code>ensure_schema()</code> 建表（含 V3.1 的 20 业务字段）、幂等去重、按映射到 20 字段、修正合并、取消单识别（按官方枚举更正）、订单视图；历史回填与限流重试。<span class="tag t-derive">V4.127 已完成 P1-A</span>：全部表、订单视图 <code>v_api_order_final</code>、20 行展示名种子、版本化迁移（<code>schema_migrations</code> + <code>rename_column()</code> + <code>scripts/migrate_column.py</code> 自动备份）已落地；映射写入 / 合并回填 / 历史回填留待 P1-B/C。</div>
+  <div class="phase"><b>P1 · 统一表与落库</b><br><code>ensure_schema()</code> 建表（含 V3.1 的 20 业务字段）、幂等去重、按映射到 20 字段、修正合并、取消单识别（按官方枚举更正）、订单视图；历史回填与限流重试。<span class="tag t-derive">V4.127 已完成 P1-A</span>：全部表、订单视图 <code>v_api_order_final</code>、20 行展示名种子、版本化迁移（<code>schema_migrations</code> + <code>rename_column()</code> + <code>scripts/migrate_column.py</code> 自动备份）已落地。<span class="tag t-derive">V4.132 已完成 P1-B</span>：按 <code>api_field_map</code> 分发落库、覆盖检查告警、原始层 / 事实表 / items / ext 幂等写入、订单净额归零重算、<code>replay_mapping()</code> 与运行记录；历史批量回填（P1-C）与自动调度（P2）留待后续。</div>
   <div class="phase"><b>P2 · 定期任务与可观测</b><br>每日调度、7 天重叠窗口、运行记录、失败告警、手动补拉。</div>
   <div class="phase"><b>P3 · 报表界面</b><br>「广告主报表」页：概览 KPI、趋势、维度排行、明细与下钻，表头读 <code>api_field_label</code>。</div>
   <div class="phase"><b>P4 · 第二模板验证通用性</b><br>接入第二个渠道模板，验证"加模板 + 加映射不改代码"的设计目标。</div>
@@ -469,11 +470,11 @@
     <tr><td>1</td><td>建表与迁移骨架 <span class="tag t-derive">V4.127 完成</span></td><td>第七章全部表 + <code>schema_migrations</code> + <code>schema_view_def</code> + <code>rename_column()</code> + 展示名种子</td><td><code>ensure_schema()</code> 可重复执行；Numeric(18,6) 正确；改名四处同步；专项 15/15 通过</td></tr>
     <tr><td>2</td><td>CJ 模板与连接</td><td>预置模板、<code>api_connection</code>、测试连接</td><td>填 3 项即可建连；Token 脱敏不回显</td></tr>
     <tr><td>3</td><td>定期拉取任务</td><td>任务/运行表、startup 协程、游标分页 + 7 天回溯</td><td>按频率自动拉取；运行记录完整；修正可回溯</td></tr>
-    <tr><td>4</td><td>映射写入与覆盖检查</td><td>按 <code>api_field_map</code> 分发，未登记字段告警；含 V3.1 的 8 个新字段映射行</td><td>20 字段一一映射正确；口径符合已确认决策；可空字段写 NULL；<code>publisher_id</code> 与 CID 校验生效</td></tr>
-    <tr><td>5</td><td>订单合并与取消单回填</td><td>订单视图、净额与 <code>is_void</code> 重算回填</td><td>正负相抵判为取消单；不使用不存在的 REVERSED 状态；修正迟到后回填同步</td></tr>
+    <tr><td>4 <span class="tag t-derive">V4.132 完成</span></td><td>映射写入与覆盖检查</td><td>按 <code>api_field_map</code> 分发，未登记字段告警；含 V3.1 的 8 个新字段映射行</td><td>20 字段一一映射正确；口径符合已确认决策；可空字段写 NULL；<code>publisher_id</code> 与 CID 校验生效</td></tr>
+    <tr><td>5 <span class="tag t-derive">V4.132 部分</span></td><td>订单合并与取消单回填</td><td>订单视图、净额与 <code>is_void</code> 重算回填</td><td>正负相抵判为取消单；不使用不存在的 REVERSED 状态；修正迟到后回填同步（本次已实现批内净额重算，跨批次历史全量回填留待 P1-C）</td></tr>
     <tr><td>6</td><td>两个菜单与页面</td><td>一级「广告主数据」+ 二级「广告主API」「广告主报表」</td><td>不影响现有功能；报表表头读配置；可下钻原始 JSON</td></tr>
     <tr><td>7 <span class="tag t-derive">保障</span></td><td>展示名配置层</td><td><code>api_field_label</code> + 报表读配置改造</td><td>无硬编码中文名，改配置即生效</td></tr>
-    <tr><td>8 <span class="tag t-derive">保障</span></td><td>replay 工具</td><td><code>replay_mapping()</code> + 管理端入口 + dry_run</td><td>改映射后可重放历史、幂等、可预览</td></tr>
+    <tr><td>8 <span class="tag t-derive">保障 · V4.132 完成</span></td><td>replay 工具</td><td><code>replay_mapping()</code> + <code>POST /advertiser-data/replay</code> + dry_run</td><td>改映射后可重放历史、幂等、可预览</td></tr>
     <tr><td>9 <span class="tag t-derive">保障</span></td><td>版本化列迁移</td><td>版本函数 + <code>rename_column()</code> + 一致性校验</td><td>可重复、有版本记录、四处引用同步</td></tr>
     <tr><td>10</td><td>全量验证与发版</td><td>专项测试、全量回归、CHANGELOG、git 推送</td><td>pytest/tsc/build/check 全通过</td></tr>
   </table>

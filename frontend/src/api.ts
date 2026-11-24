@@ -1519,6 +1519,23 @@ export interface ApiTestResult {
   hint: string
 }
 
+// V4.132 / P1-B：拉取并幂等落库的执行结果
+export interface ApiFetchResult {
+  run_id: number
+  ok: boolean
+  error?: string
+  window_since: string
+  window_before: string
+  http_code?: number
+  fetched_count?: number
+  inserted?: number
+  updated?: number
+  unchanged?: number
+  skipped?: number
+  void_recalculated?: number
+  warnings?: string[]
+}
+
 export const advertiserApi = {
   status: () => req<{ enabled: boolean }>('/api/advertiser-data/status'),
   templates: () => req<ApiTemplate[]>('/api/advertiser-data/templates'),
@@ -1537,4 +1554,7 @@ export const advertiserApi = {
     since_event_date?: string; before_event_date?: string
   }) =>
     req<ApiTestResult>('/api/advertiser-data/connections/test', { method: 'POST', body: JSON.stringify(b) }),
+  // V4.132：手动拉取 PublisherCommission 明细并按映射幂等落库
+  fetchConnection: (id: number, b?: { since_event_date?: string; before_event_date?: string }) =>
+    req<ApiFetchResult>(`/api/advertiser-data/connections/${id}/fetch`, { method: 'POST', body: JSON.stringify(b || {}) }),
 }

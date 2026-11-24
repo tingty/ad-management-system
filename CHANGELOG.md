@@ -2,6 +2,34 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.132 广告主数据 P1-B：映射写入与 PublisherCommission 幂等落库
+**发布日期**：2026-11-24 17:08
+**变更类型**：新增 / 优化 / 发布
+**涉及模块**：后端数据接入模块与接口、数据模型复用、前端与菜单、系统版本、唯一维护文档、专项测试、发版数据
+**变更摘要**：按规划推进 P1-B，把 V4.129 拉取的 PublisherCommission 明细真正按 `api_field_map` 落库。新增覆盖检查、幂等写入、items / ext 子表、订单净额归零重算、`replay_mapping()` 保障工具与手动拉取接口；设置弹窗新增「立即拉取明细」。不新增数据库列、不改映射 seed、不改请求对象，P2 自动调度与 P3 报表接口仍待后续。
+**更新要点**
+- 【新增】`backend/advertiser_ingest.py`：P1-B 核心。覆盖检查（上游字段 ⊆ 已登记映射，未登记写原始层并告警）、按 `source_path → fact.* / item.* / ext.* / __skip__` 分发、transform 统一转换（decimal / utc_date / utc_datetime / bool / enum_map / derived）。
+- 【新增】幂等落库：`api_source_record` 按 (template_id, connection_id, external_id) 去重并比对 SHA256；`api_unified_fact` 按 (template_id, external_id) upsert；修正单覆盖更新并重建 items / ext 子表；同 payload 重跑记为 unchanged。修复「更新哈希后误判未变化而跳过修正单」的缺陷。
+- 【新增】派生字段：主表 `unit_price_usd = saleAmountUsd / Σ items[].quantity`，子表写入官方 `perItemSaleAmountUsd` 精确值；批量落库后按订单重算 `is_void`（净销售额与净佣金同时归零），不使用不存在的 REVERSED 枚举。
+- 【新增】保障二 `replay_mapping()` 与 `POST /advertiser-data/replay`：从原始层重放，默认 `dry_run=true` 只预览覆盖告警、不写库；`GET /advertiser-data/fetch-runs` 查看运行记录。
+- 【新增】`POST /advertiser-data/connections/{cid}/fetch`：手动拉取一次明细并落库，写 `api_fetch_run`（窗口、条数、游标、错误、状态）；失败路径同样留痕，不静默丢弃。
+- 【优化】前端设置弹窗新增「立即拉取明细」按钮，按测试抽屉的查询窗口执行，回显新增 / 更新 / 未变条数与告警数；`api.ts` 新增 `ApiFetchResult` 与 `fetchConnection()`。
+- 【优化】唯一维护文档把 P1-B、任务 4、任务 8 标为已完成，任务 5 标为「批内净额重算已实现、跨批历史回填待 P1-C」，并同步 replay 接口契约与设置弹窗新按钮。
+- 【新增】`tests/test_advertiser_ingest_v4132.py`：覆盖映射登记、覆盖告警、幂等重跑、修正单更新、均价/精确单价、ext 属性、取消单重算、replay dry_run/apply、拉取接口成功与失败、前后端契约。
+**本次优化与更改的功能 / 模块**
+- 【新增】广告主数据链路从「能测试、能看明细」升级为「能把明细按配置幂等写入统一事实表」，原始 JSON 零丢失、每次变更可追溯、改映射后可重放。
+- 【新增】三条可维护性保障中的 replay 工具落地，配合 V4.127 的展示名层与版本化列迁移，形成完整的「可修改纠正」闭环。
+**影响范围**
+- 兼容：不新增数据库列、不改 `schema_migrations` 版本、不改 `api_field_map` seed、不改 `v_api_order_final` 视图 SQL；请求对象仍是 `PublisherCommission`（查询字段 `publisherCommissions`、读取 `records[]`）；V4.124–V4.131 的菜单、列表、弹窗、测试窗口与脱敏逻辑保持不变。
+- 边界：本版只做单连接手动拉取与批内重算，**不启动自动调度、不做跨批次历史全量回填、不提供报表数据接口**（P1-C / P2 / P3）；真实 CJ 明细入库验收仍需外部完成。
+- 部署：无新增 pip 依赖；执行 `git pull` 后重启前后端即可生效，历史连接与数据无需迁移。
+**验证**
+- 专项：广告主数据九个专项共 99 passed，其中 V4.132 专项 14 项通过。
+- 全量回归：全新隔离 SQLite 库执行 `pytest tests`，634 passed / 3 skipped / 14 subtests passed。
+- 前端：`tsc --noEmit` 与 `vite build` 通过。
+- 幂等验证：同 payload 连跑两次 inserted=1 → unchanged=1，事实表 / items / ext / 原始层均只有一行；修正单覆盖更新后子表重建为最新 SKU；正负相抵订单两条明细均判为取消单。
+- `prepare_release --sync` 后独立进程 `prepare_release --check` 通过，系统版本 / CHANGELOG / 发布数据一致为 V4.132。
+
 ## V4.131 广告主数据：修复 PublisherCommission 测试返回空明细与聚合口径混淆
 **发布日期**：2026-11-24 16:36
 **变更类型**：修复 / 优化 / 新增

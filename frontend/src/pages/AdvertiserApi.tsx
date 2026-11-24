@@ -1,5 +1,6 @@
 /**
- * V4.128 / V4.129 / V4.131 · 广告主数据 / API对接。
+ * V4.128 / V4.129 / V4.131 / V4.132 · 广告主数据 / API对接。
+ * V4.132：设置弹窗新增「立即拉取明细」，按当前查询窗口拉取 PublisherCommission 并幂等落库；
  * V4.131：测试窗口默认近 7 天且可调整（CJ 明细延迟 1–3 天）；0 条明细不再回退显示聚合
  * count；抽屉显示真实查询窗口并给出空窗口原因，明细样例上限由 3 条提升到 10 条。
  * V4.129：测试请求改为真正拉取 publisherCommissions.records（Object: PublisherCommission），
@@ -93,6 +94,7 @@ export default function AdvertiserApi() {
   const [settings, setSettings] = useState<ApiSchedule>(DEFAULT_SCHEDULE)
   const [savingSettings, setSavingSettings] = useState(false)
   const [testingId, setTestingId] = useState<number | null>(null)
+  const [fetchingId, setFetchingId] = useState<number | null>(null)
   const [hover, setHover] = useState<{ id: number; x: number; y: number } | null>(null)
   const [testDrawer, setTestDrawer] = useState<TestDrawer | null>(null)
   // V4.131：测试抽屉的查询窗口（日期），默认近 7 天
@@ -172,6 +174,24 @@ export default function AdvertiserApi() {
       await load()
     } catch (e: any) { setMsg({ kind: 'err', text: e?.message || '测试失败' }) }
     finally { setTestingId(null) }
+  }
+
+  async function fetchNow() {
+    if (settingsId === null) return
+    const id = settingsId
+    setFetchingId(id); setMsg(null)
+    try {
+      const r = await advertiserApi.fetchConnection(id, windowPayload(windowSince, windowBefore))
+      if (!r.ok) {
+        setMsg({ kind: 'err', text: `拉取失败：${r.error || '上游返回异常'}` })
+      } else {
+        const warnings = r.warnings?.length ? ` · 告警 ${r.warnings.length} 条` : ''
+        setMsg({ kind: 'ok', text: `拉取 ${r.fetched_count ?? 0} 条明细：新增 ${r.inserted ?? 0} / 更新 ${r.updated ?? 0} / 未变 ${r.unchanged ?? 0}${warnings}` })
+      }
+      await load()
+    } catch (e: any) {
+      setMsg({ kind: 'err', text: e?.message || '拉取失败' })
+    } finally { setFetchingId(null) }
   }
 
   async function startTest(id: number, name: string, since = windowSince, before = windowBefore) {
@@ -507,8 +527,11 @@ export default function AdvertiserApi() {
                        onChange={e => setSettings(s => ({ ...s, backfill_days: Number(e.target.value) }))} />
               </label>
             </div>
-            <p className="ad-modal-hint muted">当前保存任务配置；自动调度执行按版本规划在后续阶段接入。</p>
+            <p className="ad-modal-hint muted">当前保存任务配置；自动调度执行按版本规划在后续阶段接入。「立即拉取明细」按测试抽屉里的查询窗口执行。</p>
             <div className="ad-modal-foot">
+              <button className="btn" disabled={fetchingId !== null} onClick={() => void fetchNow()}>
+                {fetchingId !== null ? '拉取中…' : '立即拉取明细'}
+              </button>
               <button className="btn" disabled={testingId !== null} onClick={() => void retest()}>
                 {testingId !== null ? '测试中…' : '重新测试'}
               </button>

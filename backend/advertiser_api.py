@@ -275,7 +275,7 @@ def _test_envelope(*, ok: bool, error: str, count: int, http_code: int,
 
 async def test_connection(*, template_code: str, endpoint: str, token: str, cid: str,
                           since_event_date: str, before_event_date: str,
-                          timeout_sec: float = 20.0) -> dict:
+                          timeout_sec: float = 20.0, full_records: bool = False) -> dict:
     """真实调用上游 API，逐条拉取 PublisherCommission 订单佣金明细。异常归为 ok=False。
 
     V4.128：请求 URL / GraphQL 请求体 / 上游完整响应原文统一返回，供「测试」右侧滑窗查阅；
@@ -351,4 +351,7 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
             f"查询窗口 {since_event_date} ~ {before_event_date} 内没有 PublisherCommission 明细；"
             "这是正常的空窗口，不是统计报表。CJ 佣金记录通常延迟 1–3 天，"
             "建议在测试抽屉把开始日期往前调（如近 7 天）后重新测试。")
+    # V4.132：落库链路需要完整明细；默认测试请求不返回，避免把大响应体透给前端
+    if full_records:
+        result["all_records"] = records
     return result
