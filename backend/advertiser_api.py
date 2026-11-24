@@ -131,6 +131,7 @@ def _safe_error(text: str) -> str:
 
 
 def build_test_payload(cid: str, since_event_date: str, before_event_date: str) -> dict:
+    """构造 1 天窗口的 publisherCommissions 最小查询；Token 不进入请求体。"""
     return {
         "query": _TEST_QUERY,
         "variables": {
@@ -141,21 +142,54 @@ def build_test_payload(cid: str, since_event_date: str, before_event_date: str) 
     }
 
 
+def _redact_text(text: str, token: str = "") -> str:
+    """脱敏完整响应文本：只替换 Token 本体与 Bearer 片段，不截断内容。"""
+    s = text or ""
+    if token:
+        s = s.replace(token, "***")
+    return re.sub(r"Bearer\s+\S+", "Bearer ***", s, flags=re.I)
+
+
+def _test_envelope(*, ok: bool, error: str, count: int, http_code: int,
+                   url: str = "", payload: Optional[dict] = None,
+                   response_text: str = "", response: Optional[dict] = None,
+                   **extra) -> dict:
+    """V4.128：所有返回路径共用同一契约，保证右侧滑窗永远有完整请求/响应可看。"""
+    from datetime import datetime, timezone
+    result = {
+        "ok": bool(ok),
+        "error": error or "",
+        "count": int(count or 0),
+        "http_code": int(http_code or 0),
+        "request_url": url or "",
+        "request_method": "POST",
+        "request_body": payload or {},
+        "response_text": response_text or "",
+        "response": response,
+        "tested_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "payload_complete": False,
+        "max_commission_id": "",
+    }
+    result.update(extra)
+    return result
+
+
 async def test_connection(*, template_code: str, endpoint: str, token: str, cid: str,
                           since_event_date: str, before_event_date: str,
                           timeout_sec: float = 20.0) -> dict:
     """真实调用上游 API 验证凭据与 CID。返回结构化结果，任何异常归为 ok=False。
 
-    绝不把 token 写进 result / detail / 日志；只回传脱敏错误摘要。
+    V4.128：请求 URL / GraphQL 请求体 / 上游完整响应原文统一返回，供「测试」右侧滑窗查阅；
+    Token 只用于 Authorization 头，绝不写入请求体、结果、响应文本或日志。
     """
     tpl = template_by_code(template_code)
+    url = (endpoint or "").strip() or ((tpl or {}).get("default_endpoint") or "")
     if not tpl:
-        return {"ok": False, "error": "未知模板，无法测试连接", "count": 0, "http_code": 0}
+        return _test_envelope(ok=False, error="未知模板，无法测试连接", count=0, http_code=0, url=url)
     if not token or not cid:
-        return {"ok": False, "error": "API Token 与 CID 均为必填", "count": 0, "http_code": 0}
-    url = (endpoint or tpl["default_endpoint"]).strip()
+        return _test_envelope(ok=False, error="API Token 与 CID 均为必填", count=0, http_code=0, url=url)
     if not url.startswith("https://") and not url.startswith("http://"):
-        return {"ok": False, "error": "Endpoint 必须是 http(s) 地址", "count": 0, "http_code": 0}
+        return _test_envelope(ok=False, error="Endpoint 必须是 http(s) 地址", count=0, http_code=0, url=url)
 
     payload = build_test_payload(cid, since_event_date, before_event_date)
     try:
@@ -166,27 +200,35 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             )
     except httpx.HTTPError as e:
-        return {"ok": False, "error": "网络请求失败：" + _safe_error(str(e)), "count": 0, "http_code": 0}
+        return _test_envelope(
+            ok=False, error="网络请求失败：" + _safe_error(_redact_text(str(e), token)), count=0,
+            http_code=0, url=url, payload=payload, response_text=_redact_text(str(e), token))
 
     code = r.status_code
+    response_text = _redact_text(r.text, token)
     if code == 401 or code == 403:
-        return {"ok": False, "error": f"认证失败（HTTP {code}）：请检查 Token 是否有效", "count": 0, "http_code": code}
+        return _test_envelope(
+            ok=False, error=f"认证失败（HTTP {code}）：请检查 Token 是否有效", count=0,
+            http_code=code, url=url, payload=payload, response_text=response_text)
     if code >= 400:
-        return {"ok": False, "error": f"上游返回 HTTP {code}：{_safe_error(r.text)}", "count": 0, "http_code": code}
+        return _test_envelope(
+            ok=False, error=f"上游返回 HTTP {code}：{_safe_error(response_text)}", count=0,
+            http_code=code, url=url, payload=payload, response_text=response_text)
     try:
         body = r.json()
     except Exception:
-        return {"ok": False, "error": "上游返回不是 JSON", "count": 0, "http_code": code}
+        return _test_envelope(
+            ok=False, error="上游返回不是 JSON", count=0, http_code=code,
+            url=url, payload=payload, response_text=response_text)
     errors = body.get("errors")
     if errors:
         msg = errors[0].get("message", "") if isinstance(errors, list) and errors else str(errors)
-        return {"ok": False, "error": "GraphQL 错误：" + _safe_error(msg), "count": 0, "http_code": code}
+        return _test_envelope(
+            ok=False, error="GraphQL 错误：" + _safe_error(_redact_text(msg, token)), count=0, http_code=code,
+            url=url, payload=payload, response_text=response_text, response=body)
     data = (body.get("data") or {}).get(tpl["query_name"]) or {}
-    return {
-        "ok": True,
-        "error": "",
-        "count": int(data.get("count") or 0),
-        "http_code": code,
-        "payload_complete": bool(data.get("payloadComplete")),
-        "max_commission_id": data.get("maxCommissionId") or "",
-    }
+    return _test_envelope(
+        ok=True, error="", count=int(data.get("count") or 0), http_code=code,
+        url=url, payload=payload, response_text=response_text, response=body,
+        payload_complete=bool(data.get("payloadComplete")),
+        max_commission_id=data.get("maxCommissionId") or "")

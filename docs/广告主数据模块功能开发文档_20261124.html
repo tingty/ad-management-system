@@ -71,9 +71,9 @@
 <div class="wrap">
 
 <header>
-  <div><span class="badge">唯一维护文档</span><span class="badge">功能开发文档</span><span class="badge">字段补充 V3.1</span><span class="badge">界面 V4.125 / V4.126</span><span class="badge">P1-A 已落地 V4.127</span><span class="badge">2026-11-24</span></div>
+  <div><span class="badge">唯一维护文档</span><span class="badge">功能开发文档</span><span class="badge">字段补充 V3.1</span><span class="badge">界面 V4.125 / V4.126 / V4.128</span><span class="badge">P1-A 已落地 V4.127</span><span class="badge">2026-11-24</span></div>
   <h1>广告主数据模块 · 功能开发文档</h1>
-  <p>合并《广告主API 对接模板化与定期任务方案》与《广告主 API 统一数据存储表结构设计》——今后以本文为唯一权威文档。V3.1 新增 9 项上游字段（其中 3 项已有列，净增 8 个业务字段），并更正 CJ 枚举值口径；V4.125 把「广告主API」页面收敛为「API对接」列表 + 双弹窗，V4.126 统一弹窗表单组件样式；V4.127 已落地 P1-A：第六 / 七 / 八章的全部表、订单视图、展示名种子与版本化迁移骨架已建成（数据写入与报表展示仍在后续版本）。</p>
+  <p>合并《广告主API 对接模板化与定期任务方案》与《广告主 API 统一数据存储表结构设计》——今后以本文为唯一权威文档。V3.1 新增 9 项上游字段（其中 3 项已有列，净增 8 个业务字段），并更正 CJ 枚举值口径；V4.125 把「广告主API」页面收敛为「API对接」列表 + 双弹窗，V4.126 统一弹窗表单组件样式，V4.128 在列表最后新增「测试」列与右侧测试详情滑窗；V4.127 已落地 P1-A：第六 / 七 / 八章的全部表、订单视图、展示名种子与版本化迁移骨架已建成（数据写入与报表展示仍在后续版本）。</p>
 </header>
 
 <section>
@@ -216,10 +216,10 @@
     <h5>广告主数据 / API对接</h5>
     <p class="muted" style="margin:0 0 8px">页面标题为「API对接」，删除顶部解释文案；不展示可用模板样例、定期任务与运行记录占位区。</p>
     <table>
-      <tr><th width="8%">NO.</th><th width="24%">广告主</th><th width="16%">模板</th><th width="22%">状态</th><th width="12%">设置</th></tr>
-      <tr><td>3</td><td>CJ 主账号<br><span class="muted">CID 12345</span></td><td><code>CJ联盟</code></td><td><span class="tag t-derive">成功</span>（悬浮看 HTTP code / 条数 / 时间）</td><td><span class="btn">设置</span></td></tr>
-      <tr><td>2</td><td>另一广告主</td><td><code>CJ联盟</code></td><td><span class="tag t-q">失败</span>（悬浮看 HTTP 401 等明细）</td><td><span class="btn">设置</span></td></tr>
-      <tr><td colspan="5"><span class="btn btn-solid">新建 API</span> · NO. 取连接自增 id，按 id 从大到小展示</td></tr>
+      <tr><th width="7%">NO.</th><th width="21%">广告主</th><th width="14%">模板</th><th width="20%">状态</th><th width="10%">设置</th><th width="8%">测试</th></tr>
+      <tr><td>3</td><td>CJ 主账号<br><span class="muted">CID 12345</span></td><td><code>CJ联盟</code></td><td><span class="tag t-derive">成功</span>（悬浮看 HTTP code / 条数 / 时间）</td><td><span class="btn">设置</span></td><td><span class="btn">测试</span></td></tr>
+      <tr><td>2</td><td>另一广告主</td><td><code>CJ联盟</code></td><td><span class="tag t-q">失败</span>（悬浮看 HTTP 401 等明细）</td><td><span class="btn">设置</span></td><td><span class="btn">测试</span></td></tr>
+      <tr><td colspan="6"><span class="btn btn-solid">新建 API</span> · NO. 取连接自增 id，按 id 从大到小展示；「测试」为最后一列</td></tr>
     </table>
   </div>
   <div class="ok"><b>状态口径：</b>成功 = API 请求成功且返回正确接口信息（HTTP 2xx + 合法 JSON + 含 count 字段）；失败 = 不通 / 错误码 / GraphQL 错误；未测试 = 尚未发起请求。状态值悬浮浮层展示 HTTP code、返回条数、测试时间与脱敏错误摘要。</div>
@@ -248,7 +248,22 @@
     </div>
   </div>
 
-  <h3>5.3 「广告主报表」页面设计</h3>
+  <h3>5.3 「测试」右侧滑窗（V4.128 确认）</h3>
+  <div class="wire">
+    <h5>接口测试详情 · 由列表最后一列「测试」打开</h5>
+    <p class="muted" style="margin:0 0 10px">点击「测试」立即用该连接已保存的加密凭据发起一次真实请求；右侧滑出详情面板，顶部显示请求状态摘要与请求链接，下方完整展示上游响应。Token 只用于 Authorization 头，始终显示为 <code>Bearer ****</code>。</p>
+    <table>
+      <tr><th width="18%">区域</th><th>内容与口径</th></tr>
+      <tr><td>状态摘要</td><td>请求状态（测试中 / 成功 / 失败）、HTTP Code、返回记录数、测试时间；与列表状态浮层同源。</td></tr>
+      <tr><td>01 请求链接</td><td>展示完整 Endpoint（含路径与查询串），左侧标注 <code>POST</code>；下方折叠展示 GraphQL 请求体（CID、事件日期窗口），便于复核请求封装是否正确。</td></tr>
+      <tr><td>02 响应结果</td><td>展示上游 HTTP 响应原文；JSON 自动格式化，非 JSON 原样展示；区域可完整滚动，不做摘要截断。</td></tr>
+      <tr><td>操作</td><td>底部「重新测试」再次发起请求；「关闭」按钮、点击遮罩、Esc 三种方式都可关闭滑窗。</td></tr>
+    </table>
+    <p class="muted" style="margin:10px 0 0">持久化：连接表新增 <code>last_test_url</code> / <code>last_test_request_body</code> / <code>last_test_response_text</code>，由 <code>ensure_schema()</code> 幂等补列，V4.128.1 留版本记录；响应中的 Token 片段会被脱敏，请求体永不写 Token。</p>
+  </div>
+  <div class="ok"><b>查阅口径：</b>状态字段回答「通不通」，右侧滑窗回答「发了什么、回了什么」。失败时保留 HTTP 错误原文与 GraphQL errors，便于对照 CJ 官方错误说明排查 Token / CID / 参数问题。</div>
+
+  <h3>5.4 「广告主报表」页面设计</h3>
   <div class="wire">
     <h5>广告主数据 / 广告主报表</h5>
     <table>

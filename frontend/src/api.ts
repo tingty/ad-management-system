@@ -1486,6 +1486,9 @@ export interface ApiConnection {
   last_test_error: string
   last_test_http_code: number | null
   last_test_count: number | null
+  last_test_url: string
+  last_test_request_body: Record<string, unknown>
+  last_test_response_text: string
   schedule: ApiSchedule
   created_at: string | null
 }
@@ -1496,6 +1499,13 @@ export interface ApiTestResult {
   http_code: number
   payload_complete: boolean
   max_commission_id: string
+  // V4.128：完整请求 / 响应明细，供列表「测试」右侧滑窗展示
+  request_url: string
+  request_method: string
+  request_body: Record<string, unknown>
+  response_text: string
+  response: Record<string, unknown> | null
+  tested_at: string
 }
 
 export const advertiserApi = {

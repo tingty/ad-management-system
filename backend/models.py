@@ -420,6 +420,10 @@ class ApiConnection(Base):
     # V4.125：状态悬浮明细（HTTP code / 返回条数），由每次测试回写
     last_test_http_code = Column(Integer, nullable=True)
     last_test_count = Column(Integer, nullable=True)
+    # V4.128：测试详情留痕（完整请求链接 / GraphQL 请求体 / 上游响应原文），供右侧滑窗查阅
+    last_test_url = Column(Text, nullable=True)
+    last_test_request_body = Column(JSON, nullable=True)
+    last_test_response_text = Column(Text, nullable=True)
     # V4.125：定期任务设置（频率 / 回溯窗口 / 首次回填 / 启停），调度执行仍在 P2 接入
     schedule_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=utcnow)

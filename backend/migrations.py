@@ -144,8 +144,19 @@ def _migrate_v4127_1(conn) -> str:
     return f"订单视图 {ORDER_VIEW_NAME} 已就绪；展示名配置新增 {labels} 行"
 
 
+def _migrate_v4128_1(conn) -> str:
+    """V4.128.1：核对轻量 ADD COLUMN 已补齐测试详情字段，并留下版本记录。"""
+    have = {c["name"] for c in inspect(conn).get_columns("api_connection")}
+    need = {"last_test_url", "last_test_request_body", "last_test_response_text"}
+    missing = need - have
+    if missing:
+        raise RuntimeError("api_connection 缺少测试详情字段：" + ", ".join(sorted(missing)))
+    return "api_connection 测试详情字段（请求链接 / 请求体 / 响应原文）已就绪"
+
+
 MIGRATIONS = [
     ("V4.127.1", "advertiser_unified_schema", _migrate_v4127_1),
+    ("V4.128.1", "advertiser_test_detail", _migrate_v4128_1),
 ]
 
 

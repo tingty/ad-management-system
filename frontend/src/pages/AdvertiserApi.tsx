@@ -1,16 +1,23 @@
 /**
- * V4.125 · 广告主数据 / API对接。
- * 界面按用户确认意见收敛为「一张列表 + 两个弹窗」：
- *   - 页面标题 API对接，删除顶部解释文案与模板样例/运行记录占位区；
- *   - 列表列：NO. / 广告主 / 模板 / 状态 / 设置；状态悬浮显示 HTTP 明细；
- *   - 新建弹窗只有一个「保存」按钮，保存即创建 + 真实测试 + 回写状态；
- *   - 设置弹窗承载定期任务配置，可保存 / 重新测试 / 删除。
+ * V4.128 · 广告主数据 / API对接。
+ * 在 V4.125「一张列表 + 两个弹窗」基础上，列表最后新增「测试」列：
+ *   - 点击测试立即发起一次真实请求，右侧滑出测试详情抽屉；
+ *   - 抽屉顶部展示完整请求链接 / 方法 / GraphQL 请求体；
+ *   - 请求下方完整展示 HTTP 状态摘要与上游响应原文（Token 脱敏，不回显）；
+ *   - 支持关闭按钮、遮罩点击、Esc 关闭；列表状态浮层与双弹窗保持不变。
  * 只改动本页面与 API 封装，不影响任何现有模块布局与功能。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { advertiserApi, ApiConnection, ApiSchedule, ApiTemplate } from '../api'
+import { advertiserApi, ApiConnection, ApiSchedule, ApiTemplate, ApiTestResult } from '../api'
 
 type Msg = { kind: 'ok' | 'err'; text: string }
+type TestDrawer = {
+  id: number
+  name: string
+  result: ApiTestResult | null
+  loading: boolean
+  error?: string
+}
 const DEFAULT_SCHEDULE: ApiSchedule = {
   enabled: false, frequency: 'daily', hour: 2, lookback_days: 7, backfill_days: 90,
 }
@@ -28,7 +35,7 @@ function statusClass(c: ApiConnection): string {
 
 function statusDetail(c: ApiConnection): string[] {
   if (c.last_test_ok === null || c.last_test_ok === undefined) {
-    return ['尚未进行接口测试', '点击「设置 → 重新测试」发起一次真实请求']
+    return ['尚未进行接口测试', '点击列表最后一列「测试」发起一次真实请求']
   }
   const when = c.last_test_at ? new Date(c.last_test_at).toLocaleString() : '—'
   if (c.last_test_ok) {
@@ -43,6 +50,14 @@ function statusDetail(c: ApiConnection): string[] {
     c.last_test_error || '接口返回内容异常',
     `测试时间：${when}`,
   ]
+}
+
+function pretty(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'string') {
+    try { return JSON.stringify(JSON.parse(value), null, 2) } catch { return value }
+  }
+  try { return JSON.stringify(value, null, 2) } catch { return String(value) }
 }
 
 export default function AdvertiserApi() {
@@ -60,6 +75,7 @@ export default function AdvertiserApi() {
   const [savingSettings, setSavingSettings] = useState(false)
   const [testingId, setTestingId] = useState<number | null>(null)
   const [hover, setHover] = useState<{ id: number; x: number; y: number } | null>(null)
+  const [testDrawer, setTestDrawer] = useState<TestDrawer | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -76,7 +92,7 @@ export default function AdvertiserApi() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      setShowCreate(false); setSettingsId(null); setHover(null)
+      setShowCreate(false); setSettingsId(null); setHover(null); setTestDrawer(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -136,6 +152,19 @@ export default function AdvertiserApi() {
     finally { setTestingId(null) }
   }
 
+  async function startTest(id: number, name: string) {
+    setHover(null); setMsg(null)
+    setTestDrawer({ id, name, result: null, loading: true })
+    try {
+      const r = await advertiserApi.testConnection({ connection_id: id })
+      setTestDrawer(d => d && d.id === id ? { ...d, result: r, loading: false } : d)
+      await load()
+    } catch (e: any) {
+      setTestDrawer(d => d && d.id === id
+        ? { ...d, loading: false, error: e?.message || '测试请求失败' } : d)
+    }
+  }
+
   async function remove() {
     if (settingsId === null) return
     const c = connections.find(x => x.id === settingsId)
@@ -150,6 +179,8 @@ export default function AdvertiserApi() {
   }
 
   const hovered = hover ? connections.find(c => c.id === hover.id) : null
+  const drawerResult = testDrawer?.result || null
+  const drawerStatus = testDrawer?.loading ? 'idle' : drawerResult?.ok ? 'ok' : 'fail'
 
   return (
     <div className="ad-data-page">
@@ -164,7 +195,7 @@ export default function AdvertiserApi() {
       ) : (
         <div className="card ad-table-wrap">
           <table className="ad-table">
-            <thead><tr><th>NO.</th><th>广告主</th><th>模板</th><th>状态</th><th>设置</th></tr></thead>
+            <thead><tr><th>NO.</th><th>广告主</th><th>模板</th><th>状态</th><th>设置</th><th>测试</th></tr></thead>
             <tbody>
               {connections.map(c => (
                 <tr key={c.id}>
@@ -188,6 +219,13 @@ export default function AdvertiserApi() {
                     >{statusLabel(c)}</span>
                   </td>
                   <td><button className="btn sm" onClick={() => openSettings(c)}>设置</button></td>
+                  <td>
+                    <button
+                      className="btn sm"
+                      disabled={!!testDrawer && testDrawer.id === c.id && testDrawer.loading}
+                      onClick={() => void startTest(c.id, c.name)}
+                    >{testDrawer?.id === c.id && testDrawer.loading ? '测试中…' : '测试'}</button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -198,6 +236,91 @@ export default function AdvertiserApi() {
       {hover && hovered && (
         <div className="ad-status-pop" style={{ left: hover.x, top: hover.y + 6 }}>
           {statusDetail(hovered).map((line, i) => <span key={i}>{line}</span>)}
+        </div>
+      )}
+
+      {testDrawer && (
+        <div className="ad-drawer-mask" onMouseDown={() => setTestDrawer(null)}>
+          <aside className="ad-drawer" role="dialog" aria-label="接口测试详情"
+                 onMouseDown={e => e.stopPropagation()}>
+            <header className="ad-drawer-head">
+              <div className="ad-drawer-title">
+                <span className="ad-drawer-kicker">接口测试详情</span>
+                <h3>{testDrawer.name}</h3>
+              </div>
+              <button className="ad-drawer-x" aria-label="关闭测试详情"
+                      onClick={() => setTestDrawer(null)}>×</button>
+            </header>
+
+            <div className="ad-drawer-body">
+              <div className="ad-drawer-summary">
+                <div className="ad-drawer-metric">
+                  <span>请求状态</span>
+                  <b className={`ad-status ${drawerStatus}`}>
+                    {testDrawer.loading ? '测试中…' : drawerResult?.ok ? '成功' : '失败'}
+                  </b>
+                </div>
+                <div className="ad-drawer-metric">
+                  <span>HTTP Code</span>
+                  <b>{drawerResult?.http_code || '—'}</b>
+                </div>
+                <div className="ad-drawer-metric">
+                  <span>返回记录</span>
+                  <b>{drawerResult?.ok ? drawerResult.count : '—'}</b>
+                </div>
+                <div className="ad-drawer-metric">
+                  <span>测试时间</span>
+                  <b className="ad-metric-time">
+                    {drawerResult?.tested_at ? new Date(drawerResult.tested_at).toLocaleString() : '—'}
+                  </b>
+                </div>
+              </div>
+
+              {testDrawer.error && <div className="ad-msg err">{testDrawer.error}</div>}
+              {!testDrawer.loading && drawerResult?.error && (
+                <div className="ad-msg err">{drawerResult.error}</div>
+              )}
+
+              <section className="ad-drawer-sec">
+                <div className="ad-drawer-sec-head">
+                  <span className="ad-step">01</span>
+                  <h4>请求链接</h4>
+                  <span className="ad-drawer-sec-note">完整 Endpoint</span>
+                </div>
+                <div className="ad-url-bar">
+                  <span className="ad-method">{drawerResult?.request_method || 'POST'}</span>
+                  <code>{drawerResult?.request_url || '—'}</code>
+                </div>
+                <p className="ad-drawer-hint">Authorization: Bearer **** · Token 不回显；查询窗口为最近 1 天的事件日期。</p>
+                <details className="ad-drawer-details" open>
+                  <summary>请求内容 · GraphQL</summary>
+                  <pre>{pretty(drawerResult?.request_body)}</pre>
+                </details>
+              </section>
+
+              <section className="ad-drawer-sec">
+                <div className="ad-drawer-sec-head">
+                  <span className="ad-step">02</span>
+                  <h4>响应结果</h4>
+                  <span className="ad-drawer-sec-note">上游原文 · 可完整滚动查看</span>
+                </div>
+                {testDrawer.loading ? (
+                  <div className="ad-drawer-loading">正在请求 CJ 接口，请稍候…</div>
+                ) : (
+                  <pre className="ad-response">{pretty(drawerResult?.response_text)}</pre>
+                )}
+              </section>
+            </div>
+
+            <footer className="ad-drawer-foot">
+              <button
+                className="btn"
+                disabled={testDrawer.loading}
+                onClick={() => void startTest(testDrawer.id, testDrawer.name)}
+              >{testDrawer.loading ? '测试中…' : '重新测试'}</button>
+              <button className="btn primary" onClick={() => setTestDrawer(null)}>关闭</button>
+            </footer>
+          </aside>
         </div>
       )}
 

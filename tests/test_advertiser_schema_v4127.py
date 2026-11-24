@@ -103,8 +103,9 @@ class TestEmptyDatabase(_IsolatedDB):
 class TestIdempotencyAndLegacy(_IsolatedDB):
     def test_ensure_schema_idempotent(self):
         self.assertEqual(self.migrations.ensure_schema(), [])
-        ver = self.q("SELECT version FROM schema_migrations")
-        self.assertEqual([r[0] for r in ver], ["V4.127.1"])
+        ver = [r[0] for r in self.q("SELECT version FROM schema_migrations")]
+        self.assertIn("V4.127.1", ver)       # V4.128 起允许后续版本追加，本版仍只应用一次
+        self.assertEqual(ver.count("V4.127.1"), 1)
 
     def test_legacy_database_missing_columns_get_added(self):
         with self.engine.begin() as conn:
@@ -122,7 +123,7 @@ class TestIdempotencyAndLegacy(_IsolatedDB):
         self.assertTrue(v["view_ok"])
         self.assertEqual(v["business_fields"], 20)
         self.assertEqual(v["label_count"], 20)
-        self.assertEqual(v["versions"], ["V4.127.1"])
+        self.assertIn("V4.127.1", v["versions"])
 
 
 class TestFieldLabels(_IsolatedDB):

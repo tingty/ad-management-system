@@ -915,6 +915,10 @@ class ApiConnectionOut(BaseModel):
     last_test_error: str = ""
     last_test_http_code: Optional[int] = None
     last_test_count: Optional[int] = None
+    # V4.128：测试详情留痕，供列表「测试」右侧滑窗查阅
+    last_test_url: str = ""
+    last_test_request_body: dict = {}
+    last_test_response_text: str = ""
     schedule: dict = {}
     created_at: Optional[str] = None
 
@@ -935,3 +939,10 @@ class ApiTestOut(BaseModel):
     http_code: int = 0
     payload_complete: bool = False
     max_commission_id: str = ""
+    # V4.128：完整请求 / 响应明细，右侧滑窗直接消费
+    request_url: str = ""
+    request_method: str = "POST"
+    request_body: dict = {}
+    response_text: str = ""
+    response: Optional[dict] = None
+    tested_at: str = ""

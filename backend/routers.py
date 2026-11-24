@@ -4188,6 +4188,10 @@ def _connection_out(r: ApiConnection) -> dict:
         # V4.125：状态悬浮明细 + 定期任务设置
         "last_test_http_code": r.last_test_http_code,
         "last_test_count": r.last_test_count,
+        # V4.128：测试详情留痕（右侧滑窗可直接查阅最近一次请求 / 响应）
+        "last_test_url": r.last_test_url or "",
+        "last_test_request_body": r.last_test_request_body or {},
+        "last_test_response_text": r.last_test_response_text or "",
         "schedule": _normalize_schedule(r.schedule_json),
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }
@@ -4245,6 +4249,10 @@ def _record_test_result(r: ApiConnection, result: dict) -> None:
     r.last_test_error = (result.get("error") or "")[:500]
     r.last_test_http_code = int(result.get("http_code") or 0) or None
     r.last_test_count = int(result.get("count") or 0) if result.get("ok") else None
+    # V4.128：完整请求链接 / GraphQL 请求体 / 上游响应原文留痕，Token 永不写库
+    r.last_test_url = (result.get("request_url") or "")[:512] or None
+    r.last_test_request_body = result.get("request_body") or None
+    r.last_test_response_text = result.get("response_text") or ""
 
 
 async def _test_saved_connection(db: Session, r: ApiConnection) -> dict:
@@ -4356,7 +4364,7 @@ async def api_advertiser_connection_delete(cid: int, db: Session = Depends(get_d
 @router.post("/advertiser-data/connections/test", response_model=ApiTestOut)
 async def api_advertiser_connection_test(body: ApiTestIn, db: Session = Depends(get_db),
                                          user: User = Depends(require_roles(*CAN_EDIT))):
-    """测试连接：1 天窗口只读 count，不写任何数据、不回显 Token。"""
+    """测试连接：1 天窗口只读 count，回写脱敏状态与请求/响应详情，不回显 Token。"""
     _ad_gate()
     token = (body.token or "").strip()
     cid = (body.cid or "").strip()
