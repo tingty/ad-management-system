@@ -2562,3 +2562,26 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ad-modal-hint { font-size: 11.5px; margin: 12px 0 0; }
 .ad-check-line { flex-direction: row !important; align-items: center; gap: 8px !important; }
 .ad-check-line input { width: auto; }
+
+/* V4.126 弹窗表单控件统一：输入框 / 下拉框 / 数字框同高、同色、同边框、同焦点态 */
+.ad-modal .ad-form-grid input:not([type="checkbox"]):not([type="radio"]),
+.ad-modal .ad-form-grid select {
+  height: 38px;
+  min-width: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.ad-modal .ad-form-grid input::placeholder { color: #aab4c0; }
+.ad-modal .ad-form-grid input:focus:not([type="checkbox"]):not([type="radio"]),
+.ad-modal .ad-form-grid select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(31, 78, 121, .12);
+}
