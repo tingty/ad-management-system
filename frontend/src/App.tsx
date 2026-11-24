@@ -13,18 +13,20 @@ import SpecLibrary from './pages/SpecLibrary'
 import MaterialPromptManage from './pages/MaterialPromptManage'
 import MaterialWorkshop from './pages/MaterialWorkshop'
 import CwTaskDock from './CwTaskDock'
+import AdvertiserApi from './pages/AdvertiserApi'
+import AdvertiserReports from './pages/AdvertiserReports'
 
 /* V4.75：移除「素材创作平台」（素材创作 / 素材提示词）两个子模块及其独占代码，
    「素材历史」迁移为「创意工作台」的最后一个二级菜单；系统设置保留。 */
 type Tab = 'workshop' | 'workbench' | 'creativeanalysis' | 'speclibrary' | 'materialprompts' | 'history'
-  | 'llm' | 'accounts' | 'logs' | 'releasenotes'
+  | 'llm' | 'accounts' | 'logs' | 'releasenotes' | 'advertiserapi' | 'advertiserreports'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
 const TABS: Tab[] = ['workshop', 'workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history',
-  'llm', 'accounts', 'logs', 'releasenotes']
+  'llm', 'accounts', 'logs', 'releasenotes', 'advertiserapi', 'advertiserreports']
 const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
@@ -62,6 +64,19 @@ const GROUP_WORKSHOP: NavGroup = {
     { key: 'workshop', label: '素材工作坊', icon: 'wand', desc: '' },
     { key: 'creativeanalysis', label: '素材创意模板库', icon: 'atom',
       desc: '导入并解构推广图片 / 视频，沉淀可复用的创意模板；供「按模板创作」引用。' },
+  ],
+}
+
+/* V4.124 广告主数据：全新一级模块，下含「广告主API」「广告主报表」两个二级菜单。
+   与现有分组完全隔离，仅共享登录态与全局样式变量。 */
+const GROUP_ADVERTISER_DATA: NavGroup = {
+  name: '广告主数据',
+  icon: 'database',
+  items: [
+    { key: 'advertiserapi', label: '广告主API', icon: 'cloud',
+      desc: '把广告主 / 联盟的接口沉淀为标准模板，填 Token / CID / Endpoint 建连接，配置定期拉取任务。' },
+    { key: 'advertiserreports', label: '广告主报表', icon: 'chart',
+      desc: '按订单佣金明细聚合，查看收入概览、趋势与维度排行，并下钻到原始记录。' },
   ],
 }
 
@@ -103,6 +118,9 @@ const PATHS: Record<string, ReactNode> = {
   bell: <><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>,
   history: <><path d="M3.2 8A9 9 0 1 1 3 12" /><path d="M3 3v5h5" /><path d="M12 7v5l3.2 2" /></>,
   compass: <><circle cx="12" cy="12" r="9" /><path d="M15.5 8.5 11 11l-2.5 4.5L13 13z" /></>,
+  database: <><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7" /></>,
+  cloud: <><path d="M6.5 19a4.5 4.5 0 0 1-.5-9 6 6 0 0 1 11.6 1.5A3.8 3.8 0 0 1 17.5 19z" /></>,
+  chart: <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></>,
   atom: <><circle cx="12" cy="12" r="1.6" /><ellipse cx="12" cy="12" rx="10" ry="4.2" /><ellipse cx="12" cy="12" rx="10" ry="4.2" transform="rotate(60 12 12)" /><ellipse cx="12" cy="12" rx="10" ry="4.2" transform="rotate(120 12 12)" /></>,
 }
 
@@ -118,7 +136,10 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
 /* ---------------- 路由（hash 同步，刷新/后退不丢位置） ---------------- */
 
 function tabFromHash(): Tab | null {
-  const h = location.hash.replace(/^#\/?/, '').split('?')[0]
+  let h = location.hash.replace(/^#\/?/, '').split('?')[0]
+  // V4.124：规划路由 #/advertiser-data/api|reports 映射到独立页面 key，兼容短写。
+  if (h === 'advertiser-data/api') h = 'advertiserapi'
+  if (h === 'advertiser-data/reports') h = 'advertiserreports'
   return (TABS as string[]).includes(h) ? (h as Tab) : null
 }
 
@@ -126,7 +147,7 @@ function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   // V4.100：materialprompts 必须列入白名单，否则点击后被下方校验重定向回工作台。
   return [
-    ...(canEdit ? (['workshop', 'workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history'] as Tab[]) : []),
+    ...(canEdit ? (['workshop', 'workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history', 'advertiserapi', 'advertiserreports'] as Tab[]) : []),
     ...(user.role === 'admin' ? (['llm', 'accounts', 'logs'] as Tab[]) : []),
     // 「新版通知」对所有角色开放，方便用户随时查阅每次优化与变更的版本内容
     'releasenotes',
@@ -211,7 +232,9 @@ export default function App() {
 
   const go = (t: Tab) => {
     setTab(t)
-    if (tabFromHash() !== t) location.hash = '#/' + t
+    const hash = t === 'advertiserapi' ? '#/advertiser-data/api'
+      : t === 'advertiserreports' ? '#/advertiser-data/reports' : '#/' + t
+    if (location.hash !== hash) location.hash = hash
   }
 
   const logout = () => {
@@ -235,7 +258,7 @@ export default function App() {
   const isEditor = !!user && ['admin', 'manager', 'editor'].includes(user.role)
   const isAdmin = user?.role === 'admin'
 
-  const visibleGroups: NavGroup[] = [GROUP_WORKSHOP, GROUP_WORKBENCH, GROUP_SYSTEM]
+  const visibleGroups: NavGroup[] = [GROUP_WORKSHOP, GROUP_WORKBENCH, GROUP_ADVERTISER_DATA, GROUP_SYSTEM]
     .map(g => ({
       ...g,
       items: g.items.filter(it =>
@@ -323,7 +346,8 @@ export default function App() {
             }
             // V4.117：素材工作坊升为二级菜单，需第三个独立折叠 key，避免与 workbench/system 串台。
             const openKey = g.name === GROUP_WORKSHOP.name ? 'workshop'
-              : g.name === GROUP_WORKBENCH.name ? 'workbench' : 'system'
+              : g.name === GROUP_WORKBENCH.name ? 'workbench'
+                : g.name === GROUP_ADVERTISER_DATA.name ? 'advertiserdata' : 'system'
             return (
               <Fragment key={openKey}>
                 {i > 0 && <div className="sb-sep" />}
@@ -398,6 +422,8 @@ export default function App() {
           {tab === 'llm' && isAdmin && <LLMSettings />}
           {tab === 'accounts' && isAdmin && <Accounts />}
           {tab === 'logs' && isAdmin && <Logs />}
+          {tab === 'advertiserapi' && isEditor && <AdvertiserApi />}
+          {tab === 'advertiserreports' && isEditor && <AdvertiserReports />}
           {tab === 'releasenotes' && <ReleaseNotes />}
         </div>
       </main>

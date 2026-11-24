@@ -379,3 +379,42 @@ class CreativeTemplate(Base):
     status = Column(String(24), default="active")     # draft / active / archived
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+# ============ V4.124 广告主数据模块：API 模板 / 连接实例 ============
+class ApiChannelTemplate(Base):
+    """模板定义（预置只读）。把「接口怎么调」沉淀为配置，接新渠道=加一行模板。"""
+    __tablename__ = "api_channel_template"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(64), nullable=False, unique=True, index=True)
+    name = Column(String(255), nullable=True)
+    vendor = Column(String(64), nullable=True)
+    description = Column(Text, nullable=True)
+    method = Column(String(16), default="POST")
+    auth_type = Column(String(24), default="bearer")
+    default_endpoint = Column(String(512), nullable=True)
+    required_fields_json = Column(JSON, nullable=True)   # 表单字段 schema（schema-driven）
+    query_skeleton_json = Column(JSON, nullable=True)    # GraphQL 查询骨架 / 分页 / 限流
+    framework_version = Column(String(32), nullable=True)
+    status = Column(String(24), default="active")
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ApiConnection(Base):
+    """连接实例：用户只填 Token / CID / Endpoint，其余继承模板。Token 加密存储。"""
+    __tablename__ = "api_connection"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    name = Column(String(128), nullable=True)
+    template_code = Column(String(64), nullable=True, index=True)
+    cid = Column(String(64), nullable=True)              # 发布者 CID（非登录邮箱）
+    endpoint = Column(String(512), nullable=True)        # 留空用模板默认
+    token_enc = Column(String(1024), nullable=True)      # 加密后的 Token，不回显
+    token_mask = Column(String(64), nullable=True)       # 列表展示用掩码
+    status = Column(String(24), default="draft")         # draft/active/disabled
+    last_test_ok = Column(Boolean, nullable=True)
+    last_test_at = Column(DateTime, nullable=True)
+    last_test_error = Column(Text, nullable=True)        # 脱敏错误摘要
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

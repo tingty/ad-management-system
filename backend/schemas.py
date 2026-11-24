@@ -868,3 +868,66 @@ class CWVideoJobOut(BaseModel):
     error_action: str = ""
     batch_id: str = ""             # V4.81：所属创作批次（任务抽屉按批次聚合展示）
     result: Optional[CWVideoGenerateResult] = None
+
+
+# ============ V4.124 广告主数据模块 ============
+class ApiTemplateOut(BaseModel):
+    code: str
+    name: str
+    vendor: str = ""
+    description: str = ""
+    method: str = "POST"
+    auth_type: str = "bearer"
+    default_endpoint: str = ""
+    required_fields: List[dict] = []
+    limits: str = ""
+    framework_version: str = ""
+    status: str = "active"
+
+
+class ApiConnectionIn(BaseModel):
+    name: str
+    template_code: str
+    token: str
+    cid: str
+    endpoint: Optional[str] = None
+
+
+class ApiConnectionUpdate(BaseModel):
+    name: Optional[str] = None
+    cid: Optional[str] = None
+    endpoint: Optional[str] = None
+    token: Optional[str] = None
+    status: Optional[str] = None
+
+
+class ApiConnectionOut(BaseModel):
+    id: int
+    name: str
+    template_code: str
+    cid: str
+    endpoint: str
+    token_mask: str
+    status: str
+    last_test_ok: Optional[bool] = None
+    last_test_at: Optional[str] = None
+    last_test_error: str = ""
+    created_at: Optional[str] = None
+
+
+class ApiTestIn(BaseModel):
+    """测试连接：可用已保存连接，也可临时代入（新建前测试）。"""
+    connection_id: Optional[int] = None
+    template_code: Optional[str] = None
+    token: Optional[str] = None
+    cid: Optional[str] = None
+    endpoint: Optional[str] = None
+
+
+class ApiTestOut(BaseModel):
+    ok: bool
+    error: str = ""
+    count: int = 0
+    http_code: int = 0
+    payload_complete: bool = False
+    max_commission_id: str = ""

@@ -8,7 +8,8 @@ import os, time, re, json, asyncio, uuid
 from database import get_db, SessionLocal
 from models import (ModelConfig, User, AuditLog, LoginLog, PromptConfig, SystemState,
                     CreationHistory, GenerationJob, CreativeAsset, CreativeAnalysis, CreativePlan, CwLibrary,
-                    CreativeAssetSource, CreativeAssetAnalysis, CreativeTemplate, utcnow)
+                    CreativeAssetSource, CreativeAssetAnalysis, CreativeTemplate,
+                    ApiChannelTemplate, ApiConnection, utcnow)
 from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      LoginRequest, UserOut, UserCreate, UserUpdate,
                      PromptOut, PromptUpdate, PromptDefaultIn, LayerMatchIn, ImageQualityAuditIn,
@@ -25,7 +26,9 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      MediaImageSlot, MediaCopyVariant,
                      AssetSourceOut, AssetSourceCreate, AssetAnalysisOut, AssetAnalysisCreate,
                      AssetImportRequest, TemplateOut, TemplateCreate, TemplateUpdate,
-                     CategoryConfirmIn, MergeConfirmIn, GoldenOverrideIn, UnmergeIn)
+                     CategoryConfirmIn, MergeConfirmIn, GoldenOverrideIn, UnmergeIn,
+                     ApiTemplateOut, ApiConnectionIn, ApiConnectionUpdate, ApiConnectionOut,
+                     ApiTestIn, ApiTestOut)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import (get_llm_with_info, finalize_invocation, parse_json, get_video,
@@ -66,7 +69,8 @@ from creative_brief import (
 # V4.105 / 方案C：结构化创作意图（分析前确认创作要求，三类素材共用）
 import creative_intent as cw_intent
 import workshop as cw_workshop
-from version import ENABLE_AUTO_CREATION_PLAN
+from version import ENABLE_AUTO_CREATION_PLAN, ENABLE_ADVERTISER_DATA
+import advertiser_api
 # V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
 from video_claims import (video_evidence_context, audit_video_plan,
                           repair_video_plan, video_asset_gate)
@@ -4165,3 +4169,152 @@ async def tl_unmerge(tid: int, body: UnmergeIn, db: Session = Depends(get_db),
     t.version = (t.version or 1) + 1
     db.commit(); db.refresh(t)
     return _template_out(t)
+
+
+# ============ V4.124 广告主数据模块：模板 / 连接 / 测试连接 ============
+def _ad_gate() -> None:
+    """功能开关：设计出错时改 version.ENABLE_ADVERTISER_DATA=False，接口即刻关闭。"""
+    if not ENABLE_ADVERTISER_DATA:
+        raise HTTPException(404, "广告主数据模块已关闭")
+
+
+def _connection_out(r: ApiConnection) -> dict:
+    return {
+        "id": r.id, "name": r.name or "", "template_code": r.template_code or "",
+        "cid": r.cid or "", "endpoint": r.endpoint or "", "token_mask": r.token_mask or "",
+        "status": r.status or "draft", "last_test_ok": r.last_test_ok,
+        "last_test_at": r.last_test_at.isoformat() if r.last_test_at else None,
+        "last_test_error": r.last_test_error or "",
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
+
+
+@router.get("/advertiser-data/status")
+async def api_advertiser_status(_: User = Depends(require_roles(*ROLES))):
+    """供前端判断是否显示入口；关闭时页面不出现，接口也同步 404。"""
+    return {"enabled": bool(ENABLE_ADVERTISER_DATA)}
+
+
+@router.get("/advertiser-data/templates", response_model=list[ApiTemplateOut])
+async def api_advertiser_templates(_: User = Depends(require_roles(*ROLES))):
+    _ad_gate()
+    return [{
+        "code": t["code"], "name": t["name"], "vendor": t.get("vendor", ""),
+        "description": t.get("description", ""), "method": t.get("method", "POST"),
+        "auth_type": t.get("auth_type", "bearer"),
+        "default_endpoint": t.get("default_endpoint", ""),
+        "required_fields": t.get("required_fields", []),
+        "limits": t.get("limits", ""), "framework_version": t.get("framework_version", ""),
+        "status": t.get("status", "active"),
+    } for t in advertiser_api.PRESET_TEMPLATES]
+
+
+@router.get("/advertiser-data/connections", response_model=list[ApiConnectionOut])
+async def api_advertiser_connections(db: Session = Depends(get_db),
+                                     user: User = Depends(require_roles(*ROLES))):
+    _ad_gate()
+    rows = db.query(ApiConnection).filter_by(owner_id=user.id).order_by(ApiConnection.id.desc()).all()
+    return [_connection_out(r) for r in rows]
+
+
+@router.post("/advertiser-data/connections", response_model=ApiConnectionOut, status_code=201)
+async def api_advertiser_connection_create(body: ApiConnectionIn, db: Session = Depends(get_db),
+                                           user: User = Depends(require_roles(*CAN_EDIT))):
+    _ad_gate()
+    tpl = advertiser_api.template_by_code(body.template_code.strip())
+    if not tpl:
+        raise HTTPException(400, "模板不存在")
+    name = (body.name or "").strip() or tpl["name"]
+    token = (body.token or "").strip()
+    cid = (body.cid or "").strip()
+    if not token:
+        raise HTTPException(400, "API Token 必填")
+    if not cid:
+        raise HTTPException(400, "发布者 CID 必填")
+    r = ApiConnection(
+        owner_id=user.id, name=name[:128], template_code=tpl["code"], cid=cid[:64],
+        endpoint=(body.endpoint or "").strip()[:512] or tpl.get("default_endpoint", ""),
+        token_enc=advertiser_api.encrypt_token(token),
+        token_mask=advertiser_api.mask_token(token)[:64],
+        status="draft",
+    )
+    db.add(r); db.commit(); db.refresh(r)
+    return _connection_out(r)
+
+
+@router.patch("/advertiser-data/connections/{cid}", response_model=ApiConnectionOut)
+async def api_advertiser_connection_update(cid: int, body: ApiConnectionUpdate,
+                                           db: Session = Depends(get_db),
+                                           user: User = Depends(require_roles(*CAN_EDIT))):
+    _ad_gate()
+    r = db.query(ApiConnection).filter_by(id=cid, owner_id=user.id).first()
+    if not r:
+        raise HTTPException(404, "连接不存在或无权编辑")
+    if body.name is not None:
+        r.name = body.name.strip()[:128] or r.name
+    if body.cid is not None:
+        v = body.cid.strip()
+        if not v:
+            raise HTTPException(400, "CID 不能为空")
+        r.cid = v[:64]
+    if body.endpoint is not None:
+        r.endpoint = body.endpoint.strip()[:512] or r.endpoint
+    if body.token:
+        r.token_enc = advertiser_api.encrypt_token(body.token.strip())
+        r.token_mask = advertiser_api.mask_token(body.token.strip())[:64]
+    if body.status is not None:
+        if body.status not in ("draft", "active", "disabled"):
+            raise HTTPException(400, "状态必须是 draft / active / disabled")
+        if body.status == "active" and not r.last_test_ok:
+            raise HTTPException(400, "测试连接通过后才可启用")
+        r.status = body.status
+    db.commit(); db.refresh(r)
+    return _connection_out(r)
+
+
+@router.delete("/advertiser-data/connections/{cid}", status_code=204)
+async def api_advertiser_connection_delete(cid: int, db: Session = Depends(get_db),
+                                           user: User = Depends(require_roles(*CAN_EDIT))):
+    _ad_gate()
+    r = db.query(ApiConnection).filter_by(id=cid, owner_id=user.id).first()
+    if not r:
+        raise HTTPException(404, "连接不存在或无权删除")
+    db.delete(r); db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/advertiser-data/connections/test", response_model=ApiTestOut)
+async def api_advertiser_connection_test(body: ApiTestIn, db: Session = Depends(get_db),
+                                         user: User = Depends(require_roles(*CAN_EDIT))):
+    """测试连接：1 天窗口只读 count，不写任何数据、不回显 Token。"""
+    _ad_gate()
+    token = (body.token or "").strip()
+    cid = (body.cid or "").strip()
+    endpoint = (body.endpoint or "").strip()
+    tpl_code = (body.template_code or "").strip()
+    if body.connection_id:
+        r = db.query(ApiConnection).filter_by(id=body.connection_id, owner_id=user.id).first()
+        if not r:
+            raise HTTPException(404, "连接不存在或无权测试")
+        tpl_code = tpl_code or r.template_code or ""
+        token = token or advertiser_api.decrypt_token(r.token_enc or "")
+        cid = cid or (r.cid or "")
+        endpoint = endpoint or (r.endpoint or "")
+        if not token:
+            raise HTTPException(400, "Token 解密失败，请重新填写")
+    if not tpl_code:
+        raise HTTPException(400, "请选择模板")
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    before = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    result = await advertiser_api.test_connection(
+        template_code=tpl_code, endpoint=endpoint, token=token, cid=cid,
+        since_event_date=since, before_event_date=before)
+    # 测试结果回写连接（成功时间 / 脱敏错误）
+    if body.connection_id:
+        r.last_test_ok = bool(result.get("ok"))
+        r.last_test_at = datetime.utcnow()
+        r.last_test_error = (result.get("error") or "")[:500]
+        db.commit()
+    return result

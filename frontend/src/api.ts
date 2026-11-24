@@ -1451,3 +1451,53 @@ export const api = {
   historyCopyUrl: (id: number) =>
     `${API_BASE}/api/creation-history/${id}/copy.txt?token=${encodeURIComponent(getToken())}`,
 }
+
+/* ===== V4.124 广告主数据模块 ===== */
+export interface ApiTemplate {
+  code: string
+  name: string
+  vendor: string
+  description: string
+  method: string
+  auth_type: string
+  default_endpoint: string
+  required_fields: { key: string; label: string; type: string; required: boolean }[]
+  limits: string
+  framework_version: string
+  status: string
+}
+export interface ApiConnection {
+  id: number
+  name: string
+  template_code: string
+  cid: string
+  endpoint: string
+  token_mask: string
+  status: string
+  last_test_ok: boolean | null
+  last_test_at: string | null
+  last_test_error: string
+  created_at: string | null
+}
+export interface ApiTestResult {
+  ok: boolean
+  error: string
+  count: number
+  http_code: number
+  payload_complete: boolean
+  max_commission_id: string
+}
+
+export const advertiserApi = {
+  status: () => req<{ enabled: boolean }>('/api/advertiser-data/status'),
+  templates: () => req<ApiTemplate[]>('/api/advertiser-data/templates'),
+  connections: () => req<ApiConnection[]>('/api/advertiser-data/connections'),
+  createConnection: (b: { name: string; template_code: string; token: string; cid: string; endpoint?: string }) =>
+    req<ApiConnection>('/api/advertiser-data/connections', { method: 'POST', body: JSON.stringify(b) }),
+  updateConnection: (id: number, b: Partial<{ name: string; cid: string; endpoint: string; token: string; status: string }>) =>
+    req<ApiConnection>(`/api/advertiser-data/connections/${id}`, { method: 'PATCH', body: JSON.stringify(b) }),
+  deleteConnection: (id: number) =>
+    req<void>(`/api/advertiser-data/connections/${id}`, { method: 'DELETE' }),
+  testConnection: (b: { connection_id?: number; template_code?: string; token?: string; cid?: string; endpoint?: string }) =>
+    req<ApiTestResult>('/api/advertiser-data/connections/test', { method: 'POST', body: JSON.stringify(b) }),
+}

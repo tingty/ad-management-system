@@ -13,12 +13,16 @@ from __future__ import annotations
 
 import re
 
-APP_VERSION = "4.123.0"
+APP_VERSION = "4.124.0"
 
 #: V4.46 / D5–D6：自动创作「策划 + 计划 + 编排」新路径的灰度开关。
 #: 默认对内部工作区开启；回滚时只需改为 False，新入口即关闭，但资产 / 计划 / 任务记录保留，
 #: 不删除数据库列来回滚（文档「迁移与向后兼容」）。
 ENABLE_AUTO_CREATION_PLAN = True
+
+#: V4.124：广告主数据模块开关。设计/需求出错时改 False 即隐藏入口并禁用接口，
+#: 不删表、不迁移数据，回滚后数据仍可继续使用。
+ENABLE_ADVERTISER_DATA = True
 
 
 

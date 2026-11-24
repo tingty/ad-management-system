@@ -74,6 +74,32 @@ docker compose up -d --build      # 代码更新后重新构建启动
 
 ---
 
+## 4.1 版本回滚（V4.124 起）
+
+每个已发布版本在 git 上有独立 tag（如 `v4.124.0`），开发起点基线为 `v4.123-baseline`。
+设计或需求判断出错时，按「先代码、后数据」顺序回滚，默认**不动数据**：
+
+```bash
+# 1) 查看可回滚版本 / 当前 HEAD
+python3 scripts/rollback.py list-tags
+
+# 2) 打印代码回滚步骤（不执行）
+python3 scripts/rollback.py plan-code v4.123-baseline
+
+# 3) 迁移或发版前打数据库快照（在线一致性备份，WAL 安全）
+python3 scripts/rollback.py backup-db --label V4.124
+
+# 4) 只有确认新版本写坏了数据时才恢复（先自动再存一份 current，默认预演）
+python3 scripts/rollback.py restore-db backups/<snapshot>.db        # 预演
+python3 scripts/rollback.py restore-db backups/<snapshot>.db --yes  # 真正写回
+```
+
+**功能开关优先**：`backend/version.py` 的 `ENABLE_ADVERTISER_DATA=False` 可立即隐藏
+「广告主数据」入口并让相关接口返回 404，**不删表、不迁数据**；适合临时止损。
+代码回滚一律用 `git revert` 生成反向提交，`git push` 同步，禁止 `reset --hard + force push`。
+
+---
+
 ## 5. 数据持久化
 
 - 数据库：`admb_data` 卷挂载到容器 `/app/data`，对应 `DATABASE_URL=sqlite:////app/data/ad_material.db`
