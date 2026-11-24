@@ -167,7 +167,8 @@
     <tr><td>请求方法 / 端点</td><td><code>POST</code> / <code>https://commissions.api.cj.com/query</code></td><td>端点作为默认值，实例可覆盖</td></tr>
     <tr><td>认证方式</td><td><code>Bearer Token</code>（请求头 <code>Authorization</code>）</td><td>模板声明"需要 Token"，不存具体值</td></tr>
     <tr><td>必填槽位</td><td><b>API Token、CID、Endpoint</b></td><td>用户建实例时只需填这三项</td></tr>
-    <tr><td>查询骨架</td><td><code>publisherCommissions(forPublishers:$cid, sincePostingDate:$from, beforePostingDate:$to, sinceCommissionId:$cursor){...}</code></td><td>字段清单固化在模板，用户无需了解 GraphQL</td></tr>
+    <tr><td>请求对象（V4.129 明确）</td><td><b><code>PublisherCommission</code></b> —— <i>A record of a publisher commission event, potentially including items purchased and advertiser-supplied custom attributes.</i></td><td>逐条拉取<b>订单佣金明细</b>（含 items 与广告主自定义属性），<b>不是</b> count 统计报表；<code>PublisherCommissions</code> 只是返回包装 Object，不是另一个接口</td></tr>
+    <tr><td>查询骨架</td><td><code>query PublisherCommission { publisherCommissions(forPublishers:$cid, sinceEventDate:$from, beforeEventDate:$to, sinceCommissionId:$cursor) { count payloadComplete maxCommissionId records { ... } } }</code></td><td>官方查询字段仍是 <code>publisherCommissions</code>（小写复数）；<code>records: [PublisherCommission!]!</code> 才是要取的明细，字段清单固化在模板</td></tr>
     <tr><td>分页协议</td><td>游标 <code>maxCommissionId</code> → <code>sinceCommissionId</code>；结束标志 <code>payloadComplete</code></td><td>调度器按协议自动翻页</td></tr>
     <tr><td>限流规则</td><td>≤31 天窗口、≤10,000 条/次、200 次/5 分钟、串行 ≥1.5 秒</td><td>由模板下发，任务自动遵守</td></tr>
     <tr><td>字段映射</td><td>详见第六章 <code>api_field_map</code>（12 个统一字段的一一映射）</td><td>决定原始数据如何落入统一事实表</td></tr>
@@ -179,6 +180,8 @@
   <ul>
     <li>端点 <code>POST https://commissions.api.cj.com/query</code>，GraphQL 只读；认证用 <code>Authorization: Bearer &lt;个人访问令牌&gt;</code>，开发者 Key 已弃用。</li>
     <li>我们是发布者，用 <code>publisherCommissions</code> 查询；<code>forPublishers</code> 参数是<b>发布者公司 ID（CID）</b>，不是登录邮箱——拿不到 CID 无法发出第一条有效请求。</li>
+    <li><b>对象层级（V4.129 澄清）：</b>HTTP 端点只有一个 <code>POST .../query</code>；GraphQL 查询字段是 <code>publisherCommissions</code>，返回 <code>PublisherCommissions!</code> 包装对象；明细在 <code>records: [PublisherCommission!]!</code> 中。<b>不存在名为 PublisherCommission 的独立接口</b>，代码与界面写「请求 PublisherCommission」指的是读取 records 里的明细对象。</li>
+    <li>日期口径统一用 <code>sinceEventDate / beforeEventDate</code>（UTC ISO 8601）；官方也支持 postingDate / lockingDate 边界，但本系统按定稿以事件日期为准。</li>
     <li>三条硬限制：日期跨度 ≤31 天、单次 ≤10,000 条、200 次/5 分钟；只指定单侧日期边界时另一侧默认 24 小时。</li>
     <li><code>situations</code> 字段解析较慢，首版不取。</li>
   </ul>
@@ -192,7 +195,7 @@
     <tr><td>调度方式</td><td>复用现有 <code>model_health</code> 的 startup 后台协程模式，新增佣金拉取协程；启停对称，不引入新调度框架。</td></tr>
     <tr><td>触发频率</td><td>默认每日一次（可配置为每 6 小时）。任务配置含：频率、回溯窗口（默认 7 天）、首次回填天数（默认 90 天）。</td></tr>
     <tr><td>执行流程</td><td>按模板窗口切片 → 游标翻页 → 限流等待 → 原始落库（幂等 upsert）→ 重算事实表 → 写运行记录。</td></tr>
-    <tr><td>水位管理</td><td>按 <code>postingDate</code> 重叠窗口拉取（7 天回溯，避免漏掉迟到修正）；水位与游标写入 <code>SystemState</code> / 运行记录，重启后可续跑。</td></tr>
+    <tr><td>水位管理</td><td>按 <code>eventDate</code> 重叠窗口拉取（7 天回溯，避免漏掉迟到修正）；水位与游标写入 <code>SystemState</code> / 运行记录，重启后可续跑。</td></tr>
     <tr><td>失败处理</td><td>认证失败 / count=0 / 字段异常 / 超限分别给出明确错误；指数退避重试；失败不静默，运行记录可见并可手动补拉。</td></tr>
     <tr><td>可观测</td><td>每次运行记录：起止时间、窗口、拉取条数、游标位置、状态、错误；界面「运行记录」区可查，支持"获取难点排查"。</td></tr>
   </table>
@@ -201,7 +204,7 @@
   <ol>
     <li>读取实例配置（Token / CID / Endpoint）与模板规则，校验必填项完整。</li>
     <li>确定窗口：当日任务 = 最近 7 天；回填任务 = 从起始日按 ≤31 天分片。</li>
-    <li>用模板查询骨架发起请求，带 <code>sincePostingDate / beforePostingDate / forPublishers</code>。</li>
+    <li>用模板查询骨架发起请求，带 <code>sinceEventDate / beforeEventDate / forPublishers</code>，显式读取 <code>records</code> 中的 PublisherCommission 明细。</li>
     <li>解析响应，按 <code>api_field_map</code> 写入原始层与事实层，<code>commissionId</code> 幂等去重。</li>
     <li>若 <code>payloadComplete=false</code>，取 <code>maxCommissionId</code> 作游标继续；否则进入下一窗口。</li>
     <li>全窗口完成后重算事实层（合并修正、标记取消单），更新水位与运行记录。</li>
@@ -248,20 +251,22 @@
     </div>
   </div>
 
-  <h3>5.3 「测试」右侧滑窗（V4.128 确认）</h3>
+  <h3>5.3 「测试」右侧滑窗（V4.128 确认 / V4.129 明细化）</h3>
   <div class="wire">
     <h5>接口测试详情 · 由列表最后一列「测试」打开</h5>
-    <p class="muted" style="margin:0 0 10px">点击「测试」立即用该连接已保存的加密凭据发起一次真实请求；右侧滑出详情面板，顶部显示请求状态摘要与请求链接，下方完整展示上游响应。Token 只用于 Authorization 头，始终显示为 <code>Bearer ****</code>。</p>
+    <p class="muted" style="margin:0 0 10px">点击「测试」立即用该连接已保存的加密凭据发起一次真实请求，请求的是 <b><code>publisherCommissions.records</code></b>（Object: <code>PublisherCommission</code>，订单佣金明细），不是 count 统计；右侧滑出详情面板。Token 只用于 Authorization 头，始终显示为 <code>Bearer ****</code>。</p>
     <table>
       <tr><th width="18%">区域</th><th>内容与口径</th></tr>
-      <tr><td>状态摘要</td><td>请求状态（测试中 / 成功 / 失败）、HTTP Code、返回记录数、测试时间；与列表状态浮层同源。</td></tr>
-      <tr><td>01 请求链接</td><td>展示完整 Endpoint（含路径与查询串），左侧标注 <code>POST</code>；下方折叠展示 GraphQL 请求体（CID、事件日期窗口），便于复核请求封装是否正确。</td></tr>
-      <tr><td>02 响应结果</td><td>展示上游 HTTP 响应原文；JSON 自动格式化，非 JSON 原样展示；区域可完整滚动，不做摘要截断。</td></tr>
+      <tr><td>请求对象</td><td>顶部固定标识 <code>PublisherCommission</code> 及官方定义原文，并说明查询字段 <code>publisherCommissions</code> → <code>records[]</code> 逐条明细（含 items 与广告主自定义属性），不是统计报表。</td></tr>
+      <tr><td>状态摘要</td><td>请求状态（测试中 / 成功 / 失败）、HTTP Code、<b>明细记录数</b>（records 实际条数）、测试时间；与列表状态浮层同源。</td></tr>
+      <tr><td>01 请求链接</td><td>展示完整 Endpoint（含路径与查询串），左侧标注 <code>POST</code>；下方折叠展示 GraphQL 请求体：CID、事件日期窗口与 <code>records</code> 字段清单，便于复核请求封装是否正确。</td></tr>
+      <tr><td>02 订单佣金明细</td><td>展示前 3 条 <code>records</code> 样例：<code>commissionId</code> / <code>orderId</code> / <code>advertiserName</code> / <code>eventDate</code> / <code>original</code>（原始单或修正单）/ <code>items</code> 条数；空窗口给出明确提示，完整字段仍以响应原文为准。</td></tr>
+      <tr><td>03 响应结果</td><td>展示上游 HTTP 响应原文；JSON 自动格式化，非 JSON 原样展示；区域可完整滚动，不做摘要截断。</td></tr>
       <tr><td>操作</td><td>底部「重新测试」再次发起请求；「关闭」按钮、点击遮罩、Esc 三种方式都可关闭滑窗。</td></tr>
     </table>
-    <p class="muted" style="margin:10px 0 0">持久化：连接表新增 <code>last_test_url</code> / <code>last_test_request_body</code> / <code>last_test_response_text</code>，由 <code>ensure_schema()</code> 幂等补列，V4.128.1 留版本记录；响应中的 Token 片段会被脱敏，请求体永不写 Token。</p>
+    <p class="muted" style="margin:10px 0 0">持久化：连接表新增 <code>last_test_url</code> / <code>last_test_request_body</code> / <code>last_test_response_text</code>，由 <code>ensure_schema()</code> 幂等补列，V4.128.1 留版本记录；V4.129 新增 <code>record_object</code> / <code>record_count</code> / <code>sample_records</code> 返回契约（不新增数据库列），响应中的 Token 片段与明细样例都会脱敏，请求体永不写 Token。</p>
   </div>
-  <div class="ok"><b>查阅口径：</b>状态字段回答「通不通」，右侧滑窗回答「发了什么、回了什么」。失败时保留 HTTP 错误原文与 GraphQL errors，便于对照 CJ 官方错误说明排查 Token / CID / 参数问题。</div>
+  <div class="ok"><b>查阅口径：</b>状态字段回答「通不通」，请求体回答「拉的是 PublisherCommission 明细还是统计」，明细样例回答「拉到了哪些订单」，响应原文回答「上游完整回了什么」。失败时保留 HTTP 错误原文与 GraphQL errors，便于对照 CJ 官方错误说明排查 Token / CID / 参数问题。</div>
 
   <h3>5.4 「广告主报表」页面设计</h3>
   <div class="wire">

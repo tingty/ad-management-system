@@ -1465,6 +1465,9 @@ export interface ApiTemplate {
   limits: string
   framework_version: string
   status: string
+  // V4.129：模板声明的请求对象（PublisherCommission 订单明细）
+  record_object: string
+  record_object_desc: string
 }
 export interface ApiSchedule {
   enabled: boolean
@@ -1506,6 +1509,10 @@ export interface ApiTestResult {
   response_text: string
   response: Record<string, unknown> | null
   tested_at: string
+  // V4.129：实际拉取的 PublisherCommission 明细对象与条数
+  record_object: string
+  record_count: number
+  sample_records: Record<string, unknown>[]
 }
 
 export const advertiserApi = {

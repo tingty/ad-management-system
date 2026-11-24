@@ -2,6 +2,33 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.129 API对接：明确请求 PublisherCommission 订单明细
+
+**发布日期**：2026-11-24 16:06
+**变更类型**：优化 / 新增
+**涉及模块**：广告主数据 / API对接页与测试滑窗、后端 CJ GraphQL 查询模板与测试契约、模板与接口 Schemas、唯一维护文档、专项测试、发版数据、系统版本
+**变更摘要**：按用户确认的目标，把「测试连接」从只取 count 等统计字段，改为真正请求 CJ 官方 Object: PublisherCommission 的逐条订单佣金明细（publisherCommissions.records，含 items 与 advertiser-supplied custom attributes）。代码、请求体、接口契约与界面统一写明请求对象是 PublisherCommission，滑窗新增请求对象标识与明细样例区，确保读取的是订单明细而非统计报表；查询字段仍遵循官方定义 publisherCommissions。
+**更新要点**
+- 【优化】`advertiser_api.py` 新增 `PUBLISHER_COMMISSION_FIELDS` 与 `build_detail_payload()`，operation name 明确为 `PublisherCommission`，请求体显式包含 `publisherCommissions { count limit maxCommissionId payloadComplete records { ... } }`；`records` 内固化 aid / clickDate / commissionId / orderId / original / originalActionId / advertiserName / actionTrackerName / eventDate / 金额字段、items 明细与 verticalAttributes 广告主自定义属性。
+- 【优化】模板新增 `record_object=PublisherCommission` 与官方英文定义 `record_object_desc`，通过 `/advertiser-data/templates` 与 `ApiTemplateOut` 对外输出；`sinceCommissionId` 游标参数预留给 P1-B 续页，测试连接不传。
+- 【新增】测试返回契约新增 `record_object` / `record_count` / `sample_records`（前 3 条明细），`count` 仍保留官方包装层语义；明细样例递归脱敏，同时修复 `response` 结构化对象未脱敏的问题，Token 不再以任何形式回显。
+- 【优化】API对接页测试滑窗顶部固定显示「请求对象 PublisherCommission」及官方定义，说明查询字段 publisherCommissions → records[] 是逐条明细而非 count 统计；摘要指标改为「明细记录」，新增「02 订单佣金明细」样例表（commissionId / orderId / advertiserName / eventDate / original / items），原响应原文顺延为「03」。
+- 【优化】唯一维护文档 3.1 表格增加请求对象行并把查询骨架统一为 `sinceEventDate / beforeEventDate + records`，3.2 补充官方对象层级澄清，4.1 与水位管理口径统一为事件日期，5.3 滑窗设计同步新分区。
+- 【新增】`tests/test_advertiser_api_v4129.py`：覆盖真实请求体结构、items 与自定义属性、模板对外声明、records 解析与脱敏、样例上限、错误路径契约、前端文案与文档一致性。
+**本次优化与更改的功能 / 模块**
+- 【优化】API对接页的「测试」动作从凭据连通性检查升级为订单佣金明细抽样：一次请求即可确认拉取的是 PublisherCommission 明细、看到订单级样例，并保留完整请求/响应原文用于排查。
+**影响范围**
+- 兼容：保留 V4.124–V4.128 的菜单、列表列、状态浮层、新建弹窗、设置弹窗与测试详情滑窗结构；不新增数据库列、不修改既有表结构；`count` 字段语义不变，前端仍可读取。
+- 边界：本次只改请求内容与展示，不做明细幂等落库、统一事实表映射、自动调度与报表（P1-B/P2/P3 后续版本）；真实 CJ Token/CID 与明细数据验收仍是外部验收项，模拟测试不能替代。
+- 部署：无新增 pip 依赖；`git pull` 后重启后端、更新前端静态资源即可；历史连接无需迁移。
+**验证**
+- 专项：广告主数据六个专项共 64 passed；其中 V4.129 专项 11 项通过。
+- 全量回归：全新隔离 SQLite 库执行 `pytest tests`，599 passed / 3 skipped / 14 subtests passed（默认库存在历史脏数据会触发既有 V4.119 归并专项失败，本次未改动默认库数据）。
+- 前端：`tsc --noEmit` 通过，`vite build` 通过（51 modules，构建无报错）。
+- 安全：请求体只含 CID 与事件日期窗口，Token 仅进入 Authorization 头；专项断言响应原文、`response` 对象与明细样例中的 Token 片段全部替换为 `***`。
+- 文档：唯一维护文档 3.1 / 3.2 / 4.1 / 5.3 已同步请求对象、records 查询骨架与滑窗新分区。
+- `prepare_release --sync` 后独立进程 `prepare_release --check` 通过，系统版本 / CHANGELOG / 发布数据一致为 V4.129。
+
 ## V4.128 API对接：列表测试列与右侧测试详情滑窗
 
 **发布日期**：2026-11-24 15:22

@@ -1,5 +1,7 @@
 /**
- * V4.128 · 广告主数据 / API对接。
+ * V4.128 / V4.129 · 广告主数据 / API对接。
+ * V4.129：测试请求改为真正拉取 publisherCommissions.records（Object: PublisherCommission），
+ * 滑窗明确标注请求对象并展示逐条订单佣金明细样例，而不是只显示 count 统计。
  * 在 V4.125「一张列表 + 两个弹窗」基础上，列表最后新增「测试」列：
  *   - 点击测试立即发起一次真实请求，右侧滑出测试详情抽屉；
  *   - 抽屉顶部展示完整请求链接 / 方法 / GraphQL 请求体；
@@ -22,6 +24,8 @@ const DEFAULT_SCHEDULE: ApiSchedule = {
   enabled: false, frequency: 'daily', hour: 2, lookback_days: 7, backfill_days: 90,
 }
 const CJ_TEMPLATE = 'CJ联盟'
+const PUBLISHER_COMMISSION_DESC =
+  'A record of a publisher commission event, potentially including items purchased and advertiser-supplied custom attributes.'
 
 function statusLabel(c: ApiConnection): string {
   if (c.last_test_ok === null || c.last_test_ok === undefined) return '未测试'
@@ -41,7 +45,7 @@ function statusDetail(c: ApiConnection): string[] {
   if (c.last_test_ok) {
     return [
       `HTTP ${c.last_test_http_code || 200} · 请求成功`,
-      `接口返回 ${c.last_test_count ?? 0} 条佣金记录`,
+      `拉取 ${c.last_test_count ?? 0} 条 PublisherCommission 订单佣金明细`,
       `测试时间：${when}`,
     ]
   }
@@ -145,7 +149,7 @@ export default function AdvertiserApi() {
     try {
       const r = await advertiserApi.testConnection({ connection_id: settingsId })
       setMsg(r.ok
-        ? { kind: 'ok', text: `测试成功：HTTP ${r.http_code}，返回 ${r.count} 条记录` }
+        ? { kind: 'ok', text: `测试成功：HTTP ${r.http_code}，拉取 ${r.record_count || r.count} 条 PublisherCommission 明细` }
         : { kind: 'err', text: `测试失败：HTTP ${r.http_code || '—'} · ${r.error || '接口返回异常'}` })
       await load()
     } catch (e: any) { setMsg({ kind: 'err', text: e?.message || '测试失败' }) }
@@ -181,6 +185,7 @@ export default function AdvertiserApi() {
   const hovered = hover ? connections.find(c => c.id === hover.id) : null
   const drawerResult = testDrawer?.result || null
   const drawerStatus = testDrawer?.loading ? 'idle' : drawerResult?.ok ? 'ok' : 'fail'
+  const sampleRecords = (drawerResult?.sample_records || []) as Record<string, any>[]
 
   return (
     <div className="ad-data-page">
@@ -253,6 +258,15 @@ export default function AdvertiserApi() {
             </header>
 
             <div className="ad-drawer-body">
+              <div className="ad-object-banner">
+                <span className="ad-object-tag">请求对象</span>
+                <div>
+                  <b>PublisherCommission</b>
+                  <span>{PUBLISHER_COMMISSION_DESC}</span>
+                  <span>查询字段 publisherCommissions → records[] 逐条订单佣金明细（含 items 与广告主自定义属性），不是 count 统计报表。</span>
+                </div>
+              </div>
+
               <div className="ad-drawer-summary">
                 <div className="ad-drawer-metric">
                   <span>请求状态</span>
@@ -265,8 +279,8 @@ export default function AdvertiserApi() {
                   <b>{drawerResult?.http_code || '—'}</b>
                 </div>
                 <div className="ad-drawer-metric">
-                  <span>返回记录</span>
-                  <b>{drawerResult?.ok ? drawerResult.count : '—'}</b>
+                  <span>明细记录</span>
+                  <b>{drawerResult?.ok ? (drawerResult.record_count || drawerResult.count) : '—'}</b>
                 </div>
                 <div className="ad-drawer-metric">
                   <span>测试时间</span>
@@ -291,7 +305,7 @@ export default function AdvertiserApi() {
                   <span className="ad-method">{drawerResult?.request_method || 'POST'}</span>
                   <code>{drawerResult?.request_url || '—'}</code>
                 </div>
-                <p className="ad-drawer-hint">Authorization: Bearer **** · Token 不回显；查询窗口为最近 1 天的事件日期。</p>
+                <p className="ad-drawer-hint">Authorization: Bearer **** · Token 不回显；查询窗口为最近 1 天的事件日期，请求 publisherCommissions.records。</p>
                 <details className="ad-drawer-details" open>
                   <summary>请求内容 · GraphQL</summary>
                   <pre>{pretty(drawerResult?.request_body)}</pre>
@@ -301,6 +315,43 @@ export default function AdvertiserApi() {
               <section className="ad-drawer-sec">
                 <div className="ad-drawer-sec-head">
                   <span className="ad-step">02</span>
+                  <h4>订单佣金明细</h4>
+                  <span className="ad-drawer-sec-note">PublisherCommission · 最多 3 条</span>
+                </div>
+                {testDrawer.loading ? (
+                  <div className="ad-drawer-loading">正在拉取 PublisherCommission 明细…</div>
+                ) : !drawerResult?.ok ? (
+                  <p className="ad-drawer-hint">请求成功后，这里展示逐条 PublisherCommission 订单佣金明细。</p>
+                ) : sampleRecords.length === 0 ? (
+                  <p className="ad-drawer-hint">该 1 天事件日期窗口内没有 PublisherCommission 明细记录。</p>
+                ) : (
+                  <div className="ad-sample-wrap">
+                    <table className="ad-sample-table">
+                      <thead><tr>
+                        <th>commissionId</th><th>orderId</th><th>advertiserName</th>
+                        <th>eventDate</th><th>original</th><th>items</th>
+                      </tr></thead>
+                      <tbody>
+                        {sampleRecords.map((r, i) => (
+                          <tr key={i}>
+                            <td><code>{String(r.commissionId ?? '—')}</code></td>
+                            <td><code>{String(r.orderId ?? '—')}</code></td>
+                            <td>{String(r.advertiserName ?? '—')}</td>
+                            <td>{String(r.eventDate ?? '—')}</td>
+                            <td>{r.original === true ? '原始单' : r.original === false ? '修正单' : '—'}</td>
+                            <td>{Array.isArray(r.items) ? r.items.length : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <p className="ad-drawer-hint">每条明细对应一个订单的一笔佣金（含原始单与修正单）；完整字段请查看下方响应原文。</p>
+              </section>
+
+              <section className="ad-drawer-sec">
+                <div className="ad-drawer-sec-head">
+                  <span className="ad-step">03</span>
                   <h4>响应结果</h4>
                   <span className="ad-drawer-sec-note">上游原文 · 可完整滚动查看</span>
                 </div>

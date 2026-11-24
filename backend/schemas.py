@@ -883,6 +883,9 @@ class ApiTemplateOut(BaseModel):
     limits: str = ""
     framework_version: str = ""
     status: str = "active"
+    # V4.129：模板声明的明细对象（不是结果包装 PublisherCommissions）
+    record_object: str = ""
+    record_object_desc: str = ""
 
 
 class ApiConnectionIn(BaseModel):
@@ -946,3 +949,7 @@ class ApiTestOut(BaseModel):
     response_text: str = ""
     response: Optional[dict] = None
     tested_at: str = ""
+    # V4.129：实际拉取的订单佣金明细对象与条数
+    record_object: str = ""
+    record_count: int = 0
+    sample_records: List[dict] = []

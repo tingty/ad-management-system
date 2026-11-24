@@ -4289,6 +4289,9 @@ async def api_advertiser_templates(_: User = Depends(require_roles(*ROLES))):
         "required_fields": t.get("required_fields", []),
         "limits": t.get("limits", ""), "framework_version": t.get("framework_version", ""),
         "status": t.get("status", "active"),
+        # V4.129：明确声明请求对象是 PublisherCommission 明细，不是统计包装
+        "record_object": t.get("record_object", ""),
+        "record_object_desc": t.get("record_object_desc", ""),
     } for t in advertiser_api.PRESET_TEMPLATES]
 
 
@@ -4364,7 +4367,7 @@ async def api_advertiser_connection_delete(cid: int, db: Session = Depends(get_d
 @router.post("/advertiser-data/connections/test", response_model=ApiTestOut)
 async def api_advertiser_connection_test(body: ApiTestIn, db: Session = Depends(get_db),
                                          user: User = Depends(require_roles(*CAN_EDIT))):
-    """测试连接：1 天窗口只读 count，回写脱敏状态与请求/响应详情，不回显 Token。"""
+    """测试连接：1 天窗口逐条拉取 PublisherCommission 明细，回写脱敏状态与请求/响应详情，不回显 Token。"""
     _ad_gate()
     token = (body.token or "").strip()
     cid = (body.cid or "").strip()
