@@ -182,7 +182,7 @@
     <li>我们是发布者，用 <code>publisherCommissions</code> 查询；<code>forPublishers</code> 参数是<b>发布者公司 ID（CID）</b>，不是登录邮箱——拿不到 CID 无法发出第一条有效请求。</li>
     <li><b>对象层级（V4.129 澄清）：</b>HTTP 端点只有一个 <code>POST .../query</code>；GraphQL 查询字段是 <code>publisherCommissions</code>，返回 <code>PublisherCommissions!</code> 包装对象；明细在 <code>records: [PublisherCommission!]!</code> 中。<b>不存在名为 PublisherCommission 的独立接口</b>，代码与界面写「请求 PublisherCommission」指的是读取 records 里的明细对象。</li>
     <li>日期口径统一用 <code>sinceEventDate / beforeEventDate</code>（UTC ISO 8601）；官方也支持 postingDate / lockingDate 边界，但本系统按定稿以事件日期为准。</li>
-    <li>三条硬限制：日期跨度 ≤31 天、单次 ≤10,000 条、200 次/5 分钟；只指定单侧日期边界时另一侧默认 24 小时。</li>
+    <li>三条硬限制：日期跨度 ≤31 天、单次 ≤10,000 条、200 次/5 分钟。<b>V4.131 调整：</b>本系统「测试」窗口默认近 7 天（CJ 佣金明细通常延迟 1–3 天，固定 1 天窗口常返回空 records），可在测试抽屉内调整起止日期，仍须满足 ≤31 天。</li>
     <li><code>situations</code> 字段解析较慢，首版不取。</li>
   </ul>
 </section>
@@ -251,20 +251,21 @@
     </div>
   </div>
 
-  <h3>5.3 「测试」右侧滑窗（V4.128 确认 / V4.129 明细化）</h3>
+  <h3>5.3 「测试」右侧滑窗（V4.128 确认 / V4.129 明细化 / V4.131 窗口可调）</h3>
   <div class="wire">
     <h5>接口测试详情 · 由列表最后一列「测试」打开</h5>
-    <p class="muted" style="margin:0 0 10px">点击「测试」立即用该连接已保存的加密凭据发起一次真实请求，请求的是 <b><code>publisherCommissions.records</code></b>（Object: <code>PublisherCommission</code>，订单佣金明细），不是 count 统计；右侧滑出详情面板。Token 只用于 Authorization 头，始终显示为 <code>Bearer ****</code>。</p>
+    <p class="muted" style="margin:0 0 10px">点击「测试」立即用该连接已保存的加密凭据发起一次真实请求，请求的是 <b><code>publisherCommissions.records</code></b>（Object: <code>PublisherCommission</code>，订单佣金明细），不是 count 统计；右侧滑出详情面板。Token 只用于 Authorization 头，始终显示为 <code>Bearer ****</code>。V4.131 起测试窗口默认近 7 天、可在抽屉内调整。</p>
     <table>
       <tr><th width="18%">区域</th><th>内容与口径</th></tr>
       <tr><td>请求对象</td><td>顶部固定标识 <code>PublisherCommission</code> 及官方定义原文，并说明查询字段 <code>publisherCommissions</code> → <code>records[]</code> 逐条明细（含 items 与广告主自定义属性），不是统计报表。</td></tr>
-      <tr><td>状态摘要</td><td>请求状态（测试中 / 成功 / 失败）、HTTP Code、<b>明细记录数</b>（records 实际条数）、测试时间；与列表状态浮层同源。</td></tr>
+      <tr><td>00 查询窗口</td><td><b>V4.131 新增。</b>开始 / 结束日期输入（默认近 7 天），「应用并重新测试」按窗口重发；显示服务端实际使用的窗口日期。空明细时提示延迟 1–3 天并把开始日期往前调，避免把空窗口误认为接口故障或统计报表。</td></tr>
+      <tr><td>状态摘要</td><td>请求状态（测试中 / 成功 / 失败）、HTTP Code、<b>明细记录数</b>（records 实际条数，为 0 时显示 0，<b>不再回退显示聚合 count</b>）、测试时间；与列表状态浮层同源。</td></tr>
       <tr><td>01 请求链接</td><td>展示完整 Endpoint（含路径与查询串），左侧标注 <code>POST</code>；下方折叠展示 GraphQL 请求体：CID、事件日期窗口与 <code>records</code> 字段清单，便于复核请求封装是否正确。</td></tr>
-      <tr><td>02 订单佣金明细</td><td>展示前 3 条 <code>records</code> 样例：<code>commissionId</code> / <code>orderId</code> / <code>advertiserName</code> / <code>eventDate</code> / <code>original</code>（原始单或修正单）/ <code>items</code> 条数；空窗口给出明确提示，完整字段仍以响应原文为准。</td></tr>
+      <tr><td>02 订单佣金明细</td><td>展示前 <b>10</b> 条 <code>records</code> 样例（V4.131 由 3 条上调）：<code>commissionId</code> / <code>orderId</code> / <code>advertiserName</code> / <code>eventDate</code> / <code>pubCommissionAmountUsd</code> / <code>original</code>（原始单或修正单）/ <code>items</code> 条数；空窗口给出明确提示，完整字段仍以响应原文为准。</td></tr>
       <tr><td>03 响应结果</td><td>展示上游 HTTP 响应原文；JSON 自动格式化，非 JSON 原样展示；区域可完整滚动，不做摘要截断。</td></tr>
-      <tr><td>操作</td><td>底部「重新测试」再次发起请求；「关闭」按钮、点击遮罩、Esc 三种方式都可关闭滑窗。</td></tr>
+      <tr><td>操作</td><td>「应用并重新测试」按所选窗口重发；底部「重新测试」按当前窗口再次发起请求；「关闭」按钮、点击遮罩、Esc 三种方式都可关闭滑窗。</td></tr>
     </table>
-    <p class="muted" style="margin:10px 0 0">持久化：连接表新增 <code>last_test_url</code> / <code>last_test_request_body</code> / <code>last_test_response_text</code>，由 <code>ensure_schema()</code> 幂等补列，V4.128.1 留版本记录；V4.129 新增 <code>record_object</code> / <code>record_count</code> / <code>sample_records</code> 返回契约（不新增数据库列），响应中的 Token 片段与明细样例都会脱敏，请求体永不写 Token。</p>
+    <p class="muted" style="margin:10px 0 0">持久化：连接表新增 <code>last_test_url</code> / <code>last_test_request_body</code> / <code>last_test_response_text</code>，由 <code>ensure_schema()</code> 幂等补列，V4.128.1 留版本记录；V4.129 新增 <code>record_object</code> / <code>record_count</code> / <code>sample_records</code> 返回契约（不新增数据库列），V4.131 新增 <code>window_since</code> / <code>window_before</code> / <code>hint</code> 与 <code>ApiTestIn.since_event_date / before_event_date</code>（仍不新增数据库列），并把 <code>last_test_count</code> 的落库口径由聚合 count 改为明细条数；响应中的 Token 片段与明细样例都会脱敏，请求体永不写 Token。</p>
   </div>
   <div class="ok"><b>查阅口径：</b>状态字段回答「通不通」，请求体回答「拉的是 PublisherCommission 明细还是统计」，明细样例回答「拉到了哪些订单」，响应原文回答「上游完整回了什么」。失败时保留 HTTP 错误原文与 GraphQL errors，便于对照 CJ 官方错误说明排查 Token / CID / 参数问题。</div>
 
@@ -284,7 +285,7 @@
 
   <h3>5.4 交互与状态要求</h3>
   <ul>
-    <li><b>测试连接：</b>用 1 天窗口发真实请求，返回"成功 / 认证失败 / CID 无效 / count=0"，测试记录进日志；不通过不允许启用任务。</li>
+    <li><b>测试连接：</b>用默认近 7 天（可调整，≤31 天）窗口发真实请求，逐条拉取 PublisherCommission 明细，返回"成功 / 认证失败 / CID 无效 / 明细 0 条 + 扩窗建议"，测试记录进日志；不通过不允许启用任务。</li>
     <li><b>状态流转：</b>连接 = 未验证 / 已验证 / 失效；任务 = 草稿 / 运行中 / 暂停 / 失败；运行 = 成功 / 部分成功 / 失败。</li>
     <li><b>脱敏：</b>Token 列表仅显示尾号，编辑时不回显原值，留空表示沿用已存值。</li>
     <li><b>可追溯：</b>每次拉取可回看窗口、条数、游标与错误；支持手动"立即拉取"补数。</li>
@@ -456,7 +457,7 @@
 <section>
   <h2>九、实施顺序与开发任务清单</h2>
   <h3>9.1 实施阶段（每阶段独立成版，自 V4.124 起）</h3>
-  <div class="phase"><b>P0 · 一级菜单 + 模板与连接</b><br>新增一级菜单「广告主数据」及两个二级页面骨架（不动现有菜单与页面）；预置 CJ 模板；实现"新建连接 + 测试连接"；用 1 天窗口验证真实数据返回与字段映射。</div>
+  <div class="phase"><b>P0 · 一级菜单 + 模板与连接</b><br>新增一级菜单「广告主数据」及两个二级页面骨架（不动现有菜单与页面）；预置 CJ 模板；实现"新建连接 + 测试连接"；默认近 7 天可调整窗口验证真实明细返回与字段映射。</div>
   <div class="phase"><b>P1 · 统一表与落库</b><br><code>ensure_schema()</code> 建表（含 V3.1 的 20 业务字段）、幂等去重、按映射到 20 字段、修正合并、取消单识别（按官方枚举更正）、订单视图；历史回填与限流重试。<span class="tag t-derive">V4.127 已完成 P1-A</span>：全部表、订单视图 <code>v_api_order_final</code>、20 行展示名种子、版本化迁移（<code>schema_migrations</code> + <code>rename_column()</code> + <code>scripts/migrate_column.py</code> 自动备份）已落地；映射写入 / 合并回填 / 历史回填留待 P1-B/C。</div>
   <div class="phase"><b>P2 · 定期任务与可观测</b><br>每日调度、7 天重叠窗口、运行记录、失败告警、手动补拉。</div>
   <div class="phase"><b>P3 · 报表界面</b><br>「广告主报表」页：概览 KPI、趋势、维度排行、明细与下钻，表头读 <code>api_field_label</code>。</div>

@@ -933,6 +933,9 @@ class ApiTestIn(BaseModel):
     token: Optional[str] = None
     cid: Optional[str] = None
     endpoint: Optional[str] = None
+    # V4.131：测试窗口可指定；留空用默认 7 天（CJ 佣金数据有延迟，1 天窗口常为空）
+    since_event_date: Optional[str] = None
+    before_event_date: Optional[str] = None
 
 
 class ApiTestOut(BaseModel):
@@ -953,3 +956,7 @@ class ApiTestOut(BaseModel):
     record_object: str = ""
     record_count: int = 0
     sample_records: List[dict] = []
+    # V4.131：把实际查询窗口与空明细提示明确返回，避免用户误以为查到的是聚合报表
+    window_since: str = ""
+    window_before: str = ""
+    hint: str = ""

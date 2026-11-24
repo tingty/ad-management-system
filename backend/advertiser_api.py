@@ -267,6 +267,7 @@ def _test_envelope(*, ok: bool, error: str, count: int, http_code: int,
         "record_object": "PublisherCommission",
         "record_count": 0,
         "sample_records": [],
+        "hint": "",
     }
     result.update(extra)
     return result
@@ -284,12 +285,19 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
     """
     tpl = template_by_code(template_code)
     url = (endpoint or "").strip() or ((tpl or {}).get("default_endpoint") or "")
+
+    # V4.131：所有返回路径都带上实际查询窗口，滑窗可据此判断"为什么没有明细"
+    def _env(**kwargs) -> dict:
+        kwargs.setdefault("window_since", since_event_date)
+        kwargs.setdefault("window_before", before_event_date)
+        return _test_envelope(**kwargs)
+
     if not tpl:
-        return _test_envelope(ok=False, error="未知模板，无法测试连接", count=0, http_code=0, url=url)
+        return _env(ok=False, error="未知模板，无法测试连接", count=0, http_code=0, url=url)
     if not token or not cid:
-        return _test_envelope(ok=False, error="API Token 与 CID 均为必填", count=0, http_code=0, url=url)
+        return _env(ok=False, error="API Token 与 CID 均为必填", count=0, http_code=0, url=url)
     if not url.startswith("https://") and not url.startswith("http://"):
-        return _test_envelope(ok=False, error="Endpoint 必须是 http(s) 地址", count=0, http_code=0, url=url)
+        return _env(ok=False, error="Endpoint 必须是 http(s) 地址", count=0, http_code=0, url=url)
 
     payload = build_detail_payload(cid, since_event_date, before_event_date)
     try:
@@ -300,41 +308,47 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             )
     except httpx.HTTPError as e:
-        return _test_envelope(
+        return _env(
             ok=False, error="网络请求失败：" + _safe_error(_redact_text(str(e), token)), count=0,
             http_code=0, url=url, payload=payload, response_text=_redact_text(str(e), token))
 
     code = r.status_code
     response_text = _redact_text(r.text, token)
     if code == 401 or code == 403:
-        return _test_envelope(
+        return _env(
             ok=False, error=f"认证失败（HTTP {code}）：请检查 Token 是否有效", count=0,
             http_code=code, url=url, payload=payload, response_text=response_text)
     if code >= 400:
-        return _test_envelope(
+        return _env(
             ok=False, error=f"上游返回 HTTP {code}：{_safe_error(response_text)}", count=0,
             http_code=code, url=url, payload=payload, response_text=response_text)
     try:
         body = r.json()
     except Exception:
-        return _test_envelope(
+        return _env(
             ok=False, error="上游返回不是 JSON", count=0, http_code=code,
             url=url, payload=payload, response_text=response_text)
     errors = body.get("errors")
     if errors:
         msg = errors[0].get("message", "") if isinstance(errors, list) and errors else str(errors)
-        return _test_envelope(
+        return _env(
             ok=False, error="GraphQL 错误：" + _safe_error(_redact_text(msg, token)), count=0, http_code=code,
             url=url, payload=payload, response_text=response_text,
             response=_redact_record(body, token))
     data = (body.get("data") or {}).get(tpl["query_name"]) or {}
     records = [r for r in (data.get("records") or []) if isinstance(r, dict)]
     records = [_redact_record(r, token) for r in records]
-    return _test_envelope(
+    result = _env(
         ok=True, error="", count=int(data.get("count") or 0), http_code=code,
         url=url, payload=payload, response_text=response_text,
         response=_redact_record(body, token),
         payload_complete=bool(data.get("payloadComplete")),
         max_commission_id=data.get("maxCommissionId") or "",
         record_object=(tpl.get("record_object") or "PublisherCommission"),
-        record_count=len(records), sample_records=records[:3])
+        record_count=len(records), sample_records=records[:10])
+    if not records:
+        result["hint"] = (
+            f"查询窗口 {since_event_date} ~ {before_event_date} 内没有 PublisherCommission 明细；"
+            "这是正常的空窗口，不是统计报表。CJ 佣金记录通常延迟 1–3 天，"
+            "建议在测试抽屉把开始日期往前调（如近 7 天）后重新测试。")
+    return result

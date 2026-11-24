@@ -115,11 +115,14 @@ class TestDetailResult(unittest.TestCase):
         self.assertNotIn(self.TOKEN, out["response_text"])
 
     def test_sample_capped_at_three(self):
-        records = [{"commissionId": str(i)} for i in range(5)]
-        body = {"data": {"publisherCommissions": {"count": 5, "records": records}}}
+        """V4.129 原上限 3 条；V4.131 为满足"要看到明细数值"上调到 10 条。"""
+        records = [{"commissionId": str(i)} for i in range(15)]
+        body = {"data": {"publisherCommissions": {"count": 15, "records": records}}}
         out = self._run(body)
-        self.assertEqual(out["record_count"], 5)
-        self.assertEqual(len(out["sample_records"]), 3)
+        self.assertEqual(out["record_count"], 15)
+        self.assertEqual(len(out["sample_records"]), 10)
+        self.assertEqual(out["sample_records"][0]["commissionId"], "0")
+        self.assertEqual(out["sample_records"][-1]["commissionId"], "9")
 
     def test_error_paths_keep_detail_contract(self):
         out = asyncio.run(advertiser_api.test_connection(

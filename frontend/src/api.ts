@@ -1513,6 +1513,10 @@ export interface ApiTestResult {
   record_object: string
   record_count: number
   sample_records: Record<string, unknown>[]
+  // V4.131：实际查询窗口与空明细提示
+  window_since: string
+  window_before: string
+  hint: string
 }
 
 export const advertiserApi = {
@@ -1528,6 +1532,9 @@ export const advertiserApi = {
     req<ApiConnection>(`/api/advertiser-data/connections/${id}`, { method: 'PATCH', body: JSON.stringify(b) }),
   deleteConnection: (id: number) =>
     req<void>(`/api/advertiser-data/connections/${id}`, { method: 'DELETE' }),
-  testConnection: (b: { connection_id?: number; template_code?: string; token?: string; cid?: string; endpoint?: string }) =>
+  testConnection: (b: {
+    connection_id?: number; template_code?: string; token?: string; cid?: string; endpoint?: string
+    since_event_date?: string; before_event_date?: string
+  }) =>
     req<ApiTestResult>('/api/advertiser-data/connections/test', { method: 'POST', body: JSON.stringify(b) }),
 }

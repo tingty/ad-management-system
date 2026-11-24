@@ -4248,19 +4248,39 @@ def _record_test_result(r: ApiConnection, result: dict) -> None:
     r.last_test_at = datetime.utcnow()
     r.last_test_error = (result.get("error") or "")[:500]
     r.last_test_http_code = int(result.get("http_code") or 0) or None
-    r.last_test_count = int(result.get("count") or 0) if result.get("ok") else None
+    # V4.131：列表展示的是 PublisherCommission 明细条数，不再回退到包装层聚合 count
+    r.last_test_count = (
+        int(result.get("record_count", result.get("count", 0)) or 0) if result.get("ok") else None)
     # V4.128：完整请求链接 / GraphQL 请求体 / 上游响应原文留痕，Token 永不写库
     r.last_test_url = (result.get("request_url") or "")[:512] or None
     r.last_test_request_body = result.get("request_body") or None
     r.last_test_response_text = result.get("response_text") or ""
 
 
-async def _test_saved_connection(db: Session, r: ApiConnection) -> dict:
-    """用已保存的加密凭据做一次真实测试并回写；Token 只在内存中解密。"""
+def _test_window(since: str = "", before: str = "") -> tuple[str, str]:
+    """V4.131：测试窗口默认近 7 天；CJ 佣金数据延迟 1–3 天，固定 1 天窗口常查不到明细。"""
     from datetime import timedelta, timezone
     now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    before = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_text = (before or "").strip()
+    if end_text:
+        try:
+            end_dt = datetime.strptime(end_text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            # 非法日期不能原样透传给上游，回退到默认值
+            end_text = ""
+            end_dt = now
+    else:
+        end_dt = now
+    start_text = (since or "").strip()
+    if not start_text:
+        start_text = (end_dt - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return start_text, end_text or now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def _test_saved_connection(db: Session, r: ApiConnection,
+                                 since: str = "", before: str = "") -> dict:
+    """用已保存的加密凭据做一次真实测试并回写；Token 只在内存中解密。"""
+    since, before = _test_window(since, before)
     token = advertiser_api.decrypt_token(r.token_enc or "")
     if not token:
         raise HTTPException(400, "Token 解密失败，请重新填写")
@@ -4367,7 +4387,7 @@ async def api_advertiser_connection_delete(cid: int, db: Session = Depends(get_d
 @router.post("/advertiser-data/connections/test", response_model=ApiTestOut)
 async def api_advertiser_connection_test(body: ApiTestIn, db: Session = Depends(get_db),
                                          user: User = Depends(require_roles(*CAN_EDIT))):
-    """测试连接：1 天窗口逐条拉取 PublisherCommission 明细，回写脱敏状态与请求/响应详情，不回显 Token。"""
+    """测试连接：默认 7 天窗口逐条拉取 PublisherCommission 明细，支持自定义窗口；不回显 Token。"""
     _ad_gate()
     token = (body.token or "").strip()
     cid = (body.cid or "").strip()
@@ -4385,10 +4405,7 @@ async def api_advertiser_connection_test(body: ApiTestIn, db: Session = Depends(
             raise HTTPException(400, "Token 解密失败，请重新填写")
     if not tpl_code:
         raise HTTPException(400, "请选择模板")
-    from datetime import datetime, timedelta, timezone
-    now = datetime.now(timezone.utc)
-    since = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    before = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    since, before = _test_window(body.since_event_date or "", body.before_event_date or "")
     result = await advertiser_api.test_connection(
         template_code=tpl_code, endpoint=endpoint, token=token, cid=cid,
         since_event_date=since, before_event_date=before)

@@ -47,7 +47,8 @@ class TestDataContract(unittest.TestCase):
         self.assertIn('/connections/create-and-test', routers)
         self.assertIn('_record_test_result(r, result)', routers)
         self.assertIn('r.last_test_http_code = int(result.get("http_code") or 0) or None', routers)
-        self.assertIn('r.last_test_count = int(result.get("count") or 0) if result.get("ok") else None', routers)
+        # V4.131：列表口径改为 PublisherCommission 明细数，不再回退到聚合 count
+        self.assertIn('result.get("record_count", result.get("count", 0))', routers)
 
     def test_schedule_normalization(self):
         import routers

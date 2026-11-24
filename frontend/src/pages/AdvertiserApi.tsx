@@ -1,5 +1,7 @@
 /**
- * V4.128 / V4.129 · 广告主数据 / API对接。
+ * V4.128 / V4.129 / V4.131 · 广告主数据 / API对接。
+ * V4.131：测试窗口默认近 7 天且可调整（CJ 明细延迟 1–3 天）；0 条明细不再回退显示聚合
+ * count；抽屉显示真实查询窗口并给出空窗口原因，明细样例上限由 3 条提升到 10 条。
  * V4.129：测试请求改为真正拉取 publisherCommissions.records（Object: PublisherCommission），
  * 滑窗明确标注请求对象并展示逐条订单佣金明细样例，而不是只显示 count 统计。
  * 在 V4.125「一张列表 + 两个弹窗」基础上，列表最后新增「测试」列：
@@ -26,6 +28,19 @@ const DEFAULT_SCHEDULE: ApiSchedule = {
 const CJ_TEMPLATE = 'CJ联盟'
 const PUBLISHER_COMMISSION_DESC =
   'A record of a publisher commission event, potentially including items purchased and advertiser-supplied custom attributes.'
+
+function daysAgo(n: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() - n)
+  return d.toISOString().slice(0, 10)
+}
+
+function windowPayload(since: string, before: string) {
+  return {
+    since_event_date: since ? `${since}T00:00:00Z` : '',
+    before_event_date: before ? `${before}T23:59:59Z` : '',
+  }
+}
 
 function statusLabel(c: ApiConnection): string {
   if (c.last_test_ok === null || c.last_test_ok === undefined) return '未测试'
@@ -80,6 +95,9 @@ export default function AdvertiserApi() {
   const [testingId, setTestingId] = useState<number | null>(null)
   const [hover, setHover] = useState<{ id: number; x: number; y: number } | null>(null)
   const [testDrawer, setTestDrawer] = useState<TestDrawer | null>(null)
+  // V4.131：测试抽屉的查询窗口（日期），默认近 7 天
+  const [windowSince, setWindowSince] = useState(daysAgo(7))
+  const [windowBefore, setWindowBefore] = useState(daysAgo(0))
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -149,19 +167,25 @@ export default function AdvertiserApi() {
     try {
       const r = await advertiserApi.testConnection({ connection_id: settingsId })
       setMsg(r.ok
-        ? { kind: 'ok', text: `测试成功：HTTP ${r.http_code}，拉取 ${r.record_count || r.count} 条 PublisherCommission 明细` }
+        ? { kind: 'ok', text: `测试成功：HTTP ${r.http_code}，拉取 ${r.record_count ?? 0} 条 PublisherCommission 明细` }
         : { kind: 'err', text: `测试失败：HTTP ${r.http_code || '—'} · ${r.error || '接口返回异常'}` })
       await load()
     } catch (e: any) { setMsg({ kind: 'err', text: e?.message || '测试失败' }) }
     finally { setTestingId(null) }
   }
 
-  async function startTest(id: number, name: string) {
+  async function startTest(id: number, name: string, since = windowSince, before = windowBefore) {
     setHover(null); setMsg(null)
+    setWindowSince(since); setWindowBefore(before)
     setTestDrawer({ id, name, result: null, loading: true })
     try {
-      const r = await advertiserApi.testConnection({ connection_id: id })
+      const r = await advertiserApi.testConnection({
+        connection_id: id, ...windowPayload(since, before),
+      })
       setTestDrawer(d => d && d.id === id ? { ...d, result: r, loading: false } : d)
+      // 以服务端实际窗口为准（用户留空时服务端用默认值）
+      if (r?.window_since) setWindowSince(r.window_since.slice(0, 10))
+      if (r?.window_before) setWindowBefore(r.window_before.slice(0, 10))
       await load()
     } catch (e: any) {
       setTestDrawer(d => d && d.id === id
@@ -280,7 +304,7 @@ export default function AdvertiserApi() {
                 </div>
                 <div className="ad-drawer-metric">
                   <span>明细记录</span>
-                  <b>{drawerResult?.ok ? (drawerResult.record_count || drawerResult.count) : '—'}</b>
+                  <b>{drawerResult?.ok ? (drawerResult.record_count ?? 0) : '—'}</b>
                 </div>
                 <div className="ad-drawer-metric">
                   <span>测试时间</span>
@@ -294,6 +318,34 @@ export default function AdvertiserApi() {
               {!testDrawer.loading && drawerResult?.error && (
                 <div className="ad-msg err">{drawerResult.error}</div>
               )}
+
+              <section className="ad-drawer-sec">
+                <div className="ad-drawer-sec-head">
+                  <span className="ad-step">00</span>
+                  <h4>查询窗口</h4>
+                  <span className="ad-drawer-sec-note">事件日期 · 可调整</span>
+                </div>
+                <div className="ad-window-grid">
+                  <label>开始日期
+                    <input type="date" value={windowSince}
+                           onChange={e => setWindowSince(e.target.value)} />
+                  </label>
+                  <label>结束日期
+                    <input type="date" value={windowBefore}
+                           onChange={e => setWindowBefore(e.target.value)} />
+                  </label>
+                  <button className="btn primary" disabled={testDrawer.loading}
+                          onClick={() => void startTest(testDrawer.id, testDrawer.name, windowSince, windowBefore)}>
+                    应用并重新测试
+                  </button>
+                </div>
+                <p className="ad-drawer-hint">
+                  {drawerResult?.window_since && drawerResult?.window_before
+                    ? `本次实际查询：${drawerResult.window_since.slice(0, 10)} ~ ${drawerResult.window_before.slice(0, 10)}（UTC 事件日期，单次跨度 ≤ 31 天）。`
+                    : '默认近 7 天。CJ 佣金明细通常延迟 1–3 天，窗口太短会返回空明细。'}
+                </p>
+                {drawerResult?.hint && <div className="ad-msg info">{drawerResult.hint}</div>}
+              </section>
 
               <section className="ad-drawer-sec">
                 <div className="ad-drawer-sec-head">
@@ -316,20 +368,25 @@ export default function AdvertiserApi() {
                 <div className="ad-drawer-sec-head">
                   <span className="ad-step">02</span>
                   <h4>订单佣金明细</h4>
-                  <span className="ad-drawer-sec-note">PublisherCommission · 最多 3 条</span>
+                  <span className="ad-drawer-sec-note">PublisherCommission · 最多 10 条</span>
                 </div>
                 {testDrawer.loading ? (
                   <div className="ad-drawer-loading">正在拉取 PublisherCommission 明细…</div>
                 ) : !drawerResult?.ok ? (
                   <p className="ad-drawer-hint">请求成功后，这里展示逐条 PublisherCommission 订单佣金明细。</p>
                 ) : sampleRecords.length === 0 ? (
-                  <p className="ad-drawer-hint">该 1 天事件日期窗口内没有 PublisherCommission 明细记录。</p>
+                  <div>
+                    <p className="ad-drawer-hint">
+                      {drawerResult?.hint || '该事件日期窗口内没有 PublisherCommission 明细记录。'}
+                    </p>
+                    <p className="ad-drawer-hint">可在上方「查询窗口」把开始日期往前调后重新测试。</p>
+                  </div>
                 ) : (
                   <div className="ad-sample-wrap">
                     <table className="ad-sample-table">
                       <thead><tr>
                         <th>commissionId</th><th>orderId</th><th>advertiserName</th>
-                        <th>eventDate</th><th>original</th><th>items</th>
+                        <th>eventDate</th><th>佣金金额 USD</th><th>original</th><th>items</th>
                       </tr></thead>
                       <tbody>
                         {sampleRecords.map((r, i) => (
@@ -338,6 +395,7 @@ export default function AdvertiserApi() {
                             <td><code>{String(r.orderId ?? '—')}</code></td>
                             <td>{String(r.advertiserName ?? '—')}</td>
                             <td>{String(r.eventDate ?? '—')}</td>
+                            <td>{r.pubCommissionAmountUsd ?? r.pubCommissionAmountPubCurrency ?? '—'}</td>
                             <td>{r.original === true ? '原始单' : r.original === false ? '修正单' : '—'}</td>
                             <td>{Array.isArray(r.items) ? r.items.length : '—'}</td>
                           </tr>
@@ -367,7 +425,7 @@ export default function AdvertiserApi() {
               <button
                 className="btn"
                 disabled={testDrawer.loading}
-                onClick={() => void startTest(testDrawer.id, testDrawer.name)}
+                onClick={() => void startTest(testDrawer.id, testDrawer.name, windowSince, windowBefore)}
               >{testDrawer.loading ? '测试中…' : '重新测试'}</button>
               <button className="btn primary" onClick={() => setTestDrawer(null)}>关闭</button>
             </footer>

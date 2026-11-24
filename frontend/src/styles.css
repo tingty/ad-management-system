@@ -2517,6 +2517,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ad-msg { padding: 9px 12px; border-radius: 8px; font-size: 12.5px; margin: 8px 0; }
 .ad-msg.ok { background: rgba(22,163,74,.10); color: #15803d; }
 .ad-msg.err { background: rgba(220,38,38,.10); color: #b91c1c; }
+.ad-msg.info { background: rgba(31,78,121,.08); color: var(--primary, #1f4e79); line-height: 1.6; }
 .ad-form { padding: 14px 16px; margin: 8px 0 14px; }
 .ad-form-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 10px 14px; }
 .ad-form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
@@ -2658,12 +2659,21 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
   background: var(--card-2, rgba(0,0,0,.02)); }
 .ad-sample-table tr:last-child td { border-bottom: none; }
 .ad-sample-table code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+/* V4.131：可调整的查询窗口 */
+.ad-window-grid { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }
+.ad-window-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 11px;
+  color: var(--muted, #6b7280); }
+.ad-window-grid input[type=date] { height: 36px; padding: 0 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--card); color: var(--text); font-size: 12px; }
+.ad-window-grid .btn { height: 36px; white-space: nowrap; }
 .ad-drawer-foot { position: sticky; bottom: 0; display: flex; justify-content: flex-end; gap: 8px;
   padding: 12px 24px; border-top: 1px solid var(--border); background: var(--card); }
 @media (max-width: 720px) {
   .ad-drawer { width: 100vw; }
   .ad-drawer-summary { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
   .ad-object-banner { flex-direction: column; gap: 8px; }
+  .ad-window-grid { grid-template-columns: 1fr 1fr; }
+  .ad-window-grid .btn { grid-column: 1 / -1; }
   .ad-drawer-head, .ad-drawer-body, .ad-drawer-foot { padding-left: 16px; padding-right: 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
