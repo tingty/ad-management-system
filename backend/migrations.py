@@ -93,6 +93,78 @@ ORDER_LABEL_SEED = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# V4.130：CJ 模板字段映射种子（api_field_map 的唯一权威配置）。
+# source_path 与 GraphQL Object: PublisherCommission 字段一一对应；
+# 目标分 fact（统一事实表）/ item（商品子表）/ source_record（原始层幂等键）/
+# ext（扩展层 data_json 键）/ __skip__（显式忽略，原始层仍保留）。
+# 请求字段必须全部登记，P1-B 落库前按此做「未登记即告警」覆盖检查。
+# ---------------------------------------------------------------------------
+CJ_TEMPLATE_ID = "cj_publisher_commissions"
+CJ_FIELD_MAP_SEED = [
+    # ---- 12 个核心确认字段（含同源/派生）----
+    ("commissionId",                    "fact.commission_id",                  "direct",      "ID / 幂等键"),
+    ("commissionId",                    "source_record.external_id",           "direct",      "原始层幂等键"),
+    ("advertiserName",                  "fact.advertiser_name",                "direct",      "广告主名称"),
+    ("advertiserName",                  "fact.campaign_name",                  "direct",      "Q3：品牌名称同取顶层 advertiserName"),
+    ("orderId",                         "fact.order_id",                       "direct",      "订单号 / 合并键"),
+    ("eventDate",                       "fact.event_date",                     "utc_date",    "Q2：事件日期 UTC→业务日期"),
+    ("actionStatus",                    "fact.action_status",                  "enum_map",    "订单状态（官方小写枚举）"),
+    ("actionTrackerName",               "fact.event_name",                     "direct",      "Q4：事件名称"),
+    ("saleAmountUsd",                   "fact.sale_amount_usd",                "decimal",     "销售金额"),
+    ("pubCommissionAmountUsd",          "fact.commission_amount_usd",          "decimal",     "发布者佣金金额"),
+    ("saleAmountUsd",                   "fact.unit_price_usd",                 "derived",     "主表均价 = sale / qty_internal（中间量，不落列）"),
+    ("validationStatus",                "fact.validation_status",              "enum_map",    "审核状态"),
+    ("__derived__is_void",              "fact.is_void",                        "derived",     "按订单合并净额归零判定取消单；官方无 REVERSED 枚举"),
+    # ---- V4.127 提升可见的 6 个新增业务字段 ----
+    ("aid",                             "fact.ad_id",                          "direct",      "广告 ID（可空）"),
+    ("clickDate",                       "fact.click_date",                     "utc_datetime", "点击日期（可空）"),
+    ("correctionReason",                "fact.correction_reason",              "enum_map",    "纠正原因"),
+    ("country",                         "fact.country",                        "direct",      "交易国家"),
+    ("coupon",                          "fact.coupon",                         "direct",      "优惠码 ID"),
+    ("publisherId",                     "fact.publisher_id",                   "direct",      "渠道商 CID（与连接校验）"),
+    ("publisherName",                   "fact.publisher_name",                 "direct",      "渠道商名称"),
+    # ---- 合并 / 对账技术列 ----
+    ("original",                        "fact.original",                       "bool",        "原始单 true / 修正单 false"),
+    ("originalActionId",                "fact.original_action_id",             "direct",      "原始与修正的关联键"),
+    ("postingDate",                     "fact.posting_date",                   "utc_datetime", "对账保留；增量水位按 eventDate"),
+    # ---- 商品子表 ----
+    ("items[].sku",                     "item.sku",                            "direct",      "商品 SKU"),
+    ("items[].quantity",                "item.quantity",                       "direct",      "数量（增量可负，不进统一表）"),
+    ("items[].perItemSaleAmountUsd",    "item.unit_price_usd",                 "direct",      "子表精确单价（USD），多 SKU 以此为准"),
+    ("items[].totalCommissionUsd",      "item.commission_usd",                 "decimal",     "子表佣金（USD）"),
+    # ---- 有请求但无统一列：落扩展层，零丢失 ----
+    ("actionTrackerId",                 "ext.action_tracker_id",               "direct",      "广告主定义的动作 ID"),
+    ("advertiserId",                    "ext.advertiser_id",                   "direct",      "广告主 CID"),
+    ("initiatingBrowser",               "ext.initiating_browser",              "direct",      "发起浏览器"),
+    ("initiatingDeviceName",            "ext.initiating_device_name",          "direct",      "发起设备名"),
+    ("initiatingDeviceType",            "ext.initiating_device_type",          "direct",      "发起设备类型"),
+    ("isCrossDevice",                   "ext.is_cross_device",                 "bool",        "跨设备归因"),
+    ("lockingDate",                     "ext.locking_date",                    "utc_datetime", "锁定日期"),
+    ("lockingMethod",                   "ext.locking_method",                  "direct",      "锁定方式"),
+    ("pubCommissionAmountPubCurrency",  "ext.pub_commission_amount_pub_currency", "decimal",  "发布者币种佣金"),
+    ("reviewedStatus",                  "ext.reviewed_status",                 "direct",      "广告主复核状态"),
+    ("saleAmountPubCurrency",           "ext.sale_amount_pub_currency",        "decimal",     "发布者币种销售额"),
+    ("shopperId",                       "ext.shopper_id",                      "direct",      "购物者 ID（发布者可见）"),
+    ("source",                          "ext.source",                          "direct",      "交易来源"),
+    ("websiteId",                       "ext.website_id",                      "direct",      "网站 ID"),
+    ("websiteName",                     "ext.website_name",                    "direct",      "网站名称"),
+    ("verticalAttributes.brand",        "ext.vertical_brand",                  "direct",      "广告主自定义属性 · 品牌"),
+    ("verticalAttributes.campaignId",   "ext.vertical_campaign_id",            "direct",      "广告主自定义属性 · 活动 ID"),
+    ("verticalAttributes.itemId",       "ext.vertical_item_id",                "direct",      "广告主自定义属性 · 商品 ID"),
+    ("verticalAttributes.itemName",     "ext.vertical_item_name",              "direct",      "广告主自定义属性 · 商品名"),
+    ("verticalAttributes.custCountry",  "ext.vertical_cust_country",           "direct",      "广告主自定义属性 · 客户国家"),
+    ("items[].perItemSaleAmountPubCurrency", "ext.item_per_item_sale_pub_currency", "decimal", "子表发布者币种单价"),
+    ("items[].totalCommissionPubCurrency",   "ext.item_total_commission_pub_currency", "decimal", "子表发布者币种佣金"),
+    # ---- 显式忽略（原始层仍保留，不参与统一表/扩展层）----
+    ("actionType",                      "__skip__",                            "skip",        "本轮口径不使用"),
+    ("clickReferringURL",               "__skip__",                            "skip",        "非必需，避免解析开销"),
+    ("verticalAttributes.campaignName", "__skip__",                            "skip",        "Q3 后品牌名取顶层 advertiserName，避免同源歧义"),
+    ("situations",                      "__skip__",                            "skip",        "解析慢，首版不取"),
+    ("situationDetails",                "__skip__",                            "skip",        "解析慢，首版不取"),
+]
+
+
 def _current_order_view_sql(conn) -> str:
     """优先用库中持久化的视图定义（改名后已同步），否则用代码内默认定义。"""
     row = conn.execute(
@@ -154,9 +226,31 @@ def _migrate_v4128_1(conn) -> str:
     return "api_connection 测试详情字段（请求链接 / 请求体 / 响应原文）已就绪"
 
 
+def _migrate_v4130_1(conn) -> str:
+    """V4.130.1：把 CJ 请求字段 ↔ 统一字段映射登记落库，作为 P1-B 覆盖检查的配置源。"""
+    added = 0
+    for source, target, transform, note in CJ_FIELD_MAP_SEED:
+        exists = conn.execute(
+            text("""SELECT 1 FROM api_field_map
+                    WHERE template_id=:t AND source_path=:s AND target_field=:g AND version=1"""),
+            {"t": CJ_TEMPLATE_ID, "s": source, "g": target},
+        ).first()
+        if exists:
+            continue
+        conn.execute(
+            text("""INSERT INTO api_field_map
+                    (template_id, source_path, target_field, transform, version, enabled, note)
+                    VALUES (:t, :s, :g, :r, 1, 1, :n)"""),
+            {"t": CJ_TEMPLATE_ID, "s": source, "g": target, "r": transform, "n": note},
+        )
+        added += 1
+    return f"CJ 字段映射登记新增 {added} 行（含 fact / item / ext / __skip__）"
+
+
 MIGRATIONS = [
     ("V4.127.1", "advertiser_unified_schema", _migrate_v4127_1),
     ("V4.128.1", "advertiser_test_detail", _migrate_v4128_1),
+    ("V4.130.1", "advertiser_field_map_seed", _migrate_v4130_1),
 ]
 
 
@@ -292,6 +386,10 @@ def verify_schema() -> dict:
         fact_cols = {c["name"] for c in insp.get_columns("api_unified_fact")}
         labels = db.execute(text("SELECT column_key FROM api_field_label WHERE scope='fact'")).scalars().all()
         versions = db.execute(text("SELECT version FROM schema_migrations")).scalars().all()
+        map_count = db.execute(
+            text("SELECT COUNT(*) FROM api_field_map WHERE template_id=:t AND enabled=1"),
+            {"t": CJ_TEMPLATE_ID},
+        ).scalar()
     return {
         "tables_ok": all(t in tables for t in (
             "api_source_record", "api_unified_fact", "api_fact_item", "api_fact_ext",
@@ -302,5 +400,6 @@ def verify_schema() -> dict:
             "id", "source_record_id", "external_id", "template_id", "connection_id",
             "run_id", "original", "original_action_id", "created_at", "updated_at"}]),
         "label_count": len(set(labels)),
+        "map_count": int(map_count or 0),
         "versions": list(versions),
     }

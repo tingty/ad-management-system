@@ -2,6 +2,33 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.130 广告主数据：请求对象变更后的字段映射与报表影响修复
+
+**发布日期**：2026-11-24 16:15
+**变更类型**：优化 / 新增
+**涉及模块**：广告主数据 CJ 请求模板、字段映射配置与版本化迁移、统一事实表注释、唯一维护文档、专项测试、发版数据、系统版本
+**变更摘要**：针对 V4.129 把请求对象改为 PublisherCommission 明细后的连带影响做完整排查，确认数据库表结构与「广告主报表」骨架均无需改动，并修复两处真实缺口：请求漏取官方 Item 对象的 `perItemSaleAmountUsd`（子表精确单价依赖），以及 `api_field_map` 只有表结构、没有任何映射登记（覆盖检查无法运行）。同时清理存储设计文档中的 `REVERSED` 残留，统一为官方枚举与净额归零判定口径。
+**更新要点**
+- 【优化】`advertiser_api.PUBLISHER_COMMISSION_FIELDS` 的 items 块补齐 `perItemSaleAmountUsd`；官方 Item 对象确有该字段，`api_fact_item.unit_price_usd` 与映射表 #10 的子表精确单价规则因此可落地，`perItemSaleAmountPubCurrency` 继续保留供扩展层。
+- 【新增】`migrations.CJ_FIELD_MAP_SEED`：CJ 模板字段映射的唯一权威配置，覆盖 12 核心字段（含 advertiserName 双目标与 is_void 派生）、6 个新增可见字段、合并技术列、items 子表、23 个 ext 字段与 5 个显式 skip 字段；`V4.130.1` 幂等写入 `api_field_map`，`verify_schema()` 新增 `map_count`。
+- 【优化】映射口径固化：`advertiserName → fact.advertiser_name + fact.campaign_name`（Q3 同源）、`actionTrackerName → fact.event_name`（Q4）、`eventDate → fact.event_date`（Q2）、`verticalAttributes.campaignName → __skip__`（避免与品牌名同源歧义）、`postingDate` 仅对账保留而增量水位按 `eventDate`。
+- 【优化】唯一维护文档清除 `REVERSED` 残留：`action_status` 官方枚举改为 `closed / extended / locked / new`，`validationStatus` 改为 `PENDING / ACCEPTED / DECLINED / AUTOMATED`，取消单判定统一为订单净额归零（与 `v_api_order_final` 实现一致）；第四章补 6 个新增字段、Item USD 精确单价、ext/skip 与映射已落库说明；功能开发文档同步映射 seed 口径。
+- 【优化】`models.py` 的 `posting_date` 注释同步为「对账保留（增量水位按 eventDate）」，消除模型注释与查询/文档口径差异。
+- 【新增】`tests/test_advertiser_api_v4130.py`：覆盖请求字段 ⊆ 映射登记集合、关键映射语义、V4.130.1 幂等 seed、视图列未变、报表骨架无字段硬编码与文档口径纠正。
+**本次优化与更改的功能 / 模块**
+- 【优化】广告主数据从「映射只写在文档」升级为「映射登记已落库且可覆盖检查」：V4.129 的请求明细字段现在每个都有明确目标（fact / item / ext / __skip__），P1-B 落库时未登记字段会告警而不是静默丢弃。
+**影响范围**
+- 兼容：不新增数据库列、不改 `v_api_order_final` 视图 SQL、不改 20 个业务字段与 26 行展示名种子；「广告主报表」仍是 P3 规划中的页面骨架，无数据接口、无字段硬编码，本次不改其界面与契约；V4.124–V4.129 的菜单、列表、弹窗与测试滑窗保持不变。
+- 边界：本版只补配置与口径，**仍不做明细幂等落库、统一事实表写入、自动调度与报表数据接口**（P1-B / P2 / P3）；真实 CJ 明细验收仍是外部验收项。
+- 部署：无新增 pip 依赖；执行 `git pull` 后重启后端，`ensure_schema()` 自动执行 `V4.130.1` 幂等 seed 并写版本记录，历史连接与数据无需迁移。
+**验证**
+- 专项：广告主数据七个专项共 73 passed；其中 V4.130 专项 9 项通过。
+- 全量回归：全新隔离 SQLite 库执行 `pytest tests`，608 passed / 3 skipped / 14 subtests passed（默认库历史脏数据会触发既有 V4.119 归并专项失败，本次未动默认库数据）。
+- 覆盖率检查：专项从 `PUBLISHER_COMMISSION_FIELDS` 自动提取请求字段（含 `items[]` / `verticalAttributes.` 前缀），断言全部存在于 `CJ_FIELD_MAP_SEED` 的 `source_path` 集合，缺失即 FAIL。
+- 迁移检查：空库执行 `ensure_schema()` 后 `api_field_map` 行数等于种子行数，`schema_migrations` 含 `V4.130.1`，再次执行无新增列与重复行；`verify_schema()` 返回 `map_count` 与 20 业务字段、视图就绪。
+- 文档：存储设计文档不再出现 `action_status = 'REVERSED'` 与旧枚举，功能开发文档映射行标注 seed 来源。
+- `prepare_release --sync` 后独立进程 `prepare_release --check` 通过，系统版本 / CHANGELOG / 发布数据一致为 V4.130。
+
 ## V4.129 API对接：明确请求 PublisherCommission 订单明细
 
 **发布日期**：2026-11-24 16:06

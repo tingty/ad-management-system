@@ -171,7 +171,7 @@
     <tr><td>查询骨架</td><td><code>query PublisherCommission { publisherCommissions(forPublishers:$cid, sinceEventDate:$from, beforeEventDate:$to, sinceCommissionId:$cursor) { count payloadComplete maxCommissionId records { ... } } }</code></td><td>官方查询字段仍是 <code>publisherCommissions</code>（小写复数）；<code>records: [PublisherCommission!]!</code> 才是要取的明细，字段清单固化在模板</td></tr>
     <tr><td>分页协议</td><td>游标 <code>maxCommissionId</code> → <code>sinceCommissionId</code>；结束标志 <code>payloadComplete</code></td><td>调度器按协议自动翻页</td></tr>
     <tr><td>限流规则</td><td>≤31 天窗口、≤10,000 条/次、200 次/5 分钟、串行 ≥1.5 秒</td><td>由模板下发，任务自动遵守</td></tr>
-    <tr><td>字段映射</td><td>详见第六章 <code>api_field_map</code>（12 个统一字段的一一映射）</td><td>决定原始数据如何落入统一事实表</td></tr>
+    <tr><td>字段映射</td><td>详见第六章 <code>api_field_map</code>；V4.130 起由 <code>migrations.CJ_FIELD_MAP_SEED</code> 幂等 seed（12 核心 + 6 新增 + 技术列 + item / ext / skip），请求字段全部登记</td><td>决定原始数据如何落入统一事实表；P1-B 落库前按此做覆盖检查，未登记字段告警</td></tr>
     <tr><td>修正合并规则</td><td>按 <code>orderId + originalActionId</code> 合并正负增量，识别取消单</td><td>模板内置 CJ 特有的业务规则</td></tr>
   </table>
   <div class="ok"><b>价值：</b>用户视角只看到"选模板 → 填 3 项 → 测试 → 建任务"；复杂接口细节（GraphQL、游标、修正、限流）全部封装在模板里，且以后可复制到其他渠道。</div>

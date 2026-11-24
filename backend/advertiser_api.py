@@ -163,6 +163,7 @@ PUBLISHER_COMMISSION_FIELDS = """
         quantity
         sku
         perItemSaleAmountPubCurrency
+        perItemSaleAmountUsd
         totalCommissionPubCurrency
         totalCommissionUsd
       }

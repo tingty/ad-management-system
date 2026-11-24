@@ -75,12 +75,12 @@
   <table>
     <tr><th width="10%">编号</th><th width="24%">事项</th><th>最终决策</th></tr>
     <tr><td>Q1</td><td>ID 口径</td><td>采用默认：报表 ID 用上游 <code>commissionId</code>，内部另设自增主键 <code>id</code></td></tr>
-    <tr><td>Q2</td><td>日期口径</td><td>用 <code>eventDate</code>（UTC 转业务时区）；<code>postingDate</code> 另留作增量水位</td></tr>
+    <tr><td>Q2</td><td>日期口径</td><td>用 <code>eventDate</code>（UTC 转业务时区）作查询与增量水位；<code>postingDate</code> 保留作对账字段（V4.130 统一口径）</td></tr>
     <tr><td>Q3</td><td>品牌名称来源</td><td><code>campaign_name</code> 映射为 <code>advertiserName</code>（见下方说明）</td></tr>
     <tr><td>Q4</td><td>事件名称来源</td><td><code>event_name</code> 映射为 <code>actionTrackerName</code></td></tr>
     <tr><td>Q5</td><td>单价口径</td><td>采用默认：主表订单级均价，item 子表存每项精确单价（见 5.2 与字段删除后的协调说明）</td></tr>
     <tr><td>—</td><td>订单商品数量</td><td><b>删除该字段</b>，统一表不再存 <code>item_quantity</code></td></tr>
-    <tr><td>Q6</td><td>取消单判定</td><td>采用默认：净额归零或 <code>REVERSED</code>，每次拉取后按订单重算回填</td></tr>
+    <tr><td>Q6</td><td>取消单判定</td><td>按订单合并全部明细后<b>净额归零</b>判定；CJ 官方 <code>ActionStatus</code> 枚举只有 <code>closed / extended / locked / new</code>，<b>不存在 REVERSED</b>（V4.130 纠正）</td></tr>
   </table>
   <div class="note"><b>Q3 说明：</b>按你的决策，<code>campaign_name</code>（品牌名称）与 <code>advertiser_name</code>（广告主名称）都取自 <code>advertiserName</code>，因此两列当前<b>同值</b>。这是有意为之的口径，不是映射错误。若未来 CJ 上报了独立的 campaign 标识，只需在 <code>api_field_map</code> 把 <code>campaign_name</code> 改指向该字段即可，<b>不改表结构、不改报表</b>。</div>
 </section>
@@ -110,14 +110,14 @@
     <tr><td>1</td><td>ID</td><td><code>commission_id</code></td><td>String(64)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>commissionId</code>；业务唯一标识，同时作幂等键 <code>external_id</code>（Q1 默认）</td></tr>
     <tr><td>2</td><td>广告主名称</td><td><code>advertiser_name</code></td><td>String(255)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>advertiserName</code>（发布者侧为广告主项目名称）</td></tr>
     <tr><td>3</td><td>订单号</td><td><code>order_id</code></td><td>String(128)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>orderId</code>；合并修正与取消单的核心分组键</td></tr>
-    <tr><td>4</td><td>日期</td><td><code>event_date</code></td><td>Date</td><td><span class="tag t-core">直取</span></td><td>CJ <code>eventDate</code>（UTC）转业务时区日期（Q2）；另存 <code>posting_date</code> 作增量水位</td></tr>
+    <tr><td>4</td><td>日期</td><td><code>event_date</code></td><td>Date</td><td><span class="tag t-core">直取</span></td><td>CJ <code>eventDate</code>（UTC）转业务时区日期（Q2）；另存 <code>posting_date</code> 对账，增量水位按事件日期</td></tr>
     <tr><td>5</td><td>品牌名称（campaign name）</td><td><code>campaign_name</code></td><td>String(255)</td><td><span class="tag t-core">直取</span></td><td>映射为 <code>advertiserName</code>（Q3），与广告主名称同值；未来有独立 campaign 字段时仅改映射</td></tr>
-    <tr><td>6</td><td>订单状态</td><td><code>action_status</code></td><td>String(32)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>actionStatus</code> 枚举归一化：<code>PENDING/BOOKED/PAID/REVERSED</code></td></tr>
+    <tr><td>6</td><td>订单状态</td><td><code>action_status</code></td><td>String(32)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>actionStatus</code> 官方枚举：<code>closed / extended / locked / new</code>（无 REVERSED）</td></tr>
     <tr><td>7</td><td>事件名称</td><td><code>event_name</code></td><td>String(255)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>actionTrackerName</code>（Q4），广告主定义的转化动作名称</td></tr>
     <tr><td>8</td><td>销售金额</td><td><code>sale_amount_usd</code></td><td>Numeric(18,6)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>saleAmountUsd</code>；USD 归一化口径，Decimal 精确运算</td></tr>
     <tr><td>9</td><td>佣金金额</td><td><code>commission_amount_usd</code></td><td>Numeric(18,6)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>pubCommissionAmountUsd</code>（发布者佣金）；USD，Decimal</td></tr>
     <tr><td>10</td><td>单价</td><td><code>unit_price_usd</code></td><td>Numeric(18,6)</td><td><span class="tag t-derive">派生</span></td><td>订单级均价 <code>sale_amount_usd / qty_internal</code>（Q5 默认）；<code>qty_internal</code> 为<b>计算中间量</b>、不落为业务字段；子表存每项精确单价</td></tr>
-    <tr><td>11</td><td>审核状态</td><td><code>validation_status</code></td><td>String(32)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>validationStatus</code> 枚举归一化：<code>PENDING/VALID/INVALID/...</code></td></tr>
+    <tr><td>11</td><td>审核状态</td><td><code>validation_status</code></td><td>String(32)</td><td><span class="tag t-core">直取</span></td><td>CJ <code>validationStatus</code> 官方枚举：<code>PENDING / ACCEPTED / DECLINED / AUTOMATED</code></td></tr>
     <tr><td>12</td><td>合并后是否为取消单</td><td><code>is_void</code></td><td>Boolean</td><td><span class="tag t-derive">派生</span></td><td>按订单合并全部明细后判定（规则见第五节），非上游字段</td></tr>
   </table>
   <div class="warn"><b>金额精度：</b>CJ 金额如 <code>1.852</code>、<code>61.742</code> 有三位小数。数据库列用 <code>Numeric(18,6)</code>，应用层一律 <code>Decimal</code>，<b>禁止 Float</b>，否则佣金对账会出现分厘误差。</div>
@@ -177,9 +177,12 @@
     <tr><td>—</td><td><code>postingDate</code></td><td><code>fact.posting_date</code></td><td>utc_datetime</td><td>技术列：增量水位</td></tr>
     <tr><td>—</td><td><code>items[].sku</code> / <code>items[].quantity</code> / <code>items[].totalCommissionUsd</code></td><td><code>item.sku</code> / <code>item.quantity</code> / <code>item.commission_usd</code></td><td>direct</td><td>商品子表（quantity 不进统一表）</td></tr>
     <tr><td>—</td><td><code>actionType</code> / <code>verticalAttributes.campaignName</code></td><td><code>__skip__</code>（原始层仍保留）</td><td>skip</td><td>本轮改口径后不再使用，显式忽略并说明</td></tr>
+    <tr><td>—</td><td><code>items[].perItemSaleAmountUsd</code></td><td><code>item.unit_price_usd</code></td><td>direct</td><td>子表精确单价；官方 Item 对象确有此字段，V4.130 请求已补齐（V4.129 曾漏取）</td></tr>
+    <tr><td>—</td><td><code>aid</code> / <code>clickDate</code> / <code>correctionReason</code> / <code>country</code> / <code>coupon</code> / <code>publisherId</code> / <code>publisherName</code></td><td><code>fact.ad_id</code> / <code>fact.click_date</code> / <code>fact.correction_reason</code> / <code>fact.country</code> / <code>fact.coupon</code> / <code>fact.publisher_id</code> / <code>fact.publisher_name</code></td><td>direct / enum_map / utc_datetime</td><td>V4.127 提升可见的 6 个新增字段，V4.130 补齐映射登记（与模型、展示名种子一致）</td></tr>
+    <tr><td>—</td><td>其余已请求但无统一列的字段：<code>actionTrackerId</code> / <code>advertiserId</code> / 多币种金额 / 设备与锁定信息 / <code>verticalAttributes.brand|campaignId|itemId|itemName|custCountry</code> 等</td><td><code>ext.*</code></td><td>direct / decimal / bool</td><td>落 <code>api_fact_ext.data_json</code>，原始层零丢失；V4.130 已逐字段登记</td></tr>
     <tr><td>—</td><td><code>situations</code> / <code>situationDetails</code> / <code>clickReferringURL</code></td><td><code>__skip__</code>（原始层仍保留）</td><td>skip</td><td>解析慢/非必需，显式忽略并注明原因</td></tr>
   </table>
-  <div class="note"><b>覆盖检查：</b>入库前校验"上游字段集合 ⊆ 映射登记集合（含显式 __skip__）"；出现未登记新字段时写入原始层并告警，不静默丢弃、不擅自改表结构。</div>
+  <div class="note"><b>映射已落库（V4.130）：</b>以上登记通过 <code>migrations.CJ_FIELD_MAP_SEED</code> 由 <code>V4.130.1</code> 幂等写入 <code>api_field_map</code>（模板 <code>cj_publisher_commissions</code>），不再是只写在文档里的约定。<b>覆盖检查：</b>入库前校验"请求字段集合 ⊆ 映射登记集合（含 <code>__skip__</code> 与 <code>ext.*</code>）"；出现未登记新字段时写入原始层并告警，不静默丢弃、不擅自改表结构。</div>
 </section>
 
 <section>
@@ -197,12 +200,11 @@
   <div class="lead">按 <code>(template_id, order_id, original_action_id)</code> 分组，把该订单的<b>全部明细（原始 + 所有修正）</b>合并后才判定：</div>
   <div class="sqlbox">net_commission = SUM(commission_amount_usd)   <span class="cm">-- 原始 + 各修正增量</span>
 net_sale      = SUM(sale_amount_usd)
-has_reversed  = ANY(action_status = 'REVERSED')
 
-is_void = (net_commission == 0 <span class="kw">AND</span> net_sale == 0) <span class="kw">OR</span> has_reversed</div>
+is_void = (net_commission == 0 <span class="kw">AND</span> net_sale == 0)</div>
   <ul>
     <li><b>完全取消</b>：正负增量相抵，净佣金与净销售均为 0 → <code>is_void=true</code>（对应官方示例）。</li>
-    <li><b>显式反转</b>：任一条状态为 <code>REVERSED</code> → <code>is_void=true</code>。</li>
+    <li><b>不再使用 REVERSED</b>：CJ 官方 <code>ActionStatus</code> 只有 <code>closed / extended / locked / new</code>；视图与回填统一按净额归零判定，与 <code>v_api_order_final</code> 实现一致（V4.130 纠正）。</li>
     <li><b>部分修正未归零</b>：净额 ≠0 → <code>is_void=false</code>，报表按<b>净额</b>显示最终金额，而非原始单金额。</li>
     <li><b>回填机制</b>：修正单可能晚于原始单到达。因此 <code>is_void</code> 由每次拉取后的合并任务重算并回填到该订单所有明细行，保证历史行同步更新。</li>
   </ul>

@@ -498,7 +498,7 @@ class ApiUnifiedFact(Base):
     correction_reason = Column(String(64), nullable=True)              # 15 原技术列→提升可见（可空）
     country = Column(String(16), nullable=True)                        # 16 顶层 country（可空）
     coupon = Column(String(255), nullable=True)                        # 17 顶层 coupon（可空）
-    posting_date = Column(DateTime, nullable=True, index=True)         # 18 原技术列→提升可见 + 增量水位
+    posting_date = Column(DateTime, nullable=True, index=True)         # 18 原技术列→提升可见 + 对账保留（增量水位按 eventDate）
     publisher_id = Column(String(64), nullable=True, index=True)       # 19 渠道商 CID（与连接校验）
     publisher_name = Column(String(255), nullable=True)                # 20 渠道商名称
     created_at = Column(DateTime, default=utcnow)
