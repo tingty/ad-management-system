@@ -300,6 +300,7 @@
   </div>
   <div class="ok"><b>报表口径：</b>默认按订单最终口径（合并修正后的净额、取消单标记）展示；字段中文名、顺序、单位、格式全部由 <code>api_field_label</code> 配置驱动（见第七章保障一）。</div>
   <div class="ok"><b>V4.135 / P3 实现状态：</b>上述四块能力（概览 KPI、趋势、维度排行、明细与下钻）已全部落地为只读接口与可用页面。报表为纯查询层，读 <code>v_api_order_final</code> 视图 + <code>api_unified_fact</code> + <code>api_field_label</code>，零新增表 / 列 / 迁移；查询列由展示名配置动态推导，前端不硬编码业务字段中文名。接口 <code>GET /advertiser-data/reports/{labels,dimensions,kpi,trend,rankings,details,drilldown/{id}}</code> 全部按 owner 隔离。上游无花费 / 曝光 / 点击，报表仅呈现佣金收入视角，不提供投资回报与转化率类指标；「明细导出」本版未实现，列为后续增强。</div>
+  <div class="warn"><b>V4.136 界面精简与数据口径澄清：</b>按反馈前端页面顶部只保留主标题，移除解释文字 / 说明条与「趋势」「维度排行」两个子模块（后端只读接口保留可复用），界面收敛为「筛选栏 + KPI + 明细 + 下钻」。报表<b>只展示已落库的订单佣金明细</b>，不实时请求上游 API；「测试连接」仅验证连通性并回写测试元信息，<b>不会落库</b>，必须点「立即拉取明细」或「历史回填」经 <code>ingest_records()</code> 写入 <code>api_unified_fact</code> 后，报表与 KPI 才有数据。明细空态已给出该操作引导。</div>
 
   <h3>5.4 交互与状态要求</h3>
   <ul>

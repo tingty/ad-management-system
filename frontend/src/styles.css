@@ -2697,25 +2697,10 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
   background: var(--card); border: 1px solid var(--border); border-radius: 6px; }
 .ad-inline-hint { font-size: 11.5px; color: var(--muted, #6b7280); }
 .ad-msg-error { background: rgba(220,38,38,.10); color: #b91c1c; }
-.ad-report-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, 1fr); gap: 14px; margin: 4px 0 14px; }
-@media (max-width: 900px) { .ad-report-grid { grid-template-columns: 1fr; } }
 .ad-panel { padding: 14px 16px; }
 .ad-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .ad-panel-head h3 { margin: 0; font-size: 14px; font-weight: 650; color: var(--text); }
 .ad-panel-head .muted { font-size: 11px; color: var(--muted, #6b7280); }
-.ad-chart svg { width: 100%; height: 200px; display: block; }
-.ad-chart-legend { display: flex; gap: 16px; justify-content: center; margin-top: 6px; font-size: 11.5px; color: var(--muted, #6b7280); }
-.ad-chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.ad-chart-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-.ad-rank-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
-.ad-rank-row { display: grid; grid-template-columns: minmax(70px, 1fr) 1.4fr auto; align-items: center; gap: 8px;
-  width: 100%; padding: 6px 4px; background: transparent; border: 0; border-radius: 6px; cursor: pointer;
-  font-size: 11.5px; color: var(--text); text-align: left; }
-.ad-rank-row:hover { background: var(--card-2, rgba(0,0,0,.03)); }
-.ad-rank-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ad-rank-bar { display: block; height: 8px; border-radius: 999px; background: var(--card-2, rgba(0,0,0,.05)); overflow: hidden; }
-.ad-rank-bar i { display: block; height: 100%; border-radius: 999px; background: #2563eb; }
-.ad-rank-val { font-variant-numeric: tabular-nums; color: var(--muted, #6b7280); white-space: nowrap; }
 .ad-table tbody tr { cursor: pointer; }
 .ad-table tbody tr:hover { background: var(--card-2, rgba(0,0,0,.03)); }
 .ad-table-compact { font-size: 11.5px; margin: 6px 0 12px; }

@@ -248,6 +248,21 @@ class TestReportStaticContract(ReportBase):
         for bad in ("ROAS", "ROI", "CTR", "CVR"):
             self.assertNotIn(bad, page)
 
+    def test_v4136_frontend_simplified(self):
+        """V4.136：顶部只留主标题，趋势 / 排行两个子模块与解释说明已移除。"""
+        page = _read("frontend/src/pages/AdvertiserReports.tsx")
+        # 趋势 / 排行的组件、请求与文案均不再出现在页面
+        for removed in ("TrendChart", "reportTrend", "reportRankings", "reportDimensions",
+                        "ad-rank-", "ad-chart-", "趋势", "排行"):
+            self.assertNotIn(removed, page)
+        # 顶部标题区块下不再有解释文字 / 说明条
+        self.assertNotIn("ad-sec-desc", page)
+        self.assertNotIn("上游接口不返回", page)
+        # 保留的能力仍在
+        self.assertIn("ad-sec-title", page)
+        self.assertIn("reportKpi", page)
+        self.assertIn("reportDetails", page)
+
     def test_backend_declares_unavailable_metrics(self):
         self.assertIn("spend", advertiser_reports.UNAVAILABLE_METRICS)
         self.assertIn("roas", advertiser_reports.UNAVAILABLE_METRICS)
