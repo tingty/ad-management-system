@@ -1613,4 +1613,94 @@ export const advertiserApi = {
     '/api/advertiser-data/scheduler/run', { method: 'POST', body: '{}' }),
   fetchRuns: (connectionId?: number) =>
     req<ApiFetchRun[]>(`/api/advertiser-data/fetch-runs?limit=20${connectionId ? `&connection_id=${connectionId}` : ''}`),
+
+  // ---- V4.135 / P3：广告主报表（纯读，表头/口径全部由后端配置驱动）----
+  reportLabels: (scope: 'fact' | 'order_final' | 'item' = 'fact') =>
+    req<ReportLabels>(`/api/advertiser-data/reports/labels${qs({ scope })}`),
+  reportDimensions: () => req<{ dimensions: { key: string; label: string }[] }>(
+    '/api/advertiser-data/reports/dimensions'),
+  reportKpi: (f: ReportFilter = {}) =>
+    req<ReportKpi>(`/api/advertiser-data/reports/kpi${qs(f)}`),
+  reportTrend: (f: ReportFilter & { dimension?: string; dimension_value?: string } = {}) =>
+    req<ReportTrend>(`/api/advertiser-data/reports/trend${qs(f)}`),
+  reportRankings: (f: ReportFilter & { dimension?: string; limit?: number } = {}) =>
+    req<ReportRankings>(`/api/advertiser-data/reports/rankings${qs(f)}`),
+  reportDetails: (f: ReportFilter & { keyword?: string; page?: number; page_size?: number } = {}) =>
+    req<ReportDetails>(`/api/advertiser-data/reports/details${qs(f)}`),
+  reportDrilldown: (factId: number) =>
+    req<ReportDrilldown>(`/api/advertiser-data/reports/drilldown/${factId}`),
+}
+
+// ---- V4.135 / P3：广告主报表类型 ----
+export interface ReportColumn {
+  column_key: string
+  label: string
+  unit: string | null
+  format: string
+  enum_map: Record<string, string>
+  sort_no: number
+  visible: boolean
+}
+export interface ReportLabels {
+  scope: string
+  columns: ReportColumn[]
+  all: ReportColumn[]
+  unavailable_metrics: string[]
+}
+export interface ReportFilter {
+  connection_id?: number
+  date_from?: string
+  date_to?: string
+}
+export interface ReportKpi {
+  net_sale_usd: number
+  net_commission_usd: number
+  order_count: number
+  void_count: number
+  detail_count: number
+  avg_order_value_usd: number
+  source_view: string
+  unavailable_metrics: string[]
+}
+export interface ReportTrendPoint {
+  event_date: string
+  net_sale_usd: number
+  net_commission_usd: number
+  order_count: number
+}
+export interface ReportTrend {
+  points: ReportTrendPoint[]
+  metric_labels: Record<string, string>
+  total: number
+}
+export interface ReportRankItem {
+  name: string
+  net_sale_usd: number
+  net_commission_usd: number
+  order_count: number
+}
+export interface ReportRankings {
+  dimension: string
+  dimension_label: string
+  items: ReportRankItem[]
+  metric_labels: Record<string, string>
+}
+export interface ReportDetails {
+  rows: Record<string, unknown>[]
+  columns: ReportColumn[]
+  total: number
+  page: number
+  page_size: number
+  total_pages: number
+  source_table: string
+}
+export interface ReportDrilldown {
+  found: boolean
+  fact?: Record<string, unknown>
+  columns?: ReportColumn[]
+  items?: Record<string, unknown>[]
+  ext?: Record<string, unknown>
+  source?: Record<string, unknown> | null
+  field_maps?: { source_path: string; target_field: string; transform: string; note: string }[]
+  chain?: string[]
 }

@@ -142,13 +142,18 @@ class TestDatabaseAndReportImpact(unittest.TestCase):
         self.assertNotIn("item_quantity", cls)
         self.assertIn("增量水位按 eventDate", cls)
 
-    def test_report_page_remains_placeholder_without_hardcoded_fields(self):
+    def test_report_page_uses_config_driven_labels(self):
+        """V4.135 / P3 起报表已实现：从占位符断言改为验证「表头不硬编码、读配置驱动」。
+
+        字段中文名由后端 api_field_label 的 labels 接口下发，前端只消费 column_key，
+        因此页面允许出现 column_key 常量，但不得写死中文展示文案作为表头。
+        """
         page = _read("frontend/src/pages/AdvertiserReports.tsx")
-        self.assertIn("P3 版本实现", page)
-        self.assertNotIn("advertiserApi.", page)
-        for col in ("sale_amount_usd", "commission_amount_usd", "event_date"):
-            self.assertNotIn(col, page)
+        self.assertIn("advertiserApi.reportLabels", page)
+        self.assertIn("advertiserApi.reportKpi", page)
         self.assertIn("api_field_label", page)
+        for hardcoded in ("净销售金额</", ">佣金金额<", "表头硬编码"):
+            self.assertNotIn(hardcoded, page)
 
     def test_docs_corrected(self):
         design = _read("docs/广告主API统一数据存储表结构设计_20261124.html")

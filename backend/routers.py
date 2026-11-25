@@ -73,6 +73,7 @@ from version import ENABLE_AUTO_CREATION_PLAN, ENABLE_ADVERTISER_DATA
 import advertiser_api
 import advertiser_ingest  # V4.132 / P1-B：映射写入与幂等落库
 import advertiser_scheduler  # V4.134 / P1-C + P2：历史回填与自动调度
+import advertiser_reports  # V4.135 / P3：广告主报表查询层（纯读）
 # V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
 from video_claims import (video_evidence_context, audit_video_plan,
                           repair_video_plan, video_asset_gate)
@@ -4565,3 +4566,86 @@ async def api_advertiser_replay(template_id: str = "cj_publisher_commissions",
     return advertiser_ingest.replay_mapping(
         db, template_id=template_id, connection_id=connection_id,
         dry_run=dry_run, limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# V4.135 / P3：广告主报表（纯读，口径见 advertiser_reports 模块说明）
+# ---------------------------------------------------------------------------
+@router.get("/advertiser-data/reports/labels")
+async def api_advertiser_report_labels(scope: str = "fact", _: User = Depends(require_roles(*ROLES))):
+    """表头配置：字段名 / 顺序 / 单位 / 格式 / 枚举全部读 api_field_label，前端不硬编码。"""
+    _ad_gate()
+    with SessionLocal() as db:
+        return advertiser_reports.field_labels(db, scope)
+
+
+@router.get("/advertiser-data/reports/dimensions")
+async def api_advertiser_report_dimensions(_: User = Depends(require_roles(*ROLES))):
+    """维度排行可选维度（白名单），键即 fact 列名，值即中文展示名。"""
+    _ad_gate()
+    return {"dimensions": [
+        {"key": k, "label": v} for k, v in advertiser_reports.DIMENSIONS.items()]}
+
+
+@router.get("/advertiser-data/reports/kpi")
+async def api_advertiser_report_kpi(connection_id: Optional[int] = None,
+                                    date_from: Optional[str] = None, date_to: Optional[str] = None,
+                                    db: Session = Depends(get_db),
+                                    user: User = Depends(require_roles(*ROLES))):
+    """概览 KPI：读订单最终视图，净额 / 订单数 / 取消单，owner 隔离。"""
+    _ad_gate()
+    return advertiser_reports.kpi(db, user.id, connection_id=connection_id,
+                                  date_from=date_from, date_to=date_to)
+
+
+@router.get("/advertiser-data/reports/trend")
+async def api_advertiser_report_trend(connection_id: Optional[int] = None,
+                                      date_from: Optional[str] = None, date_to: Optional[str] = None,
+                                      dimension: Optional[str] = None, dimension_value: Optional[str] = None,
+                                      db: Session = Depends(get_db),
+                                      user: User = Depends(require_roles(*ROLES))):
+    """按事件日期的销售 / 佣金趋势（订单最终口径），可叠加维度筛选。"""
+    _ad_gate()
+    return advertiser_reports.trend(db, user.id, connection_id=connection_id,
+                                    date_from=date_from, date_to=date_to,
+                                    dimension=dimension, dimension_value=dimension_value)
+
+
+@router.get("/advertiser-data/reports/rankings")
+async def api_advertiser_report_rankings(dimension: str = advertiser_reports.DEFAULT_DIMENSION,
+                                         connection_id: Optional[int] = None,
+                                         date_from: Optional[str] = None, date_to: Optional[str] = None,
+                                         limit: int = 20, db: Session = Depends(get_db),
+                                         user: User = Depends(require_roles(*ROLES))):
+    """维度排行：广告主 / 品牌 / 事件 / 订单状态的金额与订单数排行。"""
+    _ad_gate()
+    return advertiser_reports.rankings(db, user.id, dimension=dimension,
+                                       connection_id=connection_id, date_from=date_from,
+                                       date_to=date_to, limit=limit)
+
+
+@router.get("/advertiser-data/reports/details")
+async def api_advertiser_report_details(connection_id: Optional[int] = None,
+                                        date_from: Optional[str] = None, date_to: Optional[str] = None,
+                                        advertiser_name: Optional[str] = None,
+                                        campaign_name: Optional[str] = None,
+                                        event_name: Optional[str] = None,
+                                        action_status: Optional[str] = None,
+                                        keyword: Optional[str] = None,
+                                        page: int = 1, page_size: int = 20,
+                                        db: Session = Depends(get_db),
+                                        user: User = Depends(require_roles(*ROLES))):
+    """佣金明细列表（明细粒度）：动态表头 + 分页，owner 隔离。"""
+    _ad_gate()
+    return advertiser_reports.details(
+        db, user.id, connection_id=connection_id, date_from=date_from, date_to=date_to,
+        advertiser_name=advertiser_name, campaign_name=campaign_name, event_name=event_name,
+        action_status=action_status, keyword=keyword, page=page, page_size=page_size)
+
+
+@router.get("/advertiser-data/reports/drilldown/{fact_id}")
+async def api_advertiser_report_drilldown(fact_id: int, db: Session = Depends(get_db),
+                                          user: User = Depends(require_roles(*ROLES))):
+    """明细下钻：事实行 → 商品/扩展子表 → 原始 JSON + 字段映射规则，owner 隔离。"""
+    _ad_gate()
+    return advertiser_reports.drilldown(db, user.id, fact_id)

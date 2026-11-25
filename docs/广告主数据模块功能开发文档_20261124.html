@@ -51,6 +51,9 @@
   .phase{border-left:3px solid var(--blue);padding:2px 0 16px 18px;margin-left:8px;position:relative}
   .phase::before{content:"";position:absolute;left:-8px;top:7px;width:13px;height:13px;border-radius:50%;background:var(--blue);border:3px solid #fff;box-shadow:0 0 0 2px var(--blue)}
   .phase b{color:#1e40af}
+  .phase.done{border-left-color:#16a34a}
+  .phase.done::before{background:#16a34a;box-shadow:0 0 0 2px #16a34a}
+  .phase.done b{color:#15803d}
   .q{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin:8px 0}
   .q b{color:#1e40af}
   .wire{border:1px solid #94a3b8;border-radius:10px;background:#fff;padding:16px;font-size:13px}
@@ -291,11 +294,12 @@
       <tr><td>概览 KPI</td><td>净销售金额、净佣金金额、订单数、取消单数、平均客单价（全部读订单最终视图 <code>v_api_order_final</code>）</td></tr>
       <tr><td>趋势图</td><td>按日期（event_date）的销售 / 佣金趋势；可按广告主、品牌、事件名称、订单状态筛选</td></tr>
       <tr><td>维度排行</td><td>广告主名称、品牌名称、事件名称、订单状态的金额与订单数排行</td></tr>
-      <tr><td>明细列表</td><td>12 个统一字段的明细表；表头由 <code>api_field_label</code> 配置驱动；支持导出</td></tr>
-      <tr><td>下钻</td><td>明细行 → 事实表 <code>api_unified_fact</code> → 原始 JSON（<code>api_source_record</code>），并可查看该字段来自哪个上游字段与转换规则</td></tr>
+      <tr><td>明细列表</td><td>20 个统一字段的明细表；表头由 <code>api_field_label</code> 配置驱动；支持导出（V4.135 未纳入，列为后续）</td></tr>
+      <tr><td>下钻</td><td>明细行 → 事实表 <code>api_unified_fact</code> → 商品子表 / 扩展层 → 原始 JSON（<code>api_source_record</code>），并可查看该字段来自哪个上游字段与转换规则</td></tr>
     </table>
   </div>
   <div class="ok"><b>报表口径：</b>默认按订单最终口径（合并修正后的净额、取消单标记）展示；字段中文名、顺序、单位、格式全部由 <code>api_field_label</code> 配置驱动（见第七章保障一）。</div>
+  <div class="ok"><b>V4.135 / P3 实现状态：</b>上述四块能力（概览 KPI、趋势、维度排行、明细与下钻）已全部落地为只读接口与可用页面。报表为纯查询层，读 <code>v_api_order_final</code> 视图 + <code>api_unified_fact</code> + <code>api_field_label</code>，零新增表 / 列 / 迁移；查询列由展示名配置动态推导，前端不硬编码业务字段中文名。接口 <code>GET /advertiser-data/reports/{labels,dimensions,kpi,trend,rankings,details,drilldown/{id}}</code> 全部按 owner 隔离。上游无花费 / 曝光 / 点击，报表仅呈现佣金收入视角，不提供投资回报与转化率类指标；「明细导出」本版未实现，列为后续增强。</div>
 
   <h3>5.4 交互与状态要求</h3>
   <ul>
@@ -475,7 +479,7 @@ advertiser_ingest.replay_mapping(...)
   <div class="phase"><b>P0 · 一级菜单 + 模板与连接</b><br>新增一级菜单「广告主数据」及两个二级页面骨架（不动现有菜单与页面）；预置 CJ 模板；实现"新建连接 + 测试连接"；默认近 7 天可调整窗口验证真实明细返回与字段映射。</div>
   <div class="phase"><b>P1 · 统一表与落库</b><br><code>ensure_schema()</code> 建表（含 V3.1 的 20 业务字段）、幂等去重、按映射到 20 字段、修正合并、取消单识别（按官方枚举更正）、订单视图；历史回填与限流重试。<span class="tag t-derive">V4.127 已完成 P1-A</span>：全部表、订单视图 <code>v_api_order_final</code>、20 行展示名种子、版本化迁移（<code>schema_migrations</code> + <code>rename_column()</code> + <code>scripts/migrate_column.py</code> 自动备份）已落地。<span class="tag t-derive">V4.132 已完成 P1-B</span>：按 <code>api_field_map</code> 分发落库、覆盖检查告警、原始层 / 事实表 / items / ext 幂等写入、订单净额归零重算、<code>replay_mapping()</code> 与运行记录；V4.134 已完成历史批量回填（P1-C）与自动调度（P2）。</div>
   <div class="phase"><b>P2 · 定期任务与可观测 <span class="tag t-derive">V4.134 已完成</span></b><br>每日调度、7 天重叠窗口、运行记录、失败留痕、手动补拉；首次启用自动回填历史，SystemState 水位去重，全局开关可停。</div>
-  <div class="phase"><b>P3 · 报表界面</b><br>「广告主报表」页：概览 KPI、趋势、维度排行、明细与下钻，表头读 <code>api_field_label</code>。</div>
+  <div class="phase done"><b>P3 · 报表界面（V4.135 已完成）</b><br>「广告主报表」页：概览 KPI、趋势、维度排行、明细与下钻已全部实现，表头读 <code>api_field_label</code>，纯查询层零表结构变更。</div>
   <div class="phase"><b>P4 · 第二模板验证通用性</b><br>接入第二个渠道模板，验证"加模板 + 加映射不改代码"的设计目标。</div>
 
   <h3>9.2 开发任务清单（三条保障为硬性验收项）</h3>
