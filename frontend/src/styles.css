@@ -2678,12 +2678,13 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ad-drawer-foot { position: sticky; bottom: 0; display: flex; justify-content: flex-end; gap: 8px;
   padding: 12px 24px; border-top: 1px solid var(--border); background: var(--card); }
 @media (max-width: 720px) {
-  .ad-drawer { width: 100vw; }
+  .ad-drawer, .ad-drawer-wide { width: 100vw; }
   .ad-drawer-summary { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
   .ad-object-banner { flex-direction: column; gap: 8px; }
   .ad-window-grid { grid-template-columns: 1fr 1fr; }
   .ad-window-grid .btn { grid-column: 1 / -1; }
   .ad-drawer-head, .ad-drawer-body, .ad-drawer-foot { padding-left: 16px; padding-right: 16px; }
+  .ad-json-large { max-height: 60vh; font-size: 11.5px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .ad-drawer-mask, .ad-drawer { animation: none; }
@@ -2713,3 +2714,15 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ad-pager button:disabled { opacity: .45; cursor: not-allowed; }
 .ad-json { background: var(--card-2, rgba(0,0,0,.03)); border: 1px solid var(--border); border-radius: 6px;
   padding: 10px 12px; max-height: 260px; overflow: auto; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+/* V4.141：报表下钻抽屉加宽 + 扩展/原始 JSON 大区可完整滚动查阅 */
+.ad-drawer-wide { width: min(1080px, 96vw); }
+.ad-drill-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 9px; }
+.ad-drill-table-wrap .ad-table-compact { margin: 0; font-size: 12px; }
+.ad-drill-table-wrap .ad-table-compact td { width: 62%; }
+.ad-json-large { margin: 0; padding: 12px 14px; overflow: auto;
+  min-height: 160px; max-height: 52vh;
+  background: var(--card-2, rgba(0,0,0,.03)); color: var(--text);
+  border: 1px solid var(--border); border-radius: 9px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.65; white-space: pre; word-break: normal; tab-size: 2; }
+.ad-filter-bar > .btn { height: 30px; padding: 0 14px; font-size: 12px; }
