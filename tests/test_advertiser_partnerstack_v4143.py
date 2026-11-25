@@ -2,7 +2,7 @@
 """V4.143 · PartnerStack Partner API 模板专项测试。
 
 按官方 OpenAPI（GET /v2/rewards）验证：
-1. 模板声明 Bearer、REST GET、company_key 可选、默认 Endpoint；
+1. 模板声明 Bearer、REST GET、按文档只填 Partner API Key（V4.144 起）、默认 Endpoint；
 2. 请求参数：min_created/max_created 为毫秒 epoch，limit/order_by 固定，
    starting_after 使用上一页最后一条 Reward key；
 3. 响应解析：data.items / data.total / data.has_more，游标从最后一条 key 取；
@@ -86,10 +86,12 @@ class TestPartnerStackTemplate(unittest.TestCase):
         self.assertFalse(advertiser_api.requires_cid(PS))
         self.assertTrue(advertiser_api.requires_cid(CJ))
         fields = {f["key"]: f for f in tpl["required_fields"]}
+        # V4.144：严格按官方文档，必要信息只有 Partner API Key
+        self.assertEqual(set(fields), {"token"})
         self.assertTrue(fields["token"]["required"])
-        self.assertFalse(fields["cid"]["required"])
+        self.assertEqual(fields["token"]["label"], "Partner API Key")
 
-    def test_request_uses_epoch_ms_and_optional_company_key(self):
+    def test_request_uses_documented_params_only(self):
         r = proto.build_request(
             template_code=PS, endpoint="", token="SECRET", cid="",
             since_event_date="2026-11-01T00:00:00Z",
@@ -101,15 +103,19 @@ class TestPartnerStackTemplate(unittest.TestCase):
         self.assertEqual(r["params"]["max_created"], 1795132800000)
         self.assertEqual(r["params"]["limit"], 250)
         self.assertEqual(r["params"]["order_by"], "-created_at")
+        self.assertEqual(set(r["params"]),
+                         {"min_created", "max_created", "limit", "order_by"})
         self.assertNotIn("company_key", r["params"])
+        self.assertNotIn("hide_archived_rewards", r["params"])
         self.assertIsNone(r["json_body"])
 
-    def test_request_cursor_and_company_filter(self):
+    def test_request_cursor_and_ignores_residual_cid(self):
+        # V4.144：模板无 CID 概念，历史连接残留的 cid 也不注入任何发布者参数
         r = proto.build_request(
             template_code=PS, endpoint="", token="SECRET", cid="co_abc",
             since_event_date="a", before_event_date="b",
             since_commission_id="rwrd_prev")
-        self.assertEqual(r["params"]["company_key"], "co_abc")
+        self.assertNotIn("company_key", r["params"])
         self.assertEqual(r["params"]["starting_after"], "rwrd_prev")
 
     def test_parse_response_cursor_from_last_record_and_has_more(self):

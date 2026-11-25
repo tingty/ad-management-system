@@ -2,6 +2,35 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.144 按官方文档重定义 PartnerStack 模板（模板名 partnerstack / 仅 API Key）
+**发布日期**：2026-11-25 16:31
+**变更类型**：修复 / 优化 / 新增
+**涉及模块**：广告主数据（API 模板、协议适配层、连接表单、迁移与字段映射）、后端接口、数据模型、前端与菜单、专项测试、发版数据、新版通知、系统版本
+**变更摘要**：按用户反馈纠正 V4.143 的设计偏差——模板名称应为 `partnerstack`，且不沿用 CJ / Awin 的「Token + CID + Endpoint」字段结构。本版严格依据 `GET https://api.partnerstack.com/api/v2/rewards` 官方文档重定义模板：唯一必要信息为 Partner API Key（Bearer 鉴权），Endpoint 由模板固化、CID 与文档未确认的筛选参数全部移除；前端改为按模板 `required_fields` 动态渲染，连接表单只显示 Partner API Key；并新增旧模板标识兼容迁移，保证 V4.143 期间可能已落库的历史数据平滑升级到新标识。
+**更新要点**
+- 【修复】模板标识与名称：模板 `code` 由 `partnerstack_partner_rewards` 改为用户指定的 `partnerstack`，显示名改为 `PartnerStack`；`required_fields` 只保留 `token`（标签 Partner API Key），不再声明 `cid` 与 `endpoint` 字段。
+- 【修复】协议层去 CID 化：`cid_in` 改为 `none`，`build_request()` 仅在 `cid_in` 为 `query/body` 时才注入发布者 ID；即使历史连接残留 CID，也绝不注入 `company_key` / `publisherId`。移除文档未确认的 `hide_archived_rewards`，固定参数只保留 `limit=250`、`order_by=-created_at`。
+- 【修复】`requires_cid()` 语义反转：由「模板未声明 cid 则默认需要 CID」改为「模板未声明 cid 即视为不需要 CID」；连接创建 / 编辑 / 测试的错误文案统一为「该模板要求的发布者 ID 必填」，不再对 PartnerStack 误报。
+- 【优化】前端动态表单：`AdvertiserApi.tsx` 新增 `fieldOf / hasField / cidField / cidRequired / tokenLabel / endpointLabel`，新建与编辑弹窗按模板 `required_fields` 渲染字段；PartnerStack 只显示 Partner API Key，CJ / Awin 继续显示 token / cid / endpoint，行为不变。
+- 【新增】旧模板标识兼容迁移 `_migrate_v4144_2()`：把 `api_field_map / api_connection / api_source_record / api_unified_fact / api_fact_item / api_fact_ext` 中的 `partnerstack_partner_rewards` 统一改写为 `partnerstack`，新旧映射并存时删除旧映射避免重复；`MIGRATIONS` 注册 `V4.144.2`。
+- 【新增】`tests/test_advertiser_partnerstack_v4144.py`：覆盖模板名与字段、请求参数集合、禁用残留 CID/未确认参数、`cid_in=none`、`starting_after` 唯一游标、Endpoint 固化、迁移幂等、前端动态渲染与后端静态契约共 20 余项。
+**本次优化与更改的功能 / 模块**
+- 【修复】广告主数据 · API 模板：模板名 `partnerstack`、仅 Partner API Key、Endpoint 固化，完全按官方文档声明必要信息。
+- 【修复】广告主数据 · 协议适配：无 CID 概念、参数集合收敛、移除文档外筛选参数。
+- 【修复】广告主数据 · 连接校验：CID 必填判定与错误文案按模板声明，不再误伤 PartnerStack。
+- 【优化】前端与菜单 · 连接表单：按 `required_fields` 动态渲染，模板差异不再写死在页面。
+- 【新增】数据模型 · 迁移：旧模板标识兼容改写，历史数据平滑升级且幂等。
+- 【新增】专项测试 · 静态契约：锁定「模板名 / 字段 / 参数 / 迁移 / 前后端」五类红线，防止回退到旧结构。
+**影响范围**
+- 兼容：CJ / Awin 的请求形态、字段要求、映射与既有数据完全不变；`requires_cid()` 新语义对二者无影响（二者模板均显式声明 `cid` 必填）。字段映射 seed 与协议能力（毫秒时间、末条游标、has_more 反转）沿用 V4.143，不改业务表结构。
+- 边界：模板严格按官方文档，请求只带 `min_created / max_created / limit / order_by` 与 Bearer 鉴权；官方全部筛选参数均可选，本版不引入任何文档未确认参数。真实联调仍需用户在 Partner 后台 `Settings → API` 生成 Partner API Key；本版未发起真实上游请求。
+- 回滚：移除本版模板重定义、前端动态表单与 `V4.144.2` 迁移即可回到 V4.143 结构；`V4.143` 未对外发布，其本地提交在本版一并补齐标签与推送。
+**验证**
+- 专项：V4.143 / V4.144 PartnerStack、协议 / 落库 / 报表 / API 相关回归合计 79 passed（含 ResourceWarning 告警，不影响通过）。
+- 前端：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
+- 隔离库全量后端回归：766 passed / 2 skipped，`V4.144.2` 迁移在全新库正确应用。
+- 发版：`prepare_release --sync` 重建发布数据后独立进程 `--check` 校验系统版本、CHANGELOG 与发布数据一致；补打 `v4.143.0`、打 `v4.144.0` 并推送 `origin main` 与标签。
+
 ## V4.143 接入 PartnerStack Partner API 佣金模板
 **发布日期**：2026-11-25 16:01
 **变更类型**：新增 / 优化

@@ -11,7 +11,7 @@
   http_method      POST / GET                    默认按 style（graphql→POST, rest→GET）
   auth             bearer | query_param         默认 bearer
   token_param      query_param 时的参数名        默认 accessToken
-  cid_in           body | path                   默认 body（graphql 变量 / rest body）
+  cid_in           body | path | query | none    默认 body；none = 模板无 CID 概念（PartnerStack 按文档只填 API Key）
   path_template    rest 的 URL 路径模板          默认 ""
   records_path     明细数组在响应中的点分路径    默认 data.<query_name>.records
   count_path       总数路径                      默认 data.<query_name>.count
@@ -132,7 +132,9 @@ def build_request(*, template_code: str, endpoint: str, token: str, cid: str,
             params[str(names["since"])] = _date_value(since_event_date, value_format)
         if names.get("before"):
             params[str(names["before"])] = _date_value(before_event_date, value_format)
-        if cid and proto.get("cid_in") != "path":
+        # V4.144：cid_in=none 表示模板按文档无 CID 概念，即使历史连接残留 cid
+        # 也绝不注入任何发布者 ID 参数；path 型已在上方单独处理。
+        if cid and proto.get("cid_in") in ("query", "body"):
             cid_param = str(proto.get("cid_param") or "publisherId")
             if cid_param:
                 params[cid_param] = cid

@@ -145,10 +145,16 @@ export default function AdvertiserApi() {
     if (t && code === 'cj_publisher_commissions') return CJ_TEMPLATE
     return t?.name || (code === 'cj_publisher_commissions' ? CJ_TEMPLATE : code)
   }
-  // V4.143：CID 由模板声明是否必填；PartnerStack 的 company_key 只是可选筛选。
-  const cidField = (code: string) =>
-    templates.find(t => t.code === code)?.required_fields?.find(f => f.key === 'cid')
-  const cidRequired = (code: string) => cidField(code)?.required !== false
+  // V4.144：连接表单字段完全由模板 required_fields 决定，不再套用现有模板的三元结构。
+  // PartnerStack 按官方 Partner API 文档只声明 Partner API Key（无 CID / Endpoint），
+  // 界面就只显示一个 API Key 输入框，不把可选筛选伪装成必填项。
+  const fieldOf = (code: string, key: string) =>
+    templates.find(t => t.code === code)?.required_fields?.find(f => f.key === key)
+  const hasField = (code: string, key: string) => !!fieldOf(code, key)
+  const cidField = (code: string) => fieldOf(code, 'cid')
+  const cidRequired = (code: string) => hasField(code, 'cid') && cidField(code)?.required !== false
+  const tokenLabel = (code: string) => fieldOf(code, 'token')?.label || 'API Token'
+  const endpointLabel = (code: string) => fieldOf(code, 'endpoint')?.label || 'Endpoint（留空用模板默认）'
 
   async function saveNew() {
     if (!form.name.trim()) { setMsg({ kind: 'err', text: '请填写广告主名称' }); return }
@@ -555,20 +561,22 @@ export default function AdvertiserApi() {
                   ))}
                 </select>
               </label>
-              <label>API Token *
+              <label>{tokenLabel(form.template_code)} *
                 <input type="password" value={form.token} onChange={e => setForm(f => ({ ...f, token: e.target.value }))}
                        placeholder="Bearer 后面的个人访问令牌" autoComplete="off" />
               </label>
-              <label>{cidField(form.template_code)?.label || '发布者 ID'}{cidRequired(form.template_code) ? ' *' : '（可选）'}
-                <input value={form.cid} onChange={e => setForm(f => ({ ...f, cid: e.target.value }))}
-                       placeholder={cidRequired(form.template_code)
-                         ? '模板要求的发布者 ID，不是登录邮箱'
-                         : '留空读取全部；填写则只读取该公司 Key'} />
-              </label>
-              <label className="span2">Endpoint（留空用模板默认）
-                <input value={form.endpoint} onChange={e => setForm(f => ({ ...f, endpoint: e.target.value }))}
-                       placeholder={templates.find(t => t.code === form.template_code)?.default_endpoint || '留空使用模板默认地址'} />
-              </label>
+              {hasField(form.template_code, 'cid') && (
+                <label>{cidField(form.template_code)?.label || '发布者 ID'}{cidRequired(form.template_code) ? ' *' : '（可选）'}
+                  <input value={form.cid} onChange={e => setForm(f => ({ ...f, cid: e.target.value }))}
+                         placeholder="模板要求的发布者 ID，不是登录邮箱" />
+                </label>
+              )}
+              {hasField(form.template_code, 'endpoint') && (
+                <label className="span2">{endpointLabel(form.template_code)}
+                  <input value={form.endpoint} onChange={e => setForm(f => ({ ...f, endpoint: e.target.value }))}
+                         placeholder={templates.find(t => t.code === form.template_code)?.default_endpoint || '留空使用模板默认地址'} />
+                </label>
+              )}
             </div>
             <div className="ad-modal-foot">
               <button className="btn primary" disabled={saving} onClick={() => void saveNew()}>
@@ -591,14 +599,18 @@ export default function AdvertiserApi() {
                 <input value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
                        placeholder="例如：CJ 主账号" />
               </label>
-              <label>{cidField(connections.find(c => c.id === editingId)?.template_code || '')?.label || '发布者 CID'}{cidRequired(connections.find(c => c.id === editingId)?.template_code || '') ? ' *' : '（可选）'}
-                <input value={editForm.cid} onChange={e => setEditForm(f => ({ ...f, cid: e.target.value }))}
-                       placeholder="发布者公司 ID，不是登录邮箱" />
-              </label>
-              <label className="span2">Endpoint（留空用模板默认）
-                <input value={editForm.endpoint} onChange={e => setEditForm(f => ({ ...f, endpoint: e.target.value }))}
-                       placeholder="https://commissions.api.cj.com/query" />
-              </label>
+              {hasField(connections.find(c => c.id === editingId)?.template_code || '', 'cid') && (
+                <label>{cidField(connections.find(c => c.id === editingId)?.template_code || '')?.label || '发布者 CID'}{cidRequired(connections.find(c => c.id === editingId)?.template_code || '') ? ' *' : '（可选）'}
+                  <input value={editForm.cid} onChange={e => setEditForm(f => ({ ...f, cid: e.target.value }))}
+                         placeholder="发布者公司 ID，不是登录邮箱" />
+                </label>
+              )}
+              {hasField(connections.find(c => c.id === editingId)?.template_code || '', 'endpoint') && (
+                <label className="span2">{endpointLabel(connections.find(c => c.id === editingId)?.template_code || '')}
+                  <input value={editForm.endpoint} onChange={e => setEditForm(f => ({ ...f, endpoint: e.target.value }))}
+                         placeholder="https://commissions.api.cj.com/query" />
+                </label>
+              )}
               <label className="span2">API Token（留空表示不修改）
                 <input type="password" value={editForm.token}
                        onChange={e => setEditForm(f => ({ ...f, token: e.target.value }))}

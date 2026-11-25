@@ -4236,7 +4236,7 @@ def _create_connection_row(db: Session, user: User, body: ApiConnectionIn) -> Ap
     if not token:
         raise HTTPException(400, "API Token 必填")
     if advertiser_api.requires_cid(tpl["code"]) and not cid:
-        raise HTTPException(400, "发布者 CID 必填")
+        raise HTTPException(400, "该模板要求的发布者 ID 必填")
     r = ApiConnection(
         owner_id=user.id, name=name[:128], template_code=tpl["code"], cid=cid[:64],
         endpoint=(body.endpoint or "").strip()[:512] or tpl.get("default_endpoint", ""),
@@ -4316,7 +4316,7 @@ async def api_advertiser_templates(_: User = Depends(require_roles(*ROLES))):
         "description": t.get("description", ""), "method": t.get("method", "POST"),
         "auth_type": t.get("auth_type", "bearer"),
         "default_endpoint": t.get("default_endpoint", ""),
-        # 缺省视为必填，兼容 CJ/Awin 历史声明；PartnerStack 显式声明 company_key 可选。
+        # V4.144：字段要求完全由模板声明；PartnerStack 按文档只声明 Partner API Key。
         "required_fields": [
             {**f, "required": bool(f.get("required", True))}
             for f in (t.get("required_fields") or [])

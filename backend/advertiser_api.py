@@ -153,11 +153,18 @@ PRESET_TEMPLATES: list[dict] = [
         },
     },
     {
-        # V4.143：PartnerStack Partner API（合作方视角读取自己的佣金/Reward）。
+        # V4.144：模板名称即 partnerstack，严格按官方 Partner API 文档建模板。
         # 官方参考：GET https://api.partnerstack.com/api/v2/rewards
-        # 注意与 vendor API（Basic Auth）区分：Partner API Key 走 Bearer。
-        "code": "partnerstack_partner_rewards",
-        "name": "PartnerStack联盟",
+        #   - 唯一「必要信息」= Partner API Key：Authorization: Bearer <key>；
+        #   - 全部 query 参数都是可选筛选（company_key / group_key / customer_key /
+        #     keywords / payment_status / currency / creation_source / reward_key /
+        #     invoiceable / drip_key / min_created / max_created / limit / order_by /
+        #     starting_after / ending_before），无任何必填 CID 或 publisherId；
+        #   - 响应 { data: { items: [...], has_more, total }, message, status }。
+        # 因此本模板不再沿用 CJ / Awin 的「Token + CID + Endpoint」三元字段要求：
+        # 只声明 token，一个 CID 输入框都不渲染，请求也不带文档未确认的参数。
+        "code": "partnerstack",
+        "name": "PartnerStack",
         "vendor": "PartnerStack",
         "description": "读取 Partner API 的逐笔 Reward（佣金）明细，含公司、客户、交易、金额与审核/支付状态。",
         "record_object": "Reward",
@@ -167,8 +174,6 @@ PRESET_TEMPLATES: list[dict] = [
         "default_endpoint": "https://api.partnerstack.com/api",
         "required_fields": [
             {"key": "token", "label": "Partner API Key", "type": "password", "required": True},
-            {"key": "cid", "label": "公司 Key（可选筛选 company_key）", "type": "text", "required": False},
-            {"key": "endpoint", "label": "Endpoint", "type": "text", "required": False},
         ],
         "query_name": "rewards",
         "pagination": "starting_after=本页最后一条 key；data.has_more=true 继续翻页",
@@ -176,8 +181,8 @@ PRESET_TEMPLATES: list[dict] = [
         "framework_version": "advertiser-api/1.0",
         "status": "active",
         "protocol": {
-            "style": "rest", "http_method": "GET", "auth": "bearer", "cid_in": "query",
-            "cid_param": "company_key", "endpoint_path": "v2/rewards",
+            "style": "rest", "http_method": "GET", "auth": "bearer", "cid_in": "none",
+            "endpoint_path": "v2/rewards",
             "records_path": "data.items",
             "count_path": "data.total",
             "cursor_path": "",
@@ -188,8 +193,7 @@ PRESET_TEMPLATES: list[dict] = [
             "external_id_path": "key",
             "date_params": {"since": "min_created", "before": "max_created"},
             "date_value_format": "epoch_ms",
-            "extra_params": {"limit": 250, "order_by": "-created_at",
-                             "hide_archived_rewards": "false"},
+            "extra_params": {"limit": 250, "order_by": "-created_at"},
         },
     },
 ]
@@ -203,12 +207,16 @@ def template_by_code(code: str) -> Optional[dict]:
 
 
 def requires_cid(template_code: str) -> bool:
-    """模板声明 cid 为可选时允许留空（PartnerStack 的 company_key 只是筛选）。"""
+    """V4.144：模板未声明 cid 字段即视为不需要 CID。
+
+    CJ / Awin 显式声明 cid(required=True) 继续强制；PartnerStack 按官方
+    Partner API 文档只声明 token，因此不存在任何必填的发布者 ID。
+    """
     tpl = template_by_code(template_code or "") or {}
     for field in tpl.get("required_fields") or []:
         if field.get("key") == "cid":
             return bool(field.get("required", True))
-    return True
+    return False
 
 
 # ---------------- CJ GraphQL 客户端 ----------------
@@ -396,7 +404,7 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
     if not token:
         return _env(ok=False, error="API Token 必填", count=0, http_code=0, url=url)
     if requires_cid(template_code) and not cid:
-        return _env(ok=False, error="API Token 与 CID 均为必填", count=0, http_code=0, url=url)
+        return _env(ok=False, error="该模板要求的发布者 ID 必填", count=0, http_code=0, url=url)
 
     req = advertiser_protocol.build_request(
         template_code=template_code, endpoint=endpoint, token=token, cid=cid,

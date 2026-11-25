@@ -214,7 +214,7 @@ AWIN_FIELD_MAP_SEED = [
 #     源对象键（transaction/lead/deal），作为订单合并键使用并在说明中明示；
 #   - company.name 是合作项目/广告主，customer 是下游客户，二者不可互换。
 # ---------------------------------------------------------------------------
-PARTNERSTACK_TEMPLATE_ID = "partnerstack_partner_rewards"
+PARTNERSTACK_TEMPLATE_ID = "partnerstack"
 PARTNERSTACK_FIELD_MAP_SEED = [
     # ---- 幂等键与统一报表核心列 ----
     ("key",                       "source_record.external_id", "direct", "Reward key（rwrd_*/rw_*）/ 幂等键"),
@@ -314,6 +314,53 @@ def _migrate_v4143_1(conn) -> str:
             {"m": json.dumps(labels, ensure_ascii=False), "i": row[0]},
         )
     return f"PartnerStack 字段映射登记新增 {added} 行；订单状态枚举已补充合作方状态"
+
+
+def _migrate_v4144_2(conn) -> str:
+    """V4.144.2：把 V4.143 自造的模板标识统一为文档名称 partnerstack。
+
+    V4.143 尚未对外发布，但部分本地库可能已跑过 V4.143.1 并以
+    `partnerstack_partner_rewards` 写入字段映射 / 连接记录；本迁移把这些
+    历史行平滑改名，保证升级不丢数据、回滚后仍可按旧标识识别。
+    """
+    old, new = "partnerstack_partner_rewards", PARTNERSTACK_TEMPLATE_ID
+    if old == new:
+        return "模板标识已统一"
+    insp = inspect(conn)
+    tables = set(insp.get_table_names())
+    column_map = {
+        "api_field_map": "template_id",
+        "api_connection": "template_code",
+        "api_source_record": "template_id",
+        "api_unified_fact": "template_id",
+        "api_fact_item": "template_id",
+        "api_fact_ext": "template_id",
+    }
+    changed = []
+    for table, column in column_map.items():
+        if table not in tables:
+            continue
+        if column not in {c["name"] for c in insp.get_columns(table)}:
+            continue
+        n = conn.execute(text("SELECT COUNT(*) FROM " + table + " WHERE " + column + "=:o"),
+                         {"o": old}).scalar() or 0
+        if not n:
+            continue
+        if table == "api_field_map":
+            has_new = conn.execute(
+                text("SELECT COUNT(*) FROM api_field_map WHERE template_id=:n"),
+                {"n": new}).scalar() or 0
+            if has_new:
+                # 新旧并存时删除旧行，避免同一映射重复
+                conn.execute(text("DELETE FROM api_field_map WHERE template_id=:o"), {"o": old})
+            else:
+                conn.execute(text("UPDATE api_field_map SET template_id=:n WHERE template_id=:o"),
+                             {"n": new, "o": old})
+        else:
+            conn.execute(text("UPDATE " + table + " SET " + column + "=:n WHERE " + column + "=:o"),
+                         {"n": new, "o": old})
+        changed.append(f"{table}:{n}")
+    return f"模板标识 {old} → {new} 统一（{', '.join(changed) or '无历史数据'}）"
 
 
 def _current_order_view_sql(conn) -> str:
@@ -437,6 +484,7 @@ MIGRATIONS = [
     ("V4.134.1", "advertiser_fetch_run_mode", _migrate_v4134_1),
     ("V4.138.1", "advertiser_awin_field_map", _migrate_v4138_1),
     ("V4.143.1", "advertiser_partnerstack_field_map", _migrate_v4143_1),
+    ("V4.144.2", "advertiser_partnerstack_template_id", _migrate_v4144_2),
 ]
 
 
