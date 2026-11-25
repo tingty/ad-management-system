@@ -4659,3 +4659,49 @@ async def api_advertiser_report_drilldown(fact_id: int, db: Session = Depends(ge
     """明细下钻：事实行 → 商品/扩展子表 → 原始 JSON + 字段映射规则，owner 隔离。"""
     _ad_gate()
     return advertiser_reports.drilldown(db, user.id, fact_id)
+
+
+@router.get("/advertiser-data/reports/export")
+async def api_advertiser_report_export(connection_id: Optional[int] = None,
+                                       date_from: Optional[str] = None, date_to: Optional[str] = None,
+                                       advertiser_name: Optional[str] = None,
+                                       campaign_name: Optional[str] = None,
+                                       event_name: Optional[str] = None,
+                                       action_status: Optional[str] = None,
+                                       keyword: Optional[str] = None,
+                                       db: Session = Depends(get_db),
+                                       user: User = Depends(require_roles(*ROLES))):
+    """V4.142：导出当前筛选下的全部佣金明细为 CSV（UTF-8 BOM，Excel 中文兼容）。
+
+    筛选条件与 /reports/details 完全同源（共用 _detail_where），表头读 api_field_label，
+    owner 隔离；单次最多 50000 行，超出在末行注明。
+    """
+    _ad_gate()
+    payload = advertiser_reports.export_rows(
+        db, user.id, connection_id=connection_id, date_from=date_from, date_to=date_to,
+        advertiser_name=advertiser_name, campaign_name=campaign_name,
+        event_name=event_name, action_status=action_status, keyword=keyword)
+    note_parts = ["佣金明细导出（当前筛选，UTC 存储按北京时间展示）"]
+    if connection_id:
+        note_parts.append(f"连接ID={connection_id}")
+    if date_from or date_to:
+        note_parts.append(f"日期={date_from or '起始'} ~ {date_to or '结束'}")
+    if keyword:
+        note_parts.append(f"关键词={keyword.strip()[:64]}")
+    for label, val in (("广告主", advertiser_name), ("品牌", campaign_name),
+                       ("事件", event_name), ("状态", action_status)):
+        if val:
+            note_parts.append(f"{label}={val}")
+    note_parts.append(f"共 {payload['total']} 条，导出 {payload['exported']} 条")
+    if payload.get("truncated"):
+        note_parts.append(f"已达单次上限 {payload['max_rows']} 条，请缩小时间范围分批导出")
+    payload["note"] = " | ".join(note_parts)
+    content = advertiser_reports.build_export_csv(payload)
+    fname = "advertiser_report_" + datetime.now().strftime("%Y%m%d_%H%M") + ".csv"
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                 "X-Exported-Rows": str(payload["exported"]),
+                 "X-Total-Rows": str(payload["total"])},
+    )

@@ -1015,6 +1015,34 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>
 }
 
+/** V4.142：下载二进制响应（CSV 导出），复用统一鉴权与 401/网关错误处理；从 Content-Disposition 取文件名。 */
+export async function downloadFile(path: string): Promise<void> {
+  const token = getToken()
+  const res = await fetch(API_BASE + path, {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  })
+  if (res.status === 401) {
+    clearToken()
+    window.dispatchEvent(new Event('admb:unauthorized'))
+    throw new Error('未登录或登录已过期')
+  }
+  if (!res.ok) {
+    const t = await res.text().catch(() => '')
+    throw new Error(`导出失败（${res.status}）：${t.slice(0, 200)}`)
+  }
+  const disposition = res.headers.get('Content-Disposition') || ''
+  const match = disposition.match(/filename="?([^";]+)"?/)
+  const filename = match ? match[1] : 'export.csv'
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 /**
  * V4.76 视频出片异步化：提交任务 → 轮询状态 → 返回结果（结构与同步接口完全一致）。
  *
@@ -1629,6 +1657,9 @@ export const advertiserApi = {
     req<ReportDetails>(`/api/advertiser-data/reports/details${qs(f)}`),
   reportDrilldown: (factId: number) =>
     req<ReportDrilldown>(`/api/advertiser-data/reports/drilldown/${factId}`),
+  // V4.142：导出当前筛选的全部明细 CSV（二进制下载，非 JSON）
+  reportExport: (f: ReportFilter = {}) =>
+    downloadFile(`/api/advertiser-data/reports/export${qs(f)}`),
 }
 
 // ---- V4.135 / P3：广告主报表类型 ----

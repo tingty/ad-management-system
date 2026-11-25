@@ -316,13 +316,16 @@ def _detail_columns(db: Session) -> tuple[list[str], list[dict]]:
     return query_cols, visible
 
 
-def details(db: Session, owner_id: int, *, connection_id: Optional[int] = None,
-            date_from: Optional[str] = None, date_to: Optional[str] = None,
-            advertiser_name: Optional[str] = None, campaign_name: Optional[str] = None,
-            event_name: Optional[str] = None, action_status: Optional[str] = None,
-            keyword: Optional[str] = None, page: int = 1, page_size: int = 20) -> dict:
-    """佣金明细列表（明细粒度）：行数据 + 动态表头配置 + 分页。"""
-    ids = _owned_ids(db, owner_id)
+def _detail_where(ids: list[int], *, connection_id: Optional[int] = None,
+                  date_from: Optional[str] = None, date_to: Optional[str] = None,
+                  advertiser_name: Optional[str] = None, campaign_name: Optional[str] = None,
+                  event_name: Optional[str] = None, action_status: Optional[str] = None,
+                  keyword: Optional[str] = None) -> tuple[str, dict]:
+    """明细筛选唯一来源：列表 details 与导出 export_rows 共用，保证口径一致。
+
+    V4.142：抽出后导出与页面筛选完全同源，避免两处各自拼 WHERE 造成"导出结果
+    与所见不一致"。维度列来自固定白名单，关键词长度截断，均为参数绑定无拼接注入。
+    """
     clauses = ["f.connection_id IN :ids"]
     params: dict[str, Any] = {"ids": ids or [-1]}
     if connection_id:
@@ -340,7 +343,20 @@ def details(db: Session, owner_id: int, *, connection_id: Optional[int] = None,
     if keyword:
         clauses.append("(f.order_id LIKE :kw OR f.commission_id LIKE :kw OR f.advertiser_name LIKE :kw)")
         params["kw"] = f"%{keyword.strip()[:64]}%"
-    where = " AND ".join(clauses)
+    return " AND ".join(clauses), params
+
+
+def details(db: Session, owner_id: int, *, connection_id: Optional[int] = None,
+            date_from: Optional[str] = None, date_to: Optional[str] = None,
+            advertiser_name: Optional[str] = None, campaign_name: Optional[str] = None,
+            event_name: Optional[str] = None, action_status: Optional[str] = None,
+            keyword: Optional[str] = None, page: int = 1, page_size: int = 20) -> dict:
+    """佣金明细列表（明细粒度）：行数据 + 动态表头配置 + 分页。"""
+    ids = _owned_ids(db, owner_id)
+    where, params = _detail_where(
+        ids, connection_id=connection_id, date_from=date_from, date_to=date_to,
+        advertiser_name=advertiser_name, campaign_name=campaign_name,
+        event_name=event_name, action_status=action_status, keyword=keyword)
 
     page = max(1, int(page or 1))
     page_size = max(1, min(int(page_size or 20), 100))
@@ -440,3 +456,118 @@ def drilldown(db: Session, owner_id: int, fact_id: int) -> dict:
         "field_maps": maps,
         "chain": ["api_unified_fact", "api_fact_item / api_fact_ext", "api_source_record"],
     }
+
+
+# ---------------------------------------------------------------------------
+# V4.142：报表明细导出（CSV，UTF-8 BOM 兼容 Excel 中文）。
+# ---------------------------------------------------------------------------
+import csv as _csv
+import io as _io
+
+EXPORT_MAX_ROWS = 50000  # 单次导出上限，防止超大结果拖垮内存 / 响应
+
+
+def _beijing_cell(value: Any, fmt: str) -> str:
+    """把库内 UTC 时间按东八区格式化，与前端 fmtBeijing 口径一致。"""
+    if value is None or value == "":
+        return ""
+    raw = value.isoformat(sep=" ") if isinstance(value, (datetime, date)) else str(value)
+    # 纯日期（event_date）本就是业务日，不套时区；datetime 视为 naive UTC 补 +8h。
+    if fmt == "date":
+        return raw[:10]
+    if fmt == "datetime":
+        candidate = raw.replace("T", " ")
+        try:
+            dt = datetime.fromisoformat(candidate)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return (dt + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            return raw
+    return raw
+
+
+def _csv_value(value: Any, col: dict) -> str:
+    """按 api_field_label 的 format / enum_map / unit 格式化单元格，与页面 cell() 一致。"""
+    fmt = col.get("format") or "text"
+    enum_map = col.get("enum_map") or {}
+    unit = col.get("unit") or ""
+    if value is None or value == "":
+        return ""
+    if fmt in ("enum", "bool"):
+        key = "1" if (fmt == "bool" and value in (True, 1, "1", "true")) else (
+            "0" if fmt == "bool" else str(value))
+        return str(enum_map.get(key, value))
+    if fmt == "datetime" or fmt == "date":
+        return _beijing_cell(value, fmt)
+    if fmt == "decimal2":
+        try:
+            text = f"{float(value):.2f}"
+        except (TypeError, ValueError):
+            text = str(value)
+        return text + (" " + unit if unit else "")
+    if fmt == "int":
+        return str(value) + (" " + unit if unit else "")
+    return str(value)
+
+
+def export_rows(db: Session, owner_id: int, *, connection_id: Optional[int] = None,
+                date_from: Optional[str] = None, date_to: Optional[str] = None,
+                advertiser_name: Optional[str] = None, campaign_name: Optional[str] = None,
+                event_name: Optional[str] = None, action_status: Optional[str] = None,
+                keyword: Optional[str] = None) -> dict:
+    """导出当前筛选下的全部明细：配置驱动表头 + 格式化值行，owner 隔离。
+
+    - 筛选条件与 details() 共用 _detail_where()，所见即所得；
+    - 展示列同样走 _detail_columns()（api_field_label 可见列 + 标识符白名单）；
+    - 超过 EXPORT_MAX_ROWS 时截断并在 payload 里标记 truncated（诚实告知，不静默丢数据）。
+    """
+    ids = _owned_ids(db, owner_id)
+    where, params = _detail_where(
+        ids, connection_id=connection_id, date_from=date_from, date_to=date_to,
+        advertiser_name=advertiser_name, campaign_name=campaign_name,
+        event_name=event_name, action_status=action_status, keyword=keyword)
+    total = int(db.execute(
+        text(f"SELECT COUNT(*) FROM api_unified_fact f WHERE {where}").bindparams(
+            __import__("sqlalchemy").bindparam("ids", expanding=True)),
+        params,
+    ).scalar() or 0)
+
+    query_cols, visible_cols = _detail_columns(db)
+    cols = ", ".join(f"f.{c}" for c in query_cols)
+    limit = min(total, EXPORT_MAX_ROWS)
+    rows = db.execute(
+        text(f"SELECT {cols} FROM api_unified_fact f WHERE {where} "
+             f"ORDER BY f.event_date DESC, f.id DESC LIMIT :lim").bindparams(
+            __import__("sqlalchemy").bindparam("ids", expanding=True)),
+        {**params, "lim": limit},
+    ).mappings().all()
+
+    header = [c["label"] for c in visible_cols]
+    key_by_col = {c["column_key"]: c for c in visible_cols}
+    data = [[_csv_value(r[c["column_key"]], c) for c in visible_cols] for r in rows]
+    return {
+        "header": header,
+        "columns": visible_cols,
+        "rows": data,
+        "total": total,
+        "exported": len(data),
+        "truncated": total > len(data),
+        "max_rows": EXPORT_MAX_ROWS,
+        "source_table": "api_unified_fact",
+    }
+
+
+def build_export_csv(payload: dict) -> bytes:
+    """把 export_rows 结果编码为带 UTF-8 BOM 的 CSV 字节（Excel 直接双击不乱码）。"""
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow(payload["header"])
+    for row in payload["rows"]:
+        writer.writerow(["" if v is None else str(v) for v in row])
+    # 首行附筛选口径说明，明确"导出的是当前筛选的全部明细"，避免误读为统计值。
+    note = payload.get("note")
+    if note:
+        buf.write("\r\n")
+        writer.writerow([note])
+    return b"\xef\xbb\xbf" + buf.getvalue().encode("utf-8")

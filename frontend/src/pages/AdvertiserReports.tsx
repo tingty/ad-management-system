@@ -80,6 +80,7 @@ export default function AdvertiserReports() {
   })
   const [drill, setDrill] = useState<ReportDrilldown | null>(null)
   const [loading, setLoading] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // 快捷区间与手动日期统一推导为 UTC 时间窗；日期输入框始终显示北京日期。
@@ -98,6 +99,19 @@ export default function AdvertiserReports() {
       keyword: keyword || undefined,
     })
     setPage(1)
+  }
+
+  // V4.142：导出用已提交条件 applied，所见即所得；草稿未点查询不影响导出结果。
+  async function exportCurrent() {
+    if (exporting) return
+    setExporting(true); setError(null)
+    try {
+      await advertiserApi.reportExport(applied)
+    } catch (e: any) {
+      setError(e?.message || '导出失败')
+    } finally {
+      setExporting(false)
+    }
   }
 
   // 一次性加载配置：连接下拉、字段标签、可选维度
@@ -205,6 +219,9 @@ export default function AdvertiserReports() {
         <div className="ad-panel-head">
           <h3>佣金明细</h3>
           <span className="muted">共 {details.total} 条 · 点击行查看下钻链路</span>
+          <button className="btn" onClick={exportCurrent} disabled={exporting || loading || details.total === 0}>
+            {exporting ? '导出中…' : '导出 CSV'}
+          </button>
         </div>
         <div className="ad-table-wrap">
           <table className="ad-table">

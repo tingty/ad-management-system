@@ -2702,6 +2702,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ad-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .ad-panel-head h3 { margin: 0; font-size: 14px; font-weight: 650; color: var(--text); }
 .ad-panel-head .muted { font-size: 11px; color: var(--muted, #6b7280); }
+.ad-panel-head .btn { margin-left: auto; flex: 0 0 auto; }
 .ad-table tbody tr { cursor: pointer; }
 .ad-table tbody tr:hover { background: var(--card-2, rgba(0,0,0,.03)); }
 .ad-table-compact { font-size: 11.5px; margin: 6px 0 12px; }
