@@ -9,7 +9,9 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   advertiserApi, ApiConnection, ReportColumn, ReportKpi, ReportDetails, ReportDrilldown,
 } from '../api'
-import { fmtBeijing } from '../datetime'
+import {
+  fmtBeijing, reportRange, reportWindow, ReportRangeKey,
+} from '../datetime'
 
 const EMPTY_KPI: ReportKpi = {
   net_sale_usd: 0, net_commission_usd: 0, order_count: 0, void_count: 0,
@@ -44,10 +46,14 @@ function money(v: number): string {
 export default function AdvertiserReports() {
   const [connections, setConnections] = useState<ApiConnection[]>([])
   const [columns, setColumns] = useState<ReportColumn[]>([])
+  const [dimensions, setDimensions] = useState<{ key: string; label: string }[]>([])
   const [connectionId, setConnectionId] = useState<number | ''>('')
+  const [rangeKey, setRangeKey] = useState<ReportRangeKey>('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [keyword, setKeyword] = useState('')
+  const [dimension, setDimension] = useState('')
+  const [dimensionValue, setDimensionValue] = useState('')
   const [page, setPage] = useState(1)
   const [kpi, setKpi] = useState<ReportKpi>(EMPTY_KPI)
   const [details, setDetails] = useState<ReportDetails>({
@@ -57,33 +63,43 @@ export default function AdvertiserReports() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // 快捷区间与手动日期统一推导为 UTC 时间窗；日期输入框始终显示北京日期。
+  const timeWindow = useMemo(() => {
+    if (rangeKey) return reportRange(rangeKey)
+    return reportWindow(dateFrom, dateTo)
+  }, [rangeKey, dateFrom, dateTo])
+
   const filter = useMemo(() => ({
     connection_id: connectionId === '' ? undefined : Number(connectionId),
-    date_from: dateFrom || undefined,
-    date_to: dateTo || undefined,
-  }), [connectionId, dateFrom, dateTo])
+    date_from: timeWindow.from || undefined,
+    date_to: timeWindow.to || undefined,
+    ...(dimension && dimensionValue ? { [dimension]: dimensionValue } : {}),
+  }), [connectionId, timeWindow, dimension, dimensionValue])
 
-  // 一次性加载配置：连接下拉、字段标签
+  // 一次性加载配置：连接下拉、字段标签、可选维度
   useEffect(() => {
     let alive = true
     Promise.all([
       advertiserApi.connections(),
       advertiserApi.reportLabels('fact'),
-    ]).then(([conns, labels]) => {
+      advertiserApi.reportDimensions(),
+    ]).then(([conns, labels, dims]) => {
       if (!alive) return
       setConnections(conns || [])
       setColumns(labels?.columns || [])
+      setDimensions(dims?.dimensions || [])
     }).catch((e) => alive && setError(e?.message || '配置加载失败'))
     return () => { alive = false }
   }, [])
 
-  // 筛选变化即刷新 KPI + 明细；任何一块失败都不伪装成空数据
+  // 筛选变化即刷新 KPI + 明细；关键词与维度同时作用于两块，口径一致
   useEffect(() => {
     let alive = true
     setLoading(true); setError(null)
+    const shared = { ...filter, keyword: keyword || undefined }
     Promise.all([
-      advertiserApi.reportKpi(filter),
-      advertiserApi.reportDetails({ ...filter, keyword: keyword || undefined, page }),
+      advertiserApi.reportKpi(shared),
+      advertiserApi.reportDetails({ ...shared, page }),
     ]).then(([k, d]) => {
       if (!alive) return
       setKpi(k); setDetails(d)
@@ -93,7 +109,8 @@ export default function AdvertiserReports() {
   }, [filter, keyword, page])
 
   function resetFilter() {
-    setConnectionId(''); setDateFrom(''); setDateTo(''); setKeyword(''); setPage(1)
+    setConnectionId(''); setRangeKey(''); setDateFrom(''); setDateTo('')
+    setKeyword(''); setDimension(''); setDimensionValue(''); setPage(1)
   }
 
   const colBy = (key: string) => columns.find((c) => c.column_key === key)
@@ -115,10 +132,43 @@ export default function AdvertiserReports() {
             {connections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </label>
-        <label>起始日期<input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1) }} /></label>
-        <label>结束日期<input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1) }} /></label>
+        <label>时间区间
+          <select value={rangeKey} onChange={(e) => {
+            const key = e.target.value as ReportRangeKey
+            setRangeKey(key)
+            if (key) {
+              const w = reportRange(key)
+              setDateFrom(w.fromDate); setDateTo(w.toDate)
+            }
+            setPage(1)
+          }}>
+            <option value="">自定义</option>
+            <option value="today">今日</option>
+            <option value="yesterday">昨日</option>
+            <option value="last7">近七天</option>
+            <option value="thisMonth">本月</option>
+            <option value="lastMonth">上月（整月）</option>
+          </select>
+        </label>
+        <label>起始日期<input type="date" value={dateFrom} onChange={(e) => {
+          setRangeKey(''); setDateFrom(e.target.value); setPage(1)
+        }} /></label>
+        <label>结束日期<input type="date" value={dateTo} onChange={(e) => {
+          setRangeKey(''); setDateTo(e.target.value); setPage(1)
+        }} /></label>
+        <label>维度
+          <select value={dimension} onChange={(e) => {
+            setDimension(e.target.value); setDimensionValue(''); setPage(1)
+          }}>
+            <option value="">全部维度</option>
+            {dimensions.map((d) => <option key={d.key} value={d.key}>{d.label}</option>)}
+          </select>
+        </label>
+        <label>维度值<input value={dimensionValue} placeholder="精确匹配"
+          onChange={(e) => { setDimensionValue(e.target.value); setPage(1) }} /></label>
         <label>关键词<input value={keyword} placeholder="订单号 / 佣金ID / 广告主"
           onChange={(e) => { setKeyword(e.target.value); setPage(1) }} /></label>
+        {rangeKey === 'today' && <span className="ad-inline-hint">今日截至当前整点</span>}
         <button className="ad-btn ad-btn-ghost" onClick={resetFilter}>重置</button>
         {loading && <span className="ad-inline-hint">加载中…</span>}
       </div>

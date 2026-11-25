@@ -77,7 +77,8 @@ const GROUP_ADVERTISER_DATA: NavGroup = {
       // V4.125：页头标题改为「API对接」，顶部解释文案删除；侧栏菜单名保持不变。
       pageTitle: 'API对接', desc: '' },
     { key: 'advertiserreports', label: '广告主报表', icon: 'chart',
-      desc: '按订单佣金明细聚合，查看收入概览、趋势与维度排行，并下钻到原始记录。' },
+      // V4.140：趋势 / 排行子模块已移除，描述改为当前真实能力，不再误导。
+      desc: '按订单佣金明细聚合，查看收入概览与筛选明细，并下钻到原始记录。' },
   ],
 }
 

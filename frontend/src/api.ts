@@ -1651,6 +1651,12 @@ export interface ReportFilter {
   connection_id?: number
   date_from?: string
   date_to?: string
+  // V4.140：KPI 与明细共用的维度 / 关键词筛选
+  advertiser_name?: string
+  campaign_name?: string
+  event_name?: string
+  action_status?: string
+  keyword?: string
 }
 export interface ReportKpi {
   net_sale_usd: number

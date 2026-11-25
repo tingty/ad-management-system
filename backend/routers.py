@@ -4590,12 +4590,22 @@ async def api_advertiser_report_dimensions(_: User = Depends(require_roles(*ROLE
 @router.get("/advertiser-data/reports/kpi")
 async def api_advertiser_report_kpi(connection_id: Optional[int] = None,
                                     date_from: Optional[str] = None, date_to: Optional[str] = None,
+                                    advertiser_name: Optional[str] = None,
+                                    campaign_name: Optional[str] = None,
+                                    event_name: Optional[str] = None,
+                                    action_status: Optional[str] = None,
+                                    keyword: Optional[str] = None,
                                     db: Session = Depends(get_db),
                                     user: User = Depends(require_roles(*ROLES))):
-    """概览 KPI：读订单最终视图，净额 / 订单数 / 取消单，owner 隔离。"""
+    """概览 KPI：读订单最终视图，净额 / 订单数 / 取消单，owner 隔离。
+
+    V4.140：KPI 与明细共用连接 / 日期 / 维度 / 关键词筛选口径。
+    """
     _ad_gate()
-    return advertiser_reports.kpi(db, user.id, connection_id=connection_id,
-                                  date_from=date_from, date_to=date_to)
+    return advertiser_reports.kpi(
+        db, user.id, connection_id=connection_id, date_from=date_from, date_to=date_to,
+        advertiser_name=advertiser_name, campaign_name=campaign_name,
+        event_name=event_name, action_status=action_status, keyword=keyword)
 
 
 @router.get("/advertiser-data/reports/trend")

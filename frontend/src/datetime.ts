@@ -84,3 +84,83 @@ export function beijingToday(offsetDays = 0): string {
   d.setDate(d.getDate() + offsetDays)
   return fmtBeijing(d).slice(0, 10)
 }
+
+// ---------------------------------------------------------------------------
+// V4.140：广告主报表快捷时间区间。
+// 所有边界按北京时间推导，再换算成 UTC ISO 串发给后端；日期输入框仍显示北京日期。
+// ---------------------------------------------------------------------------
+export type ReportRangeKey = '' | 'today' | 'yesterday' | 'last7' | 'thisMonth' | 'lastMonth'
+
+export interface ReportWindow {
+  fromDate: string
+  toDate: string
+  from: string
+  to: string
+}
+
+const BJ_SHIFT_MS = 8 * 60 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function beijingNowParts(now: Date) {
+  // 加 8 小时后按 UTC 读取，即得到北京墙上时间，不依赖浏览器所在时区。
+  const iso = new Date(now.getTime() + BJ_SHIFT_MS).toISOString()
+  return {
+    date: iso.slice(0, 10),
+    year: Number(iso.slice(0, 4)), month: Number(iso.slice(5, 7)), day: Number(iso.slice(8, 10)),
+    hour: Number(iso.slice(11, 13)),
+  }
+}
+
+function shiftBeijingDate(date: string, days: number): string {
+  const ms = new Date(`${date}T00:00:00+08:00`).getTime() + days * DAY_MS
+  return new Date(ms + BJ_SHIFT_MS).toISOString().slice(0, 10)
+}
+
+function utcIsoFromBeijing(date: string, hour: number, minute: number, second: number): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return ''
+  const [year, month, day] = date.split('-').map(Number)
+  // 减 8 小时得到同一时刻的 UTC；Date.UTC 不受浏览器时区影响。
+  return new Date(Date.UTC(year, month - 1, day, hour - 8, minute, second)).toISOString()
+}
+
+/** 手动选择的北京日期 → 北京时间整天边界对应的 UTC ISO 串。 */
+export function reportWindow(fromDate: string, toDate: string): ReportWindow {
+  return {
+    fromDate, toDate,
+    from: utcIsoFromBeijing(fromDate, 0, 0, 0),
+    to: utcIsoFromBeijing(toDate, 23, 59, 59),
+  }
+}
+
+/** 快捷区间：今日截至当前整点，其余按完整北京日期边界。 */
+export function reportRange(key: ReportRangeKey, now: Date = new Date()): ReportWindow {
+  const p = beijingNowParts(now)
+  if (key === 'today') {
+    // 今日 00:00 到最近一个完整小时（当前整点），例如 12:04 → 12:00:00。
+    return {
+      fromDate: p.date, toDate: p.date,
+      from: utcIsoFromBeijing(p.date, 0, 0, 0),
+      to: utcIsoFromBeijing(p.date, p.hour, 0, 0),
+    }
+  }
+  if (key === 'yesterday') {
+    const day = shiftBeijingDate(p.date, -1)
+    return { ...reportWindow(day, day), fromDate: day, toDate: day }
+  }
+  if (key === 'last7') {
+    const fromDate = shiftBeijingDate(p.date, -6)
+    return { ...reportWindow(fromDate, p.date), fromDate, toDate: p.date }
+  }
+  if (key === 'thisMonth') {
+    const fromDate = `${p.year}-${p2(String(p.month))}-01`
+    return { ...reportWindow(fromDate, p.date), fromDate, toDate: p.date }
+  }
+  if (key === 'lastMonth') {
+    const thisFirst = `${p.year}-${p2(String(p.month))}-01`
+    const lastEnd = shiftBeijingDate(thisFirst, -1)
+    const [year, month] = lastEnd.split('-')
+    const fromDate = `${year}-${month}-01`
+    return { ...reportWindow(fromDate, lastEnd), fromDate, toDate: lastEnd }
+  }
+  return reportWindow('', '')
+}

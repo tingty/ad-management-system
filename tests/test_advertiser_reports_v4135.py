@@ -251,8 +251,9 @@ class TestReportStaticContract(ReportBase):
     def test_v4136_frontend_simplified(self):
         """V4.136：顶部只留主标题，趋势 / 排行两个子模块与解释说明已移除。"""
         page = _read("frontend/src/pages/AdvertiserReports.tsx")
-        # 趋势 / 排行的组件、请求与文案均不再出现在页面
-        for removed in ("TrendChart", "reportTrend", "reportRankings", "reportDimensions",
+        # 趋势 / 排行的组件、请求与文案均不再出现在页面。
+        # V4.140：reportDimensions 重新用于「维度筛选下拉」，不再用于排行子模块，故不在此禁止。
+        for removed in ("TrendChart", "reportTrend", "reportRankings",
                         "ad-rank-", "ad-chart-", "趋势", "排行"):
             self.assertNotIn(removed, page)
         # 顶部标题区块下不再有解释文字 / 说明条

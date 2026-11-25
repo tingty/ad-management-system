@@ -17,7 +17,7 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -55,6 +55,33 @@ def _iso(v: Any) -> Optional[str]:
     if isinstance(v, (datetime, date)):
         return v.isoformat()
     return str(v)
+
+
+def _date_only(value: str) -> bool:
+    return len(value) == 10 and value[4] == "-" and value[7] == "-"
+
+
+def _boundary(value: Any, *, end: bool) -> Optional[str]:
+    """把筛选时间归一为 UTC naive 字符串，供与库内 UTC 时间列比较。
+
+    - 纯日期按北京时间整天边界：起始=当天 00:00，结束=当天 23:59:59.999999，
+      修复此前 `date_to=YYYY-MM-DD` 只比较到 00:00、把当天明细全部排除的问题；
+    - 带时区的 ISO 串按真实时刻换算为 UTC（前端快捷区间走这条路径）；
+    - 不带时区的字符串沿用历史语义，视为 UTC，兼容既有调用方。
+    """
+    text_value = str(value or "").strip()
+    if not text_value:
+        return None
+    if _date_only(text_value):
+        dt = datetime.fromisoformat(text_value + "T00:00:00+08:00")
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        if end:
+            dt += timedelta(days=1) - timedelta(microseconds=1)
+        return dt.isoformat(sep=" ")
+    dt = datetime.fromisoformat(text_value.replace(" ", "T").replace("Z", "+00:00"))
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.isoformat(sep=" ")
 
 
 def _owned_ids(db: Session, owner_id: int) -> list[int]:
@@ -109,29 +136,56 @@ def _order_where(ids: list[int], *, connection_id: Optional[int] = None,
                  date_from: Optional[str] = None, date_to: Optional[str] = None,
                  advertiser_name: Optional[str] = None, campaign_name: Optional[str] = None,
                  event_name: Optional[str] = None, action_status: Optional[str] = None,
-                 alias: str = "v") -> tuple[str, dict]:
-    """基于订单最终视图构造 WHERE；所有筛选按 owner 的 connection_id 收口。"""
+                 keyword: Optional[str] = None, alias: str = "v") -> tuple[str, dict]:
+    """基于订单最终视图构造 WHERE；所有筛选按 owner 的 connection_id 收口。
+
+    V4.140：维度与关键词筛选通过 EXISTS 回查事实表，使 KPI / 趋势 / 排行
+    与明细共用同一过滤口径；日期按北京时间边界归一为 UTC 字符串后再比较。
+    """
     clauses = [f"{alias}.connection_id IN :ids"]
     params: dict[str, Any] = {"ids": ids or [-1]}
     if connection_id:
         clauses.append(f"{alias}.connection_id = :cid")
         params["cid"] = connection_id
-    if date_from:
+    start = _boundary(date_from, end=False)
+    finish = _boundary(date_to, end=True)
+    if start:
         clauses.append(f"{alias}.first_event_date >= :df")
-        params["df"] = date_from
-    if date_to:
+        params["df"] = start
+    if finish:
         clauses.append(f"{alias}.first_event_date <= :dt")
-        params["dt"] = date_to
-    # 视图只聚合净额字段，维度字段从事实表回查（见 _dim_subquery）；这里维度筛选交给调用方。
+        params["dt"] = finish
+
+    # 视图只聚合净额，维度字段从事实表回查；按订单关联，保持订单级口径不变。
+    dim_clauses = []
+    for column, value in (("advertiser_name", advertiser_name), ("campaign_name", campaign_name),
+                          ("event_name", event_name), ("action_status", action_status)):
+        if value:
+            dim_clauses.append(f"d.{column} = :dim_{column}")
+            params[f"dim_{column}"] = value
+    if keyword:
+        dim_clauses.append("(d.order_id LIKE :kw OR d.commission_id LIKE :kw "
+                           "OR d.advertiser_name LIKE :kw)")
+        params["kw"] = f"%{keyword.strip()[:64]}%"
+    if dim_clauses:
+        clauses.append(
+            f"EXISTS (SELECT 1 FROM api_unified_fact d "
+            f"WHERE d.template_id={alias}.template_id AND d.connection_id={alias}.connection_id "
+            f"AND d.order_id={alias}.order_id AND " + " AND ".join(dim_clauses) + ")")
     return " AND ".join(clauses), params
 
 
 def kpi(db: Session, owner_id: int, *, connection_id: Optional[int] = None,
-        date_from: Optional[str] = None, date_to: Optional[str] = None) -> dict:
+        date_from: Optional[str] = None, date_to: Optional[str] = None,
+        advertiser_name: Optional[str] = None, campaign_name: Optional[str] = None,
+        event_name: Optional[str] = None, action_status: Optional[str] = None,
+        keyword: Optional[str] = None) -> dict:
     """概览 KPI：全部读订单最终视图 v_api_order_final（净额 + 取消单标记）。"""
     ids = _owned_ids(db, owner_id)
     where, params = _order_where(
-        ids, connection_id=connection_id, date_from=date_from, date_to=date_to)
+        ids, connection_id=connection_id, date_from=date_from, date_to=date_to,
+        advertiser_name=advertiser_name, campaign_name=campaign_name,
+        event_name=event_name, action_status=action_status, keyword=keyword)
     sql = text(f"""SELECT
             COALESCE(SUM(v.net_sale_usd), 0)       AS net_sale_usd,
             COALESCE(SUM(v.net_commission_usd), 0) AS net_commission_usd,
@@ -273,10 +327,12 @@ def details(db: Session, owner_id: int, *, connection_id: Optional[int] = None,
     params: dict[str, Any] = {"ids": ids or [-1]}
     if connection_id:
         clauses.append("f.connection_id = :cid"); params["cid"] = connection_id
-    if date_from:
-        clauses.append("f.event_date >= :df"); params["df"] = date_from
-    if date_to:
-        clauses.append("f.event_date <= :dt"); params["dt"] = date_to
+    start = _boundary(date_from, end=False)
+    finish = _boundary(date_to, end=True)
+    if start:
+        clauses.append("f.event_date >= :df"); params["df"] = start
+    if finish:
+        clauses.append("f.event_date <= :dt"); params["dt"] = finish
     for col, val in (("advertiser_name", advertiser_name), ("campaign_name", campaign_name),
                      ("event_name", event_name), ("action_status", action_status)):
         if val:
