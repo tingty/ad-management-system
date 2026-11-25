@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from './api'
 import { BUCKET, bucketOf, type CreativeBatch, type CreativeSubtask, type TaskFilter } from './useCreativeTasks'
+import { fmtBeijing, parseBackendMs } from './datetime'
 
 const FILTERS: { key: TaskFilter; label: string }[] = [
   { key: 'active', label: '进行中' },
@@ -21,25 +22,14 @@ const FILTERS: { key: TaskFilter; label: string }[] = [
 
 const KIND_LABEL: Record<string, string> = { video: '视频', images: '图片', image: '图片', copy: '文案' }
 
-/** V4.115：后端时间统一存 naive UTC 的 ISO 串（无时区标记）。
- *  Date.parse("2026-11-20T02:07:03") 会被浏览器当成本地时区解析，差 8 小时；
- *  这里补 Z 明确按 UTC 解析，得到真实时刻的时间戳，供展示与计时共用同一口径。 */
+/** V4.137：解析口径收敛到统一时间工具（无时区后缀按 UTC，带后缀原样解析）。 */
 function parseUtcMs(iso?: string): number {
-  if (!iso) return NaN
-  const s = String(iso).trim()
-  if (!s) return NaN
-  // 已经带时区后缀（Z 或 +08:00）的原样解析；否则按 UTC 补 Z。
-  if (/(Z|[+-]\d{2}:?\d{2})$/.test(s)) return Date.parse(s)
-  return Date.parse(s.replace(' ', 'T') + 'Z')
+  return parseBackendMs(iso)
 }
 
-/** V4.115：任务创建时间，按浏览器本地时区显示 YYYY-MM-DD HH:MM。 */
+/** V4.137：任务创建时间固定按东八区显示 YYYY-MM-DD HH:mm，不再依赖浏览器本地时区。 */
 function formatCreatedAt(iso?: string): string {
-  const ms = parseUtcMs(iso)
-  if (!isFinite(ms)) return '—'
-  const d = new Date(ms)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  return fmtBeijing(iso)
 }
 
 function elapsedText(iso?: string, finished?: string): string {

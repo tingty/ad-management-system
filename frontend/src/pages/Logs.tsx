@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, LoginLog, LogStats } from '../api'
+import { fmtBeijing } from '../datetime'
 
 type Tab = 'audit' | 'login'
 type LoginFilter = 'all' | 'success' | 'fail'
@@ -122,7 +123,7 @@ export default function Logs() {
               <tbody>
                 {filteredAudit.map(l => (
                   <tr key={l.id}>
-                    <td className="muted">{l.created_at ? new Date(l.created_at).toLocaleString() : '—'}</td>
+                    <td className="muted">{fmtBeijing(l.created_at)}</td>
                     <td>{l.username || '—'}</td>
                     <td><span className="pill off">{l.action}</span></td>
                     <td>{l.target || '—'}</td>
@@ -141,7 +142,7 @@ export default function Logs() {
               <tbody>
                 {filteredLogin.map(l => (
                   <tr key={l.id}>
-                    <td className="muted">{l.created_at ? new Date(l.created_at).toLocaleString() : '—'}</td>
+                    <td className="muted">{fmtBeijing(l.created_at)}</td>
                     <td>{l.username || '—'}</td>
                     <td><code style={{ fontSize: 12 }}>{l.ip || '—'}</code></td>
                     <td>

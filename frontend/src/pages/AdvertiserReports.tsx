@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   advertiserApi, ApiConnection, ReportColumn, ReportKpi, ReportDetails, ReportDrilldown,
 } from '../api'
+import { fmtBeijing } from '../datetime'
 
 const EMPTY_KPI: ReportKpi = {
   net_sale_usd: 0, net_commission_usd: 0, order_count: 0, void_count: 0,
@@ -30,6 +31,9 @@ function cell(v: unknown, col?: ReportColumn): string {
     return (isNaN(n) ? String(v) : n.toFixed(2)) + unit
   }
   if (fmt === 'int') return String(v) + unit
+  // V4.137：格式由后端 api_field_label 配置驱动，日期/时间一律按东八区展示。
+  if (fmt === 'datetime') return fmtBeijing(String(v), { fallback: String(v) }) + unit
+  if (fmt === 'date') return fmtBeijing(String(v), { fallback: String(v) }).slice(0, 10) + unit
   return String(v) + unit
 }
 

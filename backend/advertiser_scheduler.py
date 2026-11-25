@@ -28,6 +28,7 @@ import advertiser_api
 import advertiser_ingest
 from database import SessionLocal
 from models import ApiConnection, ApiFetchRun, ApiFetchTask, SystemState
+from timeutil import beijing_naive_now  # V4.137：用户配置的调度小时按北京时间解释
 
 WINDOW_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 SLICE_DAYS = 31            # CJ 硬限制：单次日期跨度 ≤31 天
@@ -116,7 +117,7 @@ def upsert_task(db: Session, conn: ApiConnection, schedule: Optional[dict] = Non
     if task.enabled and task.status == "error":
         task.status = "idle"
     if task.enabled and task.next_run_at is None:
-        task.next_run_at = _next_run(task.frequency, task.hour, datetime.now())
+        task.next_run_at = _next_run(task.frequency, task.hour, beijing_naive_now())
     db.flush()
     return task
 
@@ -157,10 +158,10 @@ def _claim(conn_id: int, now: datetime) -> bool:
 
 
 def _due(db: Session, conn: ApiConnection, sch: dict, now: datetime) -> bool:
-    """按频率判断是否到期；本地小时由配置决定，窗口本身仍按 UTC 计算。"""
+    """按频率判断是否到期；配置的小时按北京时间解释，拉取窗口本身仍按 UTC 计算。"""
     raw = _state_value(db, f"adv_fetch_last_{conn.id}")
     if not raw:
-        return True if sch["frequency"] == "6h" else datetime.now().hour >= sch["hour"]
+        return True if sch["frequency"] == "6h" else now.hour >= sch["hour"]
     try:
         last = datetime.fromisoformat(raw)
     except ValueError:
@@ -169,7 +170,7 @@ def _due(db: Session, conn: ApiConnection, sch: dict, now: datetime) -> bool:
         return (now - last) >= timedelta(hours=6)
     if last.date() == now.date():
         return False
-    return datetime.now().hour >= sch["hour"]
+    return now.hour >= sch["hour"]
 
 
 def _has_success_run(db: Session, conn_id: int) -> bool:
@@ -310,7 +311,7 @@ async def run_due(reason: str = "scheduler") -> dict:
         db = SessionLocal()
         summary = {"reason": reason, "checked": 0, "ran": 0, "runs": []}
         try:
-            now = datetime.now()
+            now = beijing_naive_now()
             conns = (db.query(ApiConnection)
                      .filter(ApiConnection.status != "disabled")
                      .order_by(ApiConnection.id).all())
@@ -336,7 +337,7 @@ async def run_due(reason: str = "scheduler") -> dict:
                         before=_window_text(utc_now))
                     task.last_run_at = datetime.utcnow()
                     task.status = "idle" if res["ok"] else "error"
-                    task.next_run_at = _next_run(sch["frequency"], sch["hour"], datetime.now())
+                    task.next_run_at = _next_run(sch["frequency"], sch["hour"], beijing_naive_now())
                     _set_state(db, f"adv_fetch_last_{conn.id}", now.isoformat())
                     summary["ran"] += 1
                     summary["runs"].append({"connection_id": conn.id,

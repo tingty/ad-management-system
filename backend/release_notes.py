@@ -40,6 +40,7 @@ import subprocess
 from datetime import date, datetime
 
 import version as _version
+from timeutil import beijing_display, beijing_iso  # V4.137：通知时间固定东八区
 
 _CHANGELOG = os.path.join(os.path.dirname(__file__), "..", "CHANGELOG.md")
 _DATAFILE = os.path.join(os.path.dirname(__file__), "release_notes_data.py")
@@ -326,7 +327,7 @@ def _note_datetime(n: dict) -> str | None:
     """
     version = n.get("version") or ""
     if n.get("auto_generated"):
-        return datetime.now().strftime("%Y-%m-%d %H:%M")
+        return beijing_display()
     raw = n.get("date")
     if not raw:
         return None
@@ -488,7 +489,7 @@ def get_release_notes() -> dict:
         "current": notes[0] if notes else None,
         "total": len(notes),
         "auto_generated": auto_generated,
-        "synced_at": datetime.now().isoformat(timespec="seconds"),
+        "synced_at": beijing_iso(),
     }
     _sig = sig
     return _cache

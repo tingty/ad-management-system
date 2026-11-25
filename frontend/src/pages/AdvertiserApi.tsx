@@ -1,5 +1,6 @@
 /**
- * V4.128 / V4.129 / V4.131 / V4.132 / V4.133 / V4.134 · 广告主数据 / API对接。
+ * V4.128 / V4.129 / V4.131 / V4.132 / V4.133 / V4.134 / V4.137 · 广告主数据 / API对接。
+ * V4.137：所有时间列与测试时间统一按东八区北京时间展示（无时区后缀按 UTC 解析）。
  * V4.134：设置弹窗接入自动调度状态、历史回填按钮与运行记录；调度由后端 startup 协程驱动，
  * 前端只展示与手动补拉，不改变列表列结构。
  * V4.133：列表新增「更新时间」（新建/配置变更）与「API同步时间」（最近一次请求）两列，
@@ -18,6 +19,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { advertiserApi, ApiConnection, ApiFetchRun, ApiSchedule, ApiTemplate, ApiTestResult } from '../api'
+import { beijingToday, fmtBeijing } from '../datetime'
 
 type Msg = { kind: 'ok' | 'err'; text: string }
 type TestDrawer = {
@@ -34,18 +36,14 @@ const CJ_TEMPLATE = 'CJ联盟'
 const PUBLISHER_COMMISSION_DESC =
   'A record of a publisher commission event, potentially including items purchased and advertiser-supplied custom attributes.'
 
+// V4.137：查询窗口按北京时间取日期，避免浏览器处于 UTC 时默认窗口偏移一天。
 function daysAgo(n: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() - n)
-  return d.toISOString().slice(0, 10)
+  return beijingToday(-n)
 }
 
-// V4.133：列表时间列格式化，空值显示「—」，避免 invalid date
+// V4.137：列表时间列统一东八区展示，空值 / 非法值显示「—」。
 function fmtTime(value: string | null | undefined): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleString('zh-CN', { hour12: false })
+  return fmtBeijing(value)
 }
 
 function windowPayload(since: string, before: string) {
@@ -69,7 +67,7 @@ function statusDetail(c: ApiConnection): string[] {
   if (c.last_test_ok === null || c.last_test_ok === undefined) {
     return ['尚未进行接口测试', '点击列表最后一列「测试」发起一次真实请求']
   }
-  const when = c.last_test_at ? new Date(c.last_test_at).toLocaleString() : '—'
+  const when = fmtBeijing(c.last_test_at)
   if (c.last_test_ok) {
     return [
       `HTTP ${c.last_test_http_code || 200} · 请求成功`,
@@ -405,7 +403,7 @@ export default function AdvertiserApi() {
                 <div className="ad-drawer-metric">
                   <span>测试时间</span>
                   <b className="ad-metric-time">
-                    {drawerResult?.tested_at ? new Date(drawerResult.tested_at).toLocaleString() : '—'}
+                    {fmtBeijing(drawerResult?.tested_at)}
                   </b>
                 </div>
               </div>

@@ -203,6 +203,7 @@
     <tr><td>可观测</td><td>每次运行记录：起止时间、窗口、拉取条数、游标位置、状态、错误；界面「运行记录」区可查，支持"获取难点排查"。</td></tr>
   </table>
   <div class="ok"><b>V4.134 已落地：</b>调度复用 <code>api_fetch_task</code> / <code>api_fetch_run</code> 与 <code>model_health</code> 的 startup 协程模式，不新增调度框架；按连接配置执行，SystemState 水位 + 抢占锁去重，重启不重复跑。历史回填按 30 天步长 + 1 天重叠切片，单片跨度始终 ≤31 天；每片走同一条游标翻页与幂等落库链路，结束后跨批次重算取消单。<code>api_fetch_run.run_mode</code> 区分 <code>manual</code> / <code>scheduled</code> / <code>backfill</code>。全局开关 <code>ADVERTISER_FETCH_ENABLED=0</code> 停调度，<code>ADVERTISER_FETCH_AUTO_BACKFILL=0</code> 关闭首次自动回填，回滚不删数据。</div>
+  <div class="ok"><b>V4.137 时间口径：</b>数据库时间列统一存 UTC；界面所有时间（含报表 <code>date</code> / <code>datetime</code> 列、运行记录、创建与同步时间）统一按东八区北京时间展示，前端解析无时区后缀字符串时按 UTC 处理。调度配置里的「执行小时」按北京时间解释；上游查询窗口与数据库写入仍用 UTC，不受部署机器时区影响。</div>
 
   <h3>4.1 任务执行子步骤（模板驱动）</h3>
   <ol>

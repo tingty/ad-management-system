@@ -1,14 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, CreationHistory, MediaImageItem } from '../api'
 import type { CreativeAssetList } from '../api'
+import { fmtBeijing } from '../datetime'
 
+// V4.137：统一东八区展示；非法值保留原始字符串，便于排查脏数据。
 function fmt(iso?: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso
-  return d.toLocaleString('zh-CN', {
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  })
+  return fmtBeijing(iso, { fallback: iso || '—' })
 }
 
 function fieldLabel(h: CreationHistory, key: string): string {

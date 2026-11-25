@@ -20,6 +20,7 @@ import os
 from datetime import datetime
 
 from database import SessionLocal
+from timeutil import beijing_iso, beijing_naive_now  # V4.137：调度钟点与下发时间固定东八区
 from models import ModelConfig, SystemState, utcnow
 from llm_catalog import test_llm_connection, _resolve_protocol
 
@@ -117,7 +118,7 @@ async def run_all(reason: str = "manual") -> dict:
                 "total": len(items),
                 "ok": ok_n,
                 "failed": len(items) - ok_n,
-                "tested_at": datetime.now().isoformat(timespec="seconds"),
+                "tested_at": beijing_iso(),
                 "results": items,
             }
         finally:
@@ -163,11 +164,11 @@ def _should_run_today() -> bool:
     db = SessionLocal()
     try:
         row = db.query(SystemState).filter_by(key=DAILY_DATE_KEY).first()
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = beijing_naive_now().strftime("%Y-%m-%d")
         if row and (row.value or "") == today:
             return False
         # 到点才跑；若进程在目标小时之后才启动，则立即补跑当天那一次
-        return datetime.now().hour >= daily_hour()
+        return beijing_naive_now().hour >= daily_hour()
     finally:
         db.close()
 
@@ -195,12 +196,12 @@ async def _daily_loop() -> None:
     while True:
         try:
             if _should_run_today():
-                today = datetime.now().strftime("%Y-%m-%d")
+                today = beijing_naive_now().strftime("%Y-%m-%d")
                 if _claim_today(today):
                     await run_all(reason="daily")
                     db = SessionLocal()
                     try:
-                        _set_state(db, DAILY_AT_KEY, datetime.now().astimezone().isoformat(timespec="seconds"))
+                        _set_state(db, DAILY_AT_KEY, beijing_iso())
                     finally:
                         db.close()
         except asyncio.CancelledError:

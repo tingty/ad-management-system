@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ModelConfig, ModelPreset, ModelTestResult, ModelHealthInfo, ModelTestAllResult } from '../api'
+import { fmtBeijing } from '../datetime'
 
 const USAGE_LABEL: Record<string, string> = {
   analysis: '落地页分析 / 框架',
@@ -345,11 +346,8 @@ export default function LLMSettings() {
     finally { setTestAllLoading(false) }
   }
 
-  const fmtTime = (s?: string | null) => {
-    if (!s) return '—'
-    const d = new Date(s)
-    return isNaN(d.getTime()) ? s : d.toLocaleString('zh-CN', { hour12: false })
-  }
+  // V4.137：统一东八区展示；非法值保留原始字符串，便于排查脏数据。
+  const fmtTime = (s?: string | null) => fmtBeijing(s, { fallback: s || '—' })
   // 已保存配置的类型展示名（与列表一致：协议选项优先，回退到厂商目录）。
   const testTargetLabel = testTarget
     ? (PROTOCOL_OPTIONS.find(x => x.key === testTarget.provider) || allPresets.find(x => x.key === testTarget.provider))?.name
