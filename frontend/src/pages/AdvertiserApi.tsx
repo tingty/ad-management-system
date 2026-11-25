@@ -1,5 +1,7 @@
 /**
- * V4.128 / V4.129 / V4.131 / V4.132 / V4.133 · 广告主数据 / API对接。
+ * V4.128 / V4.129 / V4.131 / V4.132 / V4.133 / V4.134 · 广告主数据 / API对接。
+ * V4.134：设置弹窗接入自动调度状态、历史回填按钮与运行记录；调度由后端 startup 协程驱动，
+ * 前端只展示与手动补拉，不改变列表列结构。
  * V4.133：列表新增「更新时间」（新建/配置变更）与「API同步时间」（最近一次请求）两列，
  * 并新增「编辑」按钮——复用新建弹窗的 ad-modal/ad-form-grid 组件，PATCH 修改已有配置。
  * V4.132：设置弹窗新增「立即拉取明细」，按当前查询窗口拉取 PublisherCommission 并幂等落库；
@@ -15,7 +17,7 @@
  * 只改动本页面与 API 封装，不影响任何现有模块布局与功能。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { advertiserApi, ApiConnection, ApiSchedule, ApiTemplate, ApiTestResult } from '../api'
+import { advertiserApi, ApiConnection, ApiFetchRun, ApiSchedule, ApiTemplate, ApiTestResult } from '../api'
 
 type Msg = { kind: 'ok' | 'err'; text: string }
 type TestDrawer = {
@@ -109,6 +111,10 @@ export default function AdvertiserApi() {
   const [savingSettings, setSavingSettings] = useState(false)
   const [testingId, setTestingId] = useState<number | null>(null)
   const [fetchingId, setFetchingId] = useState<number | null>(null)
+  // V4.134：历史回填与运行记录（只在设置弹窗内展示，不动列表布局）
+  const [backfillingId, setBackfillingId] = useState<number | null>(null)
+  const [runs, setRuns] = useState<ApiFetchRun[]>([])
+  const [showRuns, setShowRuns] = useState(false)
   const [hover, setHover] = useState<{ id: number; x: number; y: number } | null>(null)
   const [testDrawer, setTestDrawer] = useState<TestDrawer | null>(null)
   // V4.131：测试抽屉的查询窗口（日期），默认近 7 天
@@ -188,6 +194,13 @@ export default function AdvertiserApi() {
     setMsg(null); setHover(null)
     setSettingsId(c.id)
     setSettings({ ...DEFAULT_SCHEDULE, ...(c.schedule || {}) })
+    setBackfillingId(null); setShowRuns(false); setRuns([])
+    void loadRuns(c.id)
+  }
+
+  async function loadRuns(id: number) {
+    try { setRuns(await advertiserApi.fetchRuns(id)) }
+    catch { setRuns([]) }
   }
 
   async function saveSettings() {
@@ -231,6 +244,23 @@ export default function AdvertiserApi() {
     } catch (e: any) {
       setMsg({ kind: 'err', text: e?.message || '拉取失败' })
     } finally { setFetchingId(null) }
+  }
+
+  async function backfillNow() {
+    if (settingsId === null) return
+    const id = settingsId
+    setBackfillingId(id); setMsg(null)
+    try {
+      const r = await advertiserApi.backfillConnection(id, settings.backfill_days)
+      const errs = r.errors?.length ? ` · 失败 ${r.errors.length} 片：${r.errors[0]}` : ''
+      setMsg(r.ok
+        ? { kind: 'ok', text: `历史回填完成：${r.slices} 片 / ${r.days} 天，拉取 ${r.fetched} 条，新增 ${r.inserted} / 更新 ${r.updated}，取消单重算 ${r.void_recalculated} 行${errs}` }
+        : { kind: 'err', text: `历史回填未完成：${errs || '存在失败分片，详见运行记录'}` })
+      await loadRuns(id)
+      await load()
+    } catch (e: any) {
+      setMsg({ kind: 'err', text: e?.message || '历史回填失败' })
+    } finally { setBackfillingId(null) }
   }
 
   async function startTest(id: number, name: string, since = windowSince, before = windowBefore) {
@@ -610,7 +640,37 @@ export default function AdvertiserApi() {
                        onChange={e => setSettings(s => ({ ...s, backfill_days: Number(e.target.value) }))} />
               </label>
             </div>
-            <p className="ad-modal-hint muted">当前保存任务配置；自动调度执行按版本规划在后续阶段接入。「立即拉取明细」按测试抽屉里的查询窗口执行。</p>
+            <p className="ad-modal-hint muted">保存后由后端自动按上述频率执行（每日任务在设定小时之后触发）；首次启用且从未成功拉取时，先自动回填「首次回填」天数的历史。「立即拉取明细」按测试抽屉窗口手动补拉。</p>
+            <div className="ad-run-head">
+              <button className="btn sm" disabled={backfillingId !== null} onClick={() => void backfillNow()}>
+                {backfillingId !== null ? '回填中…' : '历史回填'}
+              </button>
+              <button className="btn sm" onClick={() => {
+                if (!showRuns && settingsId !== null) void loadRuns(settingsId)
+                setShowRuns(v => !v)
+              }}>{showRuns ? '收起运行记录' : `运行记录（${runs.length}）`}</button>
+              <span className="muted">回填按 ≤31 天分片，重复执行幂等</span>
+            </div>
+            {showRuns && (
+              <div className="ad-run-log">
+                {runs.length === 0 ? <div className="muted" style={{ padding: 10 }}>暂无运行记录</div> : (
+                  <table className="ad-table">
+                    <thead><tr><th>来源</th><th>状态</th><th>窗口（UTC）</th><th>明细 / 新增 / 更新</th><th>说明</th></tr></thead>
+                    <tbody>{runs.map(r => (
+                      <tr key={r.id}>
+                        <td>{r.run_mode === 'scheduled' ? '定时' : r.run_mode === 'backfill' ? '回填' : '手动'}</td>
+                        <td className={r.status === 'success' ? 'ad-run-ok' : 'ad-run-fail'}>
+                          {r.status === 'success' ? '成功' : r.status === 'failed' ? '失败' : '运行中'}
+                        </td>
+                        <td>{r.window_from?.slice(0, 10) || '—'} ~ {r.window_to?.slice(0, 10) || '—'}</td>
+                        <td>{r.fetched_count ?? 0} / {r.inserted_count ?? 0} / {r.updated_count ?? 0}</td>
+                        <td>{r.error || '—'}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                )}
+              </div>
+            )}
             <div className="ad-modal-foot">
               <button className="btn" disabled={fetchingId !== null} onClick={() => void fetchNow()}>
                 {fetchingId !== null ? '拉取中…' : '立即拉取明细'}

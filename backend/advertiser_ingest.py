@@ -255,6 +255,37 @@ def ingest_records(db: Session, *, records: list[dict], connection_id: int | Non
     return stats
 
 
+def recalc_all_voids(db: Session, *, template_id: str = CJ_TEMPLATE_ID,
+                     connection_id: int | None = None) -> int:
+    """P1-C：跨批次全量重算订单净额 / is_void。
+
+    与 _recalc_void() 的差别：后者只看当批 records 涉及的 orderId，修正单若在后续
+    批次才到达、且当批没有同样订单号，历史行会一直停留在旧判定。这里按
+    (模板, 连接, 订单) 全量分组重算，供历史回填结束与手动修复调用。
+    空 orderId 不参与合并（保持原值），与批内口径一致。
+    """
+    query = db.query(ApiUnifiedFact).filter(ApiUnifiedFact.template_id == template_id)
+    if connection_id is not None:
+        query = query.filter(ApiUnifiedFact.connection_id == connection_id)
+    groups: dict[tuple, list] = {}
+    for fact in query.all():
+        if not fact.order_id:
+            continue
+        key = (fact.template_id, fact.connection_id, fact.order_id)
+        groups.setdefault(key, []).append(fact)
+    changed = 0
+    for group in groups.values():
+        net_sale = sum((Decimal(str(f.sale_amount_usd or 0)) for f in group), Decimal(0))
+        net_commission = sum((Decimal(str(f.commission_amount_usd or 0)) for f in group), Decimal(0))
+        is_void = net_sale == 0 and net_commission == 0
+        for fact in group:
+            if bool(fact.is_void) != is_void:
+                fact.is_void = is_void
+                changed += 1
+    db.flush()
+    return changed
+
+
 def replay_mapping(db: Session, *, template_id: str = CJ_TEMPLATE_ID,
                    connection_id: int | None = None, dry_run: bool = True,
                    limit: int | None = None) -> dict:

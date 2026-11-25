@@ -268,11 +268,22 @@ def _migrate_v4133_1(conn) -> str:
     return "列表时间列已就绪：config_updated_at / last_sync_at（历史值已回填）"
 
 
+def _migrate_v4134_1(conn) -> str:
+    """V4.134.1：api_fetch_run 增加 run_mode（运行来源），历史记录一律视为手动。"""
+    cols = {c["name"] for c in inspect(conn).get_columns("api_fetch_run")}
+    if "run_mode" not in cols:
+        raise RuntimeError("api_fetch_run 缺少 run_mode 列")
+    conn.execute(text("""UPDATE api_fetch_run SET run_mode='manual'
+                         WHERE run_mode IS NULL OR run_mode=''"""))
+    return "运行记录来源标记已就绪：run_mode（历史记录回填为 manual）"
+
+
 MIGRATIONS = [
     ("V4.127.1", "advertiser_unified_schema", _migrate_v4127_1),
     ("V4.128.1", "advertiser_test_detail", _migrate_v4128_1),
     ("V4.130.1", "advertiser_field_map_seed", _migrate_v4130_1),
     ("V4.133.1", "advertiser_list_timestamps", _migrate_v4133_1),
+    ("V4.134.1", "advertiser_fetch_run_mode", _migrate_v4134_1),
 ]
 
 

@@ -2563,6 +2563,13 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ad-modal-x { border: 0; background: transparent; font-size: 22px; line-height: 1; cursor: pointer; color: var(--muted, #6b7280); }
 .ad-modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .ad-modal-hint { font-size: 11.5px; margin: 12px 0 0; }
+/* V4.134：设置弹窗内的历史回填与运行记录（折叠展示，不改变弹窗主体布局） */
+.ad-run-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; font-size: 11.5px; }
+.ad-run-log { margin-top: 8px; max-height: 168px; overflow: auto; border: 1px solid var(--line, var(--border)); border-radius: 6px; }
+.ad-run-log .ad-table { font-size: 11px; }
+.ad-run-log .ad-table th { position: sticky; top: 0; z-index: 1; }
+.ad-run-ok { color: #15803d; font-weight: 600; }
+.ad-run-fail { color: #dc2626; font-weight: 600; }
 .ad-check-line { flex-direction: row !important; align-items: center; gap: 8px !important; }
 .ad-check-line input { width: auto; }
 

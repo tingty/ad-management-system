@@ -1539,6 +1539,48 @@ export interface ApiFetchResult {
   warnings?: string[]
 }
 
+// V4.134 / P1-C：历史回填汇总
+export interface ApiBackfillResult {
+  connection_id: number
+  days: number
+  slices: number
+  ok: boolean
+  fetched: number
+  inserted: number
+  updated: number
+  void_recalculated: number
+  runs: { run_id: number; ok: boolean; window_since: string; window_before: string }[]
+  errors: string[]
+}
+
+// V4.134 / P2：运行记录与调度状态
+export interface ApiFetchRun {
+  id: number
+  connection_id: number
+  status: string
+  run_mode: string
+  window_from: string | null
+  window_to: string | null
+  fetched_count: number
+  inserted_count: number
+  updated_count: number
+  cursor_json: Record<string, unknown> | null
+  error: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface ApiSchedulerInfo {
+  enabled: boolean
+  auto_backfill: boolean
+  loop_running: boolean
+  tasks: {
+    id: number; connection_id: number; name: string; enabled: boolean
+    frequency: string; hour: number; lookback_days: number; backfill_days: number
+    status: string; last_run_at: string | null; next_run_at: string | null
+  }[]
+}
+
 export const advertiserApi = {
   status: () => req<{ enabled: boolean }>('/api/advertiser-data/status'),
   templates: () => req<ApiTemplate[]>('/api/advertiser-data/templates'),
@@ -1560,4 +1602,15 @@ export const advertiserApi = {
   // V4.132：手动拉取 PublisherCommission 明细并按映射幂等落库
   fetchConnection: (id: number, b?: { since_event_date?: string; before_event_date?: string }) =>
     req<ApiFetchResult>(`/api/advertiser-data/connections/${id}/fetch`, { method: 'POST', body: JSON.stringify(b || {}) }),
+  // V4.134 / P1-C：按 ≤31 天分片回填历史并全量重算取消单
+  backfillConnection: (id: number, days?: number) =>
+    req<ApiBackfillResult>(`/api/advertiser-data/connections/${id}/backfill`, {
+      method: 'POST', body: JSON.stringify(days ? { days } : {}),
+    }),
+  // V4.134 / P2：调度概况、手动触发一轮到期扫描、运行记录
+  schedulerInfo: () => req<ApiSchedulerInfo>('/api/advertiser-data/scheduler'),
+  runSchedulerOnce: () => req<{ reason: string; checked: number; ran: number }>(
+    '/api/advertiser-data/scheduler/run', { method: 'POST', body: '{}' }),
+  fetchRuns: (connectionId?: number) =>
+    req<ApiFetchRun[]>(`/api/advertiser-data/fetch-runs?limit=20${connectionId ? `&connection_id=${connectionId}` : ''}`),
 }

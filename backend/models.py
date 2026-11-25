@@ -600,6 +600,8 @@ class ApiFetchRun(Base):
     task_id = Column(Integer, nullable=True, index=True)
     connection_id = Column(Integer, nullable=True, index=True)
     status = Column(String(24), default="running")        # running / success / failed
+    # V4.134：运行来源 manual / scheduled / backfill，便于区分手动补拉与自动调度
+    run_mode = Column(String(16), default="manual")
     window_from = Column(DateTime, nullable=True)
     window_to = Column(DateTime, nullable=True)
     fetched_count = Column(Integer, default=0)

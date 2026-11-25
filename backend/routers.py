@@ -28,7 +28,7 @@ from schemas import (ModelConfigIn, ModelConfigOut, ModelTestIn,
                      AssetImportRequest, TemplateOut, TemplateCreate, TemplateUpdate,
                      CategoryConfirmIn, MergeConfirmIn, GoldenOverrideIn, UnmergeIn,
                      ApiTemplateOut, ApiConnectionIn, ApiConnectionUpdate, ApiConnectionOut,
-                     ApiTestIn, ApiTestOut)
+                     ApiTestIn, ApiTestOut, ApiBackfillIn)
 from services import PROMPT_REGISTRY, analyze_landing_concise
 from llm_catalog import test_llm_connection, _resolve_protocol
 from providers import (get_llm_with_info, finalize_invocation, parse_json, get_video,
@@ -72,6 +72,7 @@ import workshop as cw_workshop
 from version import ENABLE_AUTO_CREATION_PLAN, ENABLE_ADVERTISER_DATA
 import advertiser_api
 import advertiser_ingest  # V4.132 / P1-B：映射写入与幂等落库
+import advertiser_scheduler  # V4.134 / P1-C + P2：历史回填与自动调度
 # V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
 from video_claims import (video_evidence_context, audit_video_plan,
                           repair_video_plan, video_asset_gate)
@@ -4377,6 +4378,8 @@ async def api_advertiser_connection_update(cid: int, body: ApiConnectionUpdate,
         r.status = body.status
     if body.schedule is not None:
         r.schedule_json = _normalize_schedule(body.schedule)
+        # V4.134 / P2：设置落库即同步 ApiFetchTask，调度器只读任务表与水位
+        advertiser_scheduler.upsert_task(db, r)
     # V4.133：仅当本次确实改了配置（名称/CID/Endpoint/Token/状态/任务设置）才刷新更新时间。
     # 编辑配置与「重新测试/拉取」是两个独立动作，测试回写只动 last_sync_at，不动更新时间。
     if any(v is not None for v in (
@@ -4444,7 +4447,7 @@ async def api_advertiser_fetch(cid: int, body: ApiTestIn, db: Session = Depends(
         raise HTTPException(400, "Token 解密失败，请重新填写")
     since, before = _test_window(body.since_event_date or "", body.before_event_date or "")
     run = ApiFetchRun(
-        connection_id=cid, status="running", task_id=None,
+        connection_id=cid, status="running", task_id=None, run_mode="manual",
         window_from=datetime.strptime(since, "%Y-%m-%dT%H:%M:%SZ"),
         window_to=datetime.strptime(before, "%Y-%m-%dT%H:%M:%SZ"),
         started_at=datetime.utcnow())
@@ -4504,6 +4507,8 @@ async def api_advertiser_fetch_runs(connection_id: Optional[int] = None, limit: 
     rows = query.order_by(ApiFetchRun.id.desc()).limit(max(1, min(limit, 100))).all()
     return [{
         "id": row.id, "connection_id": row.connection_id, "status": row.status,
+        # V4.134：区分手动 / 定时 / 回填，便于对账与失败排查
+        "run_mode": row.run_mode or "manual",
         "window_from": row.window_from.isoformat() if row.window_from else None,
         "window_to": row.window_to.isoformat() if row.window_to else None,
         "fetched_count": row.fetched_count, "inserted_count": row.inserted_count,
@@ -4512,6 +4517,38 @@ async def api_advertiser_fetch_runs(connection_id: Optional[int] = None, limit: 
         "started_at": row.started_at.isoformat() if row.started_at else None,
         "finished_at": row.finished_at.isoformat() if row.finished_at else None,
     } for row in rows]
+
+
+@router.post("/advertiser-data/connections/{cid}/backfill")
+async def api_advertiser_backfill(cid: int, body: Optional[ApiBackfillIn] = None,
+                                  db: Session = Depends(get_db),
+                                  user: User = Depends(require_roles(*CAN_EDIT))):
+    """V4.134 / P1-C：按 ≤31 天分片回填历史明细，结束后跨批次重算取消单。"""
+    _ad_gate()
+    r = db.query(ApiConnection).filter_by(id=cid, owner_id=user.id).first()
+    if not r:
+        raise HTTPException(404, "连接不存在或无权回填")
+    if r.status == "disabled":
+        raise HTTPException(400, "连接已禁用，无法回填")
+    task = advertiser_scheduler.upsert_task(db, r)
+    db.commit()
+    return await advertiser_scheduler.backfill(
+        db, r, days=(body.days if body else None), task_id=task.id)
+
+
+@router.get("/advertiser-data/scheduler")
+async def api_advertiser_scheduler_info(_: User = Depends(require_roles(*ROLES))):
+    """V4.134 / P2：调度开关、后台协程状态与每个连接的任务概况。"""
+    _ad_gate()
+    return advertiser_scheduler.scheduler_info()
+
+
+@router.post("/advertiser-data/scheduler/run")
+async def api_advertiser_scheduler_run(db: Session = Depends(get_db),
+                                       user: User = Depends(require_roles(*CAN_EDIT))):
+    """手动触发一轮到期扫描（不等 60 秒轮询），只执行真正到期的任务。"""
+    _ad_gate()
+    return await advertiser_scheduler.run_due(reason="manual")
 
 
 @router.post("/advertiser-data/replay")

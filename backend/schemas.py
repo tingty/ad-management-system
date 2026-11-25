@@ -941,6 +941,11 @@ class ApiTestIn(BaseModel):
     before_event_date: Optional[str] = None
 
 
+class ApiBackfillIn(BaseModel):
+    """V4.134 / P1-C：历史回填天数，留空取任务的 backfill_days（默认 90）。"""
+    days: Optional[int] = None
+
+
 class ApiTestOut(BaseModel):
     ok: bool
     error: str = ""

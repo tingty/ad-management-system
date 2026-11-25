@@ -2,6 +2,34 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.134 广告主数据 P1-C 历史回填与 P2 自动调度
+**发布日期**：2026-11-25 10:26
+**变更类型**：新增 / 优化 / 发布
+**涉及模块**：广告主数据（调度器与回填）、后端接口、数据接入与运行记录、数据模型与版本迁移、系统设置（启动钩子与全局开关）、前端设置弹窗与 API 封装、唯一维护文档、专项测试、发版数据
+**变更摘要**：按规划完成 P1-C 与 P2。新增按 ≤31 天分片的 PublisherCommission 历史回填与跨批次订单净额 / 取消单全量重算；新增复用现有任务表与运行记录表的后台调度协程，按连接配置自动拉取并按水位去重。前端「设置」弹窗新增历史回填入口与运行记录，列表布局与请求对象保持不变。
+**更新要点**
+- 【新增】`backend/advertiser_scheduler.py`：P1-C + P2 核心。`execute_run()` 单窗口拉取（游标 `sinceCommissionId` 翻页至 `payloadComplete`、按 `api_field_map` 幂等落库、写运行记录）、`backfill()` 历史回填（90 天按 30 天步长 + 1 天重叠切成 3 片，单片跨度不超过 31 天）、`run_due()` 到期扫描（SystemState 水位 + 跨进程抢占锁），启停与 `model_health` 对称。
+- 【新增】`advertiser_ingest.recalc_all_voids()`：按 (模板, 连接, 订单) 全量重算净额与 `is_void`，修复修正单在后续批次到达时历史行判定未同步的跨批次缺口；回填结束自动调用一次。
+- 【新增】`api_fetch_run.run_mode` 列（manual / scheduled / backfill）与 `V4.134.1` 幂等迁移，历史记录回填为 manual；运行记录接口同步返回该字段。
+- 【新增】接口：`POST /advertiser-data/connections/{cid}/backfill`（历史回填，天数可选，默认取任务的 90 天）、`GET /advertiser-data/scheduler`（调度概况与任务状态）、`POST /advertiser-data/scheduler/run`（手动触发一轮到期扫描）。
+- 【新增】`PATCH /advertiser-data/connections/{id}` 保存任务设置时同步维护 `api_fetch_task`，任务状态、上次 / 下次运行时间可见；未测试通过的连接不自动请求上游。
+- 【新增】前端设置弹窗新增「历史回填」按钮与可折叠「运行记录」（来源 / 状态 / 窗口 / 条数 / 错误），`api.ts` 增加回填、调度概况与运行记录封装；列表列结构、测试抽屉与编辑弹窗不变。
+- 【优化】唯一维护文档同步 P1-C / P2 完成状态与运行来源口径；设置弹窗文案改为准确描述自动调度已启用。
+- 【新增】`tests/test_advertiser_scheduler_v4134.py`：13 项覆盖分片上限与重叠、游标翻页、重复回填幂等、失败留痕、跨批次取消单重算、调度水位去重、未验证连接跳过、任务失败状态、接口 owner 隔离、迁移与前端契约。
+**本次优化与更改的功能 / 模块**
+- 【新增】广告主数据从「手动拉一次」升级为「自动持续同步」：启用定期拉取后按频率 / 执行小时运行，首次成功前自动回填历史，之后按回溯窗口重叠拉取以捕获迟到修正。
+- 【新增】运行来源可区分，手动补拉 / 定时执行 / 历史回填各自留痕，失败不静默且可从界面直接查阅；Token 仅内存解密，不写运行记录与日志。
+**影响范围**
+- 兼容：不改动请求对象（仍是查询字段 `publisherCommissions` 下 `records[]` 的 `PublisherCommission` 明细）、不改 `api_field_map` seed、不改 `v_api_order_final` 视图 SQL、不改 Token 加密与脱敏、不改 V4.124–V4.133 的菜单 / 列表 / 弹窗 / 测试窗口 / 手动拉取逻辑。
+- 部署：新增列由 `ensure_schema()` 幂等补齐并由 `V4.134.1` 回填历史值；后台协程在 FastAPI startup 启动、shutdown 取消；可用 `ADVERTISER_FETCH_ENABLED=0` 停调度、`ADVERTISER_FETCH_AUTO_BACKFILL=0` 关闭首次自动回填，无需删表或迁移数据即可回滚。
+- 边界：CJ 的 200 次 / 5 分钟限流通过翻页间隔 1.6 秒与单片 31 天上限控制；本版不含报表数据接口与界面（P3）、不含第二渠道模板（P4）；真实 CJ 自动回填与真实数据验收仍需外部完成。
+**验证**
+- 专项：广告主数据十一个专项共 128 passed，其中 V4.134 专项 13 项通过。
+- 全量回归：全新隔离 SQLite 库执行 `pytest tests`，664 passed / 2 skipped / 14 subtests passed。
+- 前端：`tsc --noEmit` 与 `vite build` 通过。
+- 边界验证：90 天回填切成 3 片且每片跨度 ≤31 天、相邻片重叠 1 天；第二轮回填 inserted=0；失败分片留下 failed 运行记录；同一水位下重复扫描不产生新请求。
+- `prepare_release --sync` 后独立进程 `prepare_release --check` 通过，系统版本 / CHANGELOG / 发布数据一致为 V4.134。
+
 ## V4.133 API对接：列表更新时间/同步时间列与编辑配置弹窗
 **发布日期**：2026-11-25 10:07
 **变更类型**：新增 / 优化 / 发布

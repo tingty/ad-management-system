@@ -280,10 +280,23 @@ async def start_creative_worker():
     creative_tasks.start_worker()
 
 
+@app.on_event("startup")
+async def start_advertiser_fetch_scheduler():
+    """V4.134 / P2：启动广告主佣金定期拉取协程（在建表 / 补列之后）。"""
+    import advertiser_scheduler
+    advertiser_scheduler.start_scheduler()
+
+
 @app.on_event("shutdown")
 async def stop_model_health_scheduler():
     from model_health import stop_daily_scheduler
     stop_daily_scheduler()
+
+
+@app.on_event("shutdown")
+async def stop_advertiser_fetch_scheduler():
+    import advertiser_scheduler
+    advertiser_scheduler.stop_scheduler()
 
 
 @app.on_event("shutdown")
