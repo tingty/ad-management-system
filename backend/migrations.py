@@ -60,7 +60,9 @@ FIELD_LABEL_SEED = [
     ("event_date",             "日期（事件日期）",  None,  "date",     4, True,  None),
     ("campaign_name",          "品牌名称",          None,  "text",     5, True,  None),
     ("action_status",          "订单状态",          None,  "enum",     6, True,
-     {"new": "新建", "extended": "延长", "locked": "锁定", "closed": "关闭"}),
+     {"new": "新建", "extended": "延长", "locked": "锁定", "closed": "关闭",
+      "hold": "挂起", "pending": "待审核", "approved": "已通过",
+      "declined": "已拒绝", "paid": "已支付"}),
     ("event_name",             "事件名称",          None,  "text",     7, True,  None),
     ("sale_amount_usd",        "销售金额",          "USD", "decimal2", 8, True,  None),
     ("commission_amount_usd",  "佣金金额",          "USD", "decimal2", 9, True,  None),
@@ -203,6 +205,67 @@ AWIN_FIELD_MAP_SEED = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# V4.143：PartnerStack Partner API /v2/rewards 字段映射 seed。
+# 官方 OpenAPI（docs.partnerstack.com/reference/get_v2-rewards）确认：
+#   - amount / transaction.amount / transaction.amount_usd 均为「分」，需 /100；
+#   - created_at / updated_at / payment_date 等均为毫秒 epoch；
+#   - Reward 没有独立订单号、点击时间、国家、商品数量；source.key 是最近似的
+#     源对象键（transaction/lead/deal），作为订单合并键使用并在说明中明示；
+#   - company.name 是合作项目/广告主，customer 是下游客户，二者不可互换。
+# ---------------------------------------------------------------------------
+PARTNERSTACK_TEMPLATE_ID = "partnerstack_partner_rewards"
+PARTNERSTACK_FIELD_MAP_SEED = [
+    # ---- 幂等键与统一报表核心列 ----
+    ("key",                       "source_record.external_id", "direct", "Reward key（rwrd_*/rw_*）/ 幂等键"),
+    ("key",                       "fact.commission_id",        "direct", "佣金 ID"),
+    ("company.name",              "fact.advertiser_name",      "direct", "广告主 / 合作项目名称"),
+    ("company.name",              "fact.campaign_name",        "direct", "官方无活动名，同取合作项目名称"),
+    ("source.key",                "fact.order_id",             "direct", "源对象键（transaction/lead/deal），作为订单合并键"),
+    ("created_at",                "fact.event_date",           "epoch_ms_date", "Reward 创建时间（毫秒 epoch）→ 事件日期"),
+    ("reward_status",             "fact.action_status",        "enum_map", "Commission 状态：hold/pending/approved/declined/paid"),
+    ("source.type",               "fact.event_name",           "direct", "官方无事件名字段，用来源类型表示事件"),
+    ("transaction.amount_usd",    "fact.sale_amount_usd",      "cents_decimal", "交易额（美元分）→ 美元"),
+    ("amount",                    "fact.commission_amount_usd", "cents_decimal", "Reward 金额（美元分）→ 美元"),
+    ("__derived__is_void",        "fact.is_void",              "derived", "按订单净额归零判定取消单"),
+    # ---- 扩展层：报表下钻可查阅，不挤占统一列 ----
+    ("company.key",               "ext.company_key",           "direct", "合作项目 key"),
+    ("company.id",                "ext.company_id",            "direct", "合作项目数字 ID"),
+    ("customer.key",              "ext.customer_key",          "direct", "PartnerStack 客户 key"),
+    ("customer.name",             "ext.customer_name",         "direct", "客户名称"),
+    ("customer.email",            "ext.customer_email",        "direct", "客户邮箱"),
+    ("customer.sub_ids",          "ext.customer_sub_ids",      "direct", "客户 Sub ID 列表（可含点击 ID）"),
+    ("customer.shared_id",        "ext.customer_shared_id",    "direct", "客户共享 ID"),
+    ("partnership_key",           "ext.partnership_key",       "direct", "合作关系 key"),
+    ("currency",                  "ext.reward_currency",       "direct", "Reward 币种"),
+    ("description",               "ext.reward_description",    "direct", "Reward 规则描述"),
+    ("creation_source",           "ext.creation_source",       "direct", "创建来源：manual/offer_trigger/import/drip/api_key/content_order"),
+    ("created_by",                "ext.created_by",            "direct", "创建者 key 或 system"),
+    ("created_by_name",           "ext.created_by_name",       "direct", "创建者姓名"),
+    ("decline_reason",            "ext.decline_reason",        "direct", "拒绝/挂起原因"),
+    ("payment_status",            "ext.payment_status",        "direct", "可提现状态：pending/available/withdrawn/paid_externally"),
+    ("payment_date",              "ext.payment_date",          "epoch_ms_datetime", "可提现日期"),
+    ("payout_id",                 "ext.payout_id",             "direct", "提现批次 ID"),
+    ("withdrawn",                 "ext.withdrawn",             "bool", "是否已提现"),
+    ("source.key",                "ext.source_key",            "direct", "源对象 key（与订单合并键同源）"),
+    ("transaction.amount",        "ext.transaction_amount_cents", "direct", "交易原币种金额（分）"),
+    ("transaction.currency",      "ext.transaction_currency",  "direct", "交易原币种"),
+    ("transaction.created_at",    "ext.transaction_created_at", "epoch_ms_datetime", "交易创建时间"),
+    ("transaction.category_key",  "ext.transaction_category_key", "direct", "交易分类 key"),
+    ("transaction.product_key",   "ext.transaction_product_key", "direct", "交易产品 key"),
+    ("transaction.archived",      "ext.transaction_archived",  "bool", "交易是否已归档"),
+    ("drip.key",                  "ext.drip_key",              "direct", "Drip 计划 key"),
+    ("drip.created_at",           "ext.drip_created_at",       "epoch_ms_datetime", "Drip 计划创建时间"),
+    ("updated_at",                "ext.updated_at",            "epoch_ms_datetime", "Reward 最后更新时间"),
+    # ---- 对象容器：显式登记，覆盖检查不告警；字段本身已逐项映射 ----
+    ("company",                   "__skip__",                  "skip", "对象容器，只取已映射子字段"),
+    ("customer",                  "__skip__",                  "skip", "对象容器，只取已映射子字段"),
+    ("source",                    "__skip__",                  "skip", "对象容器，只取已映射子字段"),
+    ("transaction",               "__skip__",                  "skip", "对象容器，只取已映射子字段"),
+    ("drip",                      "__skip__",                  "skip", "对象容器，只取已映射子字段"),
+]
+
+
 def _seed_field_map(conn, template_id: str, seed: list) -> int:
     """幂等写入某模板的字段映射 seed（已存在不覆盖）。"""
     added = 0
@@ -228,6 +291,29 @@ def _migrate_v4138_1(conn) -> str:
     """V4.138.1：登记第二渠道 Awin 字段映射（不改任何表结构）。"""
     added = _seed_field_map(conn, AWIN_TEMPLATE_ID, AWIN_FIELD_MAP_SEED)
     return f"Awin 字段映射登记新增 {added} 行（验证加模板+映射不改代码）"
+
+
+def _migrate_v4143_1(conn) -> str:
+    """V4.143.1：登记 PartnerStack Partner API 字段映射，并补充状态展示枚举。"""
+    added = _seed_field_map(conn, PARTNERSTACK_TEMPLATE_ID, PARTNERSTACK_FIELD_MAP_SEED)
+    row = conn.execute(
+        text("""SELECT id, enum_map_json FROM api_field_label
+                WHERE scope='fact' AND column_key='action_status'""")
+    ).first()
+    if row:
+        try:
+            labels = json.loads(row[1] or "{}") if isinstance(row[1], str) else dict(row[1] or {})
+        except (ValueError, TypeError):
+            labels = {}
+        labels.update({
+            "hold": "挂起", "pending": "待审核", "approved": "已通过",
+            "declined": "已拒绝", "paid": "已支付",
+        })
+        conn.execute(
+            text("UPDATE api_field_label SET enum_map_json=:m WHERE id=:i"),
+            {"m": json.dumps(labels, ensure_ascii=False), "i": row[0]},
+        )
+    return f"PartnerStack 字段映射登记新增 {added} 行；订单状态枚举已补充合作方状态"
 
 
 def _current_order_view_sql(conn) -> str:
@@ -350,6 +436,7 @@ MIGRATIONS = [
     ("V4.133.1", "advertiser_list_timestamps", _migrate_v4133_1),
     ("V4.134.1", "advertiser_fetch_run_mode", _migrate_v4134_1),
     ("V4.138.1", "advertiser_awin_field_map", _migrate_v4138_1),
+    ("V4.143.1", "advertiser_partnerstack_field_map", _migrate_v4143_1),
 ]
 
 

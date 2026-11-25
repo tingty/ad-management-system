@@ -145,11 +145,17 @@ export default function AdvertiserApi() {
     if (t && code === 'cj_publisher_commissions') return CJ_TEMPLATE
     return t?.name || (code === 'cj_publisher_commissions' ? CJ_TEMPLATE : code)
   }
+  // V4.143：CID 由模板声明是否必填；PartnerStack 的 company_key 只是可选筛选。
+  const cidField = (code: string) =>
+    templates.find(t => t.code === code)?.required_fields?.find(f => f.key === 'cid')
+  const cidRequired = (code: string) => cidField(code)?.required !== false
 
   async function saveNew() {
     if (!form.name.trim()) { setMsg({ kind: 'err', text: '请填写广告主名称' }); return }
     if (!form.token.trim()) { setMsg({ kind: 'err', text: '请填写 API Token' }); return }
-    if (!form.cid.trim()) { setMsg({ kind: 'err', text: '请填写发布者 CID（不是登录邮箱）' }); return }
+    if (cidRequired(form.template_code) && !form.cid.trim()) {
+      setMsg({ kind: 'err', text: '请填写发布者 CID（不是登录邮箱）' }); return
+    }
     setSaving(true); setMsg(null)
     try {
       const r = await advertiserApi.createAndTestConnection(form)
@@ -173,7 +179,10 @@ export default function AdvertiserApi() {
   async function saveEdit() {
     if (editingId === null) return
     if (!editForm.name.trim()) { setMsg({ kind: 'err', text: '请填写广告主名称' }); return }
-    if (!editForm.cid.trim()) { setMsg({ kind: 'err', text: '请填写发布者 CID' }); return }
+    const editingTemplate = connections.find(c => c.id === editingId)?.template_code || ''
+    if (cidRequired(editingTemplate) && !editForm.cid.trim()) {
+      setMsg({ kind: 'err', text: '请填写发布者 CID' }); return
+    }
     setSavingEdit(true); setMsg(null)
     try {
       const payload: Record<string, string> = {
@@ -550,9 +559,11 @@ export default function AdvertiserApi() {
                 <input type="password" value={form.token} onChange={e => setForm(f => ({ ...f, token: e.target.value }))}
                        placeholder="Bearer 后面的个人访问令牌" autoComplete="off" />
               </label>
-              <label>{templates.find(t => t.code === form.template_code)?.required_fields?.find(f => f.key === 'cid')?.label || '发布者 ID'} *
+              <label>{cidField(form.template_code)?.label || '发布者 ID'}{cidRequired(form.template_code) ? ' *' : '（可选）'}
                 <input value={form.cid} onChange={e => setForm(f => ({ ...f, cid: e.target.value }))}
-                       placeholder="模板要求的发布者 ID，不是登录邮箱" />
+                       placeholder={cidRequired(form.template_code)
+                         ? '模板要求的发布者 ID，不是登录邮箱'
+                         : '留空读取全部；填写则只读取该公司 Key'} />
               </label>
               <label className="span2">Endpoint（留空用模板默认）
                 <input value={form.endpoint} onChange={e => setForm(f => ({ ...f, endpoint: e.target.value }))}
@@ -580,7 +591,7 @@ export default function AdvertiserApi() {
                 <input value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
                        placeholder="例如：CJ 主账号" />
               </label>
-              <label>发布者 CID *
+              <label>{cidField(connections.find(c => c.id === editingId)?.template_code || '')?.label || '发布者 CID'}{cidRequired(connections.find(c => c.id === editingId)?.template_code || '') ? ' *' : '（可选）'}
                 <input value={editForm.cid} onChange={e => setEditForm(f => ({ ...f, cid: e.target.value }))}
                        placeholder="发布者公司 ID，不是登录邮箱" />
               </label>

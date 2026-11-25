@@ -152,6 +152,46 @@ PRESET_TEMPLATES: list[dict] = [
             "external_id_path": "id",
         },
     },
+    {
+        # V4.143：PartnerStack Partner API（合作方视角读取自己的佣金/Reward）。
+        # 官方参考：GET https://api.partnerstack.com/api/v2/rewards
+        # 注意与 vendor API（Basic Auth）区分：Partner API Key 走 Bearer。
+        "code": "partnerstack_partner_rewards",
+        "name": "PartnerStack联盟",
+        "vendor": "PartnerStack",
+        "description": "读取 Partner API 的逐笔 Reward（佣金）明细，含公司、客户、交易、金额与审核/支付状态。",
+        "record_object": "Reward",
+        "record_object_desc": "Reward is what you earn from companies on PartnerStack.",
+        "method": "GET",
+        "auth_type": "bearer",
+        "default_endpoint": "https://api.partnerstack.com/api",
+        "required_fields": [
+            {"key": "token", "label": "Partner API Key", "type": "password", "required": True},
+            {"key": "cid", "label": "公司 Key（可选筛选 company_key）", "type": "text", "required": False},
+            {"key": "endpoint", "label": "Endpoint", "type": "text", "required": False},
+        ],
+        "query_name": "rewards",
+        "pagination": "starting_after=本页最后一条 key；data.has_more=true 继续翻页",
+        "limits": "limit 1–250（模板固定 250）；min_created/max_created 为毫秒 epoch；Partner API Key 需从 Partner 后台 Settings → API 生成",
+        "framework_version": "advertiser-api/1.0",
+        "status": "active",
+        "protocol": {
+            "style": "rest", "http_method": "GET", "auth": "bearer", "cid_in": "query",
+            "cid_param": "company_key", "endpoint_path": "v2/rewards",
+            "records_path": "data.items",
+            "count_path": "data.total",
+            "cursor_path": "",
+            "complete_path": "data.has_more",
+            "complete_invert": True,
+            "cursor_from_last": True,
+            "cursor_param": "starting_after",
+            "external_id_path": "key",
+            "date_params": {"since": "min_created", "before": "max_created"},
+            "date_value_format": "epoch_ms",
+            "extra_params": {"limit": 250, "order_by": "-created_at",
+                             "hide_archived_rewards": "false"},
+        },
+    },
 ]
 
 
@@ -160,6 +200,15 @@ def template_by_code(code: str) -> Optional[dict]:
         if t["code"] == code:
             return t
     return None
+
+
+def requires_cid(template_code: str) -> bool:
+    """模板声明 cid 为可选时允许留空（PartnerStack 的 company_key 只是筛选）。"""
+    tpl = template_by_code(template_code or "") or {}
+    for field in tpl.get("required_fields") or []:
+        if field.get("key") == "cid":
+            return bool(field.get("required", True))
+    return True
 
 
 # ---------------- CJ GraphQL 客户端 ----------------
@@ -344,7 +393,9 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
 
     if not tpl:
         return _env(ok=False, error="未知模板，无法测试连接", count=0, http_code=0, url=url)
-    if not token or not cid:
+    if not token:
+        return _env(ok=False, error="API Token 必填", count=0, http_code=0, url=url)
+    if requires_cid(template_code) and not cid:
         return _env(ok=False, error="API Token 与 CID 均为必填", count=0, http_code=0, url=url)
 
     req = advertiser_protocol.build_request(

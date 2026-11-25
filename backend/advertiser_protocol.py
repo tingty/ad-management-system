@@ -19,6 +19,11 @@
   complete_path    结束标志路径                  默认 data.<query_name>.payloadComplete
   external_id_path 幂等键在明细中的路径          默认 commissionId
   date_params      rest 日期参数名映射           默认 {"since":"startDate","before":"endDate"}
+  date_value_format epoch_ms：日期字符串转毫秒时间戳（PartnerStack）
+  endpoint_path    rest 固定路径后缀（PartnerStack v2/rewards）
+  extra_params     rest 固定 query 参数（limit / order_by 等）
+  cursor_from_last 游标不在响应元数据中，取最后一条记录的 external_id_path（PartnerStack）
+  complete_invert  complete_path 为 has_more，结束标志需反转（PartnerStack）
 
 不在本层处理：Token 加解密（advertiser_api）、字段映射与目标列（advertiser_ingest）、
 调度与限流（advertiser_scheduler）、报表查询（advertiser_reports）。
@@ -26,6 +31,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import advertiser_api
@@ -41,6 +47,25 @@ def _dig(obj: Any, path: str) -> Any:
             return None
         cur = cur.get(part)
     return cur
+
+
+def _date_value(text: str, value_format: str) -> Any:
+    """按协议把系统统一的 UTC 窗口字符串转成上游要求的日期值。"""
+    value = str(text or "").strip()
+    if value_format != "epoch_ms" or not value:
+        return value
+    try:
+        try:
+            moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            moment = datetime.strptime(value[:19], "%Y-%m-%dT%H:%M:%S").replace(
+                tzinfo=timezone.utc)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return int(moment.timestamp() * 1000)
+    except (ValueError, TypeError, OverflowError):
+        # 已经是毫秒时间戳时原样透传；非法值由上游返回参数错误，便于排查。
+        return value
 
 
 def protocol_of(template_code: str) -> dict:
@@ -78,10 +103,13 @@ def build_request(*, template_code: str, endpoint: str, token: str, cid: str,
     style = proto.get("style", "graphql")
     method = str(proto.get("http_method") or ("POST" if style == "graphql" else "GET")).upper()
     url = (endpoint or "").strip() or (tpl.get("default_endpoint") or "")
+    suffix = str(proto.get("endpoint_path") or "").strip("/")
+    if suffix and not url.rstrip("/").endswith(suffix):
+        url = url.rstrip("/") + "/" + suffix
 
     headers: dict = {"Content-Type": "application/json"}
     json_body: Optional[dict] = None
-    params: dict = {}
+    params: dict = dict(proto.get("extra_params") or {})
 
     # 认证方式下沉到协议：bearer 走 Header，query_param 走 URL 参数
     if proto.get("auth", "bearer") == "query_param":
@@ -99,10 +127,11 @@ def build_request(*, template_code: str, endpoint: str, token: str, cid: str,
             cid, since_event_date, before_event_date, since_commission_id)
     else:
         names = dict(proto.get("date_params") or {"since": "startDate", "before": "endDate"})
+        value_format = str(proto.get("date_value_format") or "")
         if names.get("since"):
-            params[str(names["since"])] = since_event_date
+            params[str(names["since"])] = _date_value(since_event_date, value_format)
         if names.get("before"):
-            params[str(names["before"])] = before_event_date
+            params[str(names["before"])] = _date_value(before_event_date, value_format)
         if cid and proto.get("cid_in") != "path":
             cid_param = str(proto.get("cid_param") or "publisherId")
             if cid_param:
@@ -135,9 +164,18 @@ def parse_response(*, template_code: str, body: dict) -> dict:
     if count_raw is None:
         count_raw = len(records)
     cursor = _dig(body, paths.get("cursor_path") or "")
-    complete = _dig(body, paths.get("complete_path") or "")
+    raw_complete = _dig(body, paths.get("complete_path") or "")
+    if raw_complete is None:
+        complete = True
+    else:
+        complete = bool(raw_complete)
+        if proto.get("complete_invert"):
+            complete = not complete
+    # PartnerStack 型游标：响应只给 has_more，游标取本页最后一条记录的 key。
+    if not cursor and proto.get("cursor_from_last") and records:
+        cursor = records[-1].get(str(proto.get("external_id_path") or "key")) or ""
     # rest 无游标协议：单窗口即完成（数据窗口由调度层分片保证）
-    if style == "rest" and not paths.get("cursor_path"):
+    if style == "rest" and not paths.get("cursor_path") and not proto.get("cursor_from_last"):
         complete = True
         cursor = ""
     return {

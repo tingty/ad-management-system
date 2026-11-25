@@ -4235,7 +4235,7 @@ def _create_connection_row(db: Session, user: User, body: ApiConnectionIn) -> Ap
     cid = (body.cid or "").strip()
     if not token:
         raise HTTPException(400, "API Token 必填")
-    if not cid:
+    if advertiser_api.requires_cid(tpl["code"]) and not cid:
         raise HTTPException(400, "发布者 CID 必填")
     r = ApiConnection(
         owner_id=user.id, name=name[:128], template_code=tpl["code"], cid=cid[:64],
@@ -4316,7 +4316,11 @@ async def api_advertiser_templates(_: User = Depends(require_roles(*ROLES))):
         "description": t.get("description", ""), "method": t.get("method", "POST"),
         "auth_type": t.get("auth_type", "bearer"),
         "default_endpoint": t.get("default_endpoint", ""),
-        "required_fields": t.get("required_fields", []),
+        # 缺省视为必填，兼容 CJ/Awin 历史声明；PartnerStack 显式声明 company_key 可选。
+        "required_fields": [
+            {**f, "required": bool(f.get("required", True))}
+            for f in (t.get("required_fields") or [])
+        ],
         "limits": t.get("limits", ""), "framework_version": t.get("framework_version", ""),
         "status": t.get("status", "active"),
         # V4.129：明确声明请求对象是 PublisherCommission 明细，不是统计包装

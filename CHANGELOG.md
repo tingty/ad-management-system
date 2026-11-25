@@ -2,6 +2,32 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.143 接入 PartnerStack Partner API 佣金模板
+**发布日期**：2026-11-25 16:01
+**变更类型**：新增 / 优化
+**涉及模块**：广告主数据（API 对接模板、协议适配层、字段映射、连接表单）、广告主报表、迁移与展示配置、专项测试、发版数据、新版通知、系统版本
+**变更摘要**：依据 PartnerStack 官方 Partner API 文档，将 `GET /api/v2/rewards` 作为第三个标准模板接入「广告主 API」。该接口返回合作方自身的 Reward（佣金）明细，可直接支撑销售金额、佣金金额、广告主/品牌、日期、状态等报表字段。模板固化 Bearer 鉴权、毫秒 epoch 时间窗、按最后一条 `key` 翻页与固定分页参数；字段映射把「分」换算为美元、把毫秒时间换算为业务日期，并把官方没有的字段如实留在扩展层，不伪造订单号或点击数据。
+**更新要点**
+- 【新增】`partnerstack_partner_rewards` 模板：默认 Endpoint `https://api.partnerstack.com/api` + 固定路径 `v2/rewards`，Token 只进 `Authorization: Bearer`，公司 Key 为可选 `company_key` 筛选。
+- 【优化】协议适配层：新增 `endpoint_path`、`date_value_format=epoch_ms`、`cursor_from_last`、`complete_invert`、`extra_params`，支持 PartnerStack 的毫秒时间参数与 `starting_after` 游标，不改 CJ / Awin 既有协议行为。
+- 【优化】连接表单与后端校验：CID 是否必填写给模板；PartnerStack 只需 API Key，CJ / Awin 继续强制发布者 ID，避免把可选筛选伪装成必填项。
+- 【新增】字段映射 seed：`key` 作幂等键与佣金 ID，`company.name` 作广告主/品牌，`source.key` 作订单合并键，`amount` / `transaction.amount_usd` 由分转美元，`created_at` 由毫秒 epoch 转事件日期；客户、交易、支付、Drip 等字段进扩展层供下钻查阅。
+- 【新增】订单状态枚举补充 `hold / pending / approved / declined / paid`，报表状态列可显示 PartnerStack 的合作方佣金状态。
+- 【新增】`tests/test_advertiser_partnerstack_v4143.py`：覆盖模板配置、请求构造、响应解析、无 CID 测试连接、鉴权失败、字段映射落库、幂等排重、报表读取与静态契约共 11 项。
+**本次优化与更改的功能 / 模块**
+- 【新增】广告主数据 · API 模板：PartnerStack Partner API Reward 明细模板。
+- 【优化】广告主数据 · 协议适配：毫秒时间窗、末条记录游标、has_more 反转、固定分页参数。
+- 【优化】广告主数据 · 连接表单：按模板声明 CID 可选/必填。
+- 【新增】广告主数据 · 字段映射与状态展示：PartnerStack 官方字段全量登记，金额与时间统一口径。
+**影响范围**
+- 兼容：只新增第三个模板与协议能力；CJ / Awin 的请求形态、映射与既有数据不变，不改任何业务表结构。
+- 边界：官方没有独立订单号、点击时间、国家与商品数量；本版用 `source.key` 作为订单合并键并在映射说明中明示，点击时间/国家等列保持为空，不做猜测填充。真实联调需用户提供 Partner 后台 `Settings → API` 生成的 API Key；本版未发起真实上游请求。
+- 回滚：移除本版模板、映射 seed、迁移与协议扩展即可回到 V4.142，已落库的 PartnerStack 原始数据保留但不参与业务视图。
+**验证**
+- 专项：PartnerStack 模板 11 passed；既有协议 / 落库 / 报表回归 32 passed；隔离库全量后端回归 753 passed / 2 skipped。
+- 前端：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
+- 发版：`prepare_release --sync` 重建发布数据后独立进程 `--check` 校验系统版本、CHANGELOG 与发布数据一致。
+
 ## V4.142 广告主报表明细导出（CSV）
 **发布日期**：2026-11-25 14:57
 **变更类型**：新增

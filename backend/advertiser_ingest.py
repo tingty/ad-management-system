@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 
@@ -73,6 +73,13 @@ def _convert(value: Any, transform: str | None) -> Any:
     try:
         if transform == "decimal":
             return Decimal(str(value))
+        if transform == "cents_decimal":
+            # PartnerStack：金额是美元分（整数），统一报表按美元展示，保留两位。
+            return (Decimal(str(value)) / Decimal(100)).quantize(Decimal("0.01"))
+        if transform == "epoch_ms_date":
+            return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc).date()
+        if transform == "epoch_ms_datetime":
+            return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc).replace(tzinfo=None)
         if transform == "utc_date":
             return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
         if transform == "utc_datetime":
