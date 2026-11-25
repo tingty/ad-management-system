@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 
@@ -158,6 +158,24 @@ def _item_rows(record: dict, rows: Iterable[tuple[str, str, str]]) -> list[dict]
     return result
 
 
+def _json_safe(value: Any) -> Any:
+    """把转换后的值归一为 JSON 可序列化类型，避免真实明细落库失败。
+
+    V4.139：_convert 的 utc_datetime / decimal 会产出 datetime / Decimal，
+    SQLAlchemy JSON 列不认识这些类型。日期时间保留 ISO 字符串、Decimal 保留
+    字符串精度，嵌套列表逐项归一；原始层 payload_json 仍是上游原文。
+    """
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    return value
+
+
 def _ext_data(record: dict, rows: Iterable[tuple[str, str, str]]) -> dict:
     data: dict = {}
     for source, target, transform in rows:
@@ -169,7 +187,7 @@ def _ext_data(record: dict, rows: Iterable[tuple[str, str, str]]) -> dict:
         else:
             value = _convert(value, transform)
         if value is not None:
-            data[target[len("ext."):]] = value
+            data[target[len("ext."):]] = _json_safe(value)
     return data
 
 

@@ -321,7 +321,8 @@ def _test_envelope(*, ok: bool, error: str, count: int, http_code: int,
 
 async def test_connection(*, template_code: str, endpoint: str, token: str, cid: str,
                           since_event_date: str, before_event_date: str,
-                          timeout_sec: float = 20.0, full_records: bool = False) -> dict:
+                          timeout_sec: float = 20.0, full_records: bool = False,
+                          since_commission_id: str = "") -> dict:
     """真实调用上游 API，逐条拉取 PublisherCommission 订单佣金明细。异常归为 ok=False。
 
     V4.128：请求 URL / GraphQL 请求体 / 上游完整响应原文统一返回，供「测试」右侧滑窗查阅；
@@ -348,7 +349,8 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
 
     req = advertiser_protocol.build_request(
         template_code=template_code, endpoint=endpoint, token=token, cid=cid,
-        since_event_date=since_event_date, before_event_date=before_event_date)
+        since_event_date=since_event_date, before_event_date=before_event_date,
+        since_commission_id=since_commission_id)
     url = req["url"]
     if not url.startswith("https://") and not url.startswith("http://"):
         return _env(ok=False, error="Endpoint 必须是 http(s) 地址", count=0, http_code=0, url=url)
