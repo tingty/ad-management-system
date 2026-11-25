@@ -184,10 +184,16 @@ class TestFrontendDrawer(unittest.TestCase):
         self.css = _read("frontend/src/styles.css")
 
     def test_list_has_test_as_last_column(self):
-        self.assertIn(
-            "<thead><tr><th>NO.</th><th>广告主</th><th>模板</th><th>状态</th><th>设置</th><th>测试</th></tr></thead>",
-            self.page,
-        )
+        # V4.133：列表新增更新时间/API同步时间/编辑列，「测试」仍是最后一列
+        import re
+        m = re.search(r"<thead><tr>(.*?)</tr>", self.page, re.S)
+        self.assertTrue(m, "未找到列表表头")
+        head = m.group(1)
+        self.assertIn('<th>NO.</th>', head)
+        self.assertIn('<th>编辑</th>', head)
+        # 「测试」必须是最后一个 <th>（其后只有空白到 </tr>）
+        tail = head[head.rindex('<th>测试</th>') + len('<th>测试</th>'):]
+        self.assertTrue(tail.strip() == '', "测试列后不应还有其他列")
         self.assertIn("onClick={() => void startTest(c.id, c.name)}", self.page)
         self.assertIn("测试中…", self.page)
 

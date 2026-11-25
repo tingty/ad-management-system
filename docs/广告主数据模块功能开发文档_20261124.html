@@ -214,20 +214,24 @@
 <section>
   <h2>五、界面设计需求（两个二级菜单）</h2>
 
-  <h3>5.1 「API对接」主界面（一张列表，V4.125 确认）</h3>
+  <h3>5.1 「API对接」主界面（一张列表，V4.125 确认 / V4.133 增列）</h3>
   <div class="wire">
     <h5>广告主数据 / API对接</h5>
     <p class="muted" style="margin:0 0 8px">页面标题为「API对接」，删除顶部解释文案；不展示可用模板样例、定期任务与运行记录占位区。</p>
     <table>
-      <tr><th width="7%">NO.</th><th width="21%">广告主</th><th width="14%">模板</th><th width="20%">状态</th><th width="10%">设置</th><th width="8%">测试</th></tr>
-      <tr><td>3</td><td>CJ 主账号<br><span class="muted">CID 12345</span></td><td><code>CJ联盟</code></td><td><span class="tag t-derive">成功</span>（悬浮看 HTTP code / 条数 / 时间）</td><td><span class="btn">设置</span></td><td><span class="btn">测试</span></td></tr>
-      <tr><td>2</td><td>另一广告主</td><td><code>CJ联盟</code></td><td><span class="tag t-q">失败</span>（悬浮看 HTTP 401 等明细）</td><td><span class="btn">设置</span></td><td><span class="btn">测试</span></td></tr>
-      <tr><td colspan="6"><span class="btn btn-solid">新建 API</span> · NO. 取连接自增 id，按 id 从大到小展示；「测试」为最后一列</td></tr>
+      <tr><th>NO.</th><th>广告主</th><th>模板</th><th>状态</th><th>更新时间</th><th>API同步时间</th><th>编辑</th><th>设置</th><th>测试</th></tr>
+      <tr><td>3</td><td>CJ 主账号<br><span class="muted">CID 12345</span></td><td><code>CJ联盟</code></td><td><span class="tag t-derive">成功</span>（悬浮看 HTTP code / 条数 / 时间）</td><td>2026-11-25 10:12</td><td>2026-11-25 10:30</td><td><span class="btn">编辑</span></td><td><span class="btn">设置</span></td><td><span class="btn">测试</span></td></tr>
+      <tr><td>2</td><td>另一广告主</td><td><code>CJ联盟</code></td><td><span class="tag t-q">失败</span>（悬浮看 HTTP 401 等明细）</td><td>2026-11-24 09:00</td><td>—</td><td><span class="btn">编辑</span></td><td><span class="btn">设置</span></td><td><span class="btn">测试</span></td></tr>
+      <tr><td colspan="9"><span class="btn btn-solid">新建 API</span> · NO. 取连接自增 id，按 id 从大到小展示；「测试」为最后一列</td></tr>
     </table>
   </div>
   <div class="ok"><b>状态口径：</b>成功 = API 请求成功且返回正确接口信息（HTTP 2xx + 合法 JSON + 含 count 字段）；失败 = 不通 / 错误码 / GraphQL 错误；未测试 = 尚未发起请求。状态值悬浮浮层展示 HTTP code、返回条数、测试时间与脱敏错误摘要。</div>
+  <div class="note"><b>V4.133 两列时间口径（互不污染）：</b><br>
+    · <b>更新时间</b>（<code>config_updated_at</code>）= 新建连接时间 + 最近一次修改配置（名称 / CID / Endpoint / Token / 状态 / 定期任务设置）的时间；<b>测试与拉取不刷新此列</b>。<br>
+    · <b>API同步时间</b>（<code>last_sync_at</code>）= 最近一次真实接口请求时间，<b>测试连接与拉取明细都会刷新</b>（无论成功失败），从未请求显示「—」。<br>
+    两列由 <code>ensure_schema()</code> 幂等补列、<code>V4.133.1</code> 版本迁移为历史连接回填（更新时间取 <code>updated_at</code>，同步时间取 <code>last_test_at</code>）；不复用 <code>updated_at</code>（会被测试的 onupdate 刷新）与 <code>last_test_at</code>（拉取不写），确保语义精确。</div>
 
-  <h3>5.2 新建弹窗与设置弹窗（V4.125 确认）</h3>
+  <h3>5.2 新建 / 设置 / 编辑弹窗（V4.125 确认，V4.133 增编辑）</h3>
   <div class="two">
     <div class="wire">
       <h5>新建 API 对接 · 仅一个「保存」按钮</h5>
@@ -248,6 +252,15 @@
       <div class="field"><span>首次回填</span><input value="90 天（1–365）"></div>
       <p><span class="btn">立即拉取明细</span> <span class="btn">重新测试</span> <span class="btn btn-solid">保存设置</span> <span class="btn">删除</span></p>
       <p class="muted" style="margin:8px 0 0">V4.132 新增「立即拉取明细」：按测试抽屉里的查询窗口真实拉取 PublisherCommission，按 <code>api_field_map</code> 幂等落库，并回显新增 / 更新 / 未变条数与未登记字段告警；<code>GET /advertiser-data/fetch-runs</code> 可查运行记录。自动调度仍按规划在 P2 接入，不提前承诺已运行。</p>
+    </div>
+    <div class="wire">
+      <h5>编辑 API 对接 · V4.133（列表「编辑」按钮）</h5>
+      <div class="field"><span>广告主 *</span><input value="CJ 主账号"></div>
+      <div class="field"><span>发布者 CID *</span><input value="12345"></div>
+      <div class="field"><span>Endpoint</span><input value="留空用模板默认"></div>
+      <div class="field"><span>API Token</span><input type="password" value="留空表示不修改"></div>
+      <p><span class="btn">取消</span> <span class="btn btn-solid">保存修改</span></p>
+      <p class="muted" style="margin:8px 0 0">复用与「新建」完全一致的 <code>ad-modal</code> / <code>ad-form-grid</code> 弹窗组件与控件样式，不新增组件。保存调用 <code>PATCH /advertiser-data/connections/{id}</code> 修改名称 / CID / Endpoint / Token（留空不修改）；模板与定期任务仍走「设置」弹窗。保存成功即刷新列表「更新时间」，接口请求时间单独计入「API同步时间」。</p>
     </div>
   </div>
 

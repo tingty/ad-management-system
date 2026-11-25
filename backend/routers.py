@@ -4195,6 +4195,9 @@ def _connection_out(r: ApiConnection) -> dict:
         "last_test_response_text": r.last_test_response_text or "",
         "schedule": _normalize_schedule(r.schedule_json),
         "created_at": r.created_at.isoformat() if r.created_at else None,
+        # V4.133：更新时间（新建/配置变更）与 API 同步时间（最近一次请求），互不污染
+        "config_updated_at": r.config_updated_at.isoformat() if r.config_updated_at else None,
+        "last_sync_at": r.last_sync_at.isoformat() if r.last_sync_at else None,
     }
 
 
@@ -4238,6 +4241,8 @@ def _create_connection_row(db: Session, user: User, body: ApiConnectionIn) -> Ap
         token_enc=advertiser_api.encrypt_token(token),
         token_mask=advertiser_api.mask_token(token)[:64],
         status="draft",
+        # V4.133：新建即视为一次配置更新；尚未发起请求，同步时间留空
+        config_updated_at=datetime.utcnow(),
     )
     db.add(r); db.commit(); db.refresh(r)
     return r
@@ -4247,6 +4252,8 @@ def _record_test_result(r: ApiConnection, result: dict) -> None:
     """把一次真实测试的结果回写到连接，状态明细包含 HTTP code 与返回条数。"""
     r.last_test_ok = bool(result.get("ok"))
     r.last_test_at = datetime.utcnow()
+    # V4.133：一次真实请求即一次同步（无论成功失败），只刷新同步时间
+    r.last_sync_at = r.last_test_at
     r.last_test_error = (result.get("error") or "")[:500]
     r.last_test_http_code = int(result.get("http_code") or 0) or None
     # V4.131：列表展示的是 PublisherCommission 明细条数，不再回退到包装层聚合 count
@@ -4370,6 +4377,11 @@ async def api_advertiser_connection_update(cid: int, body: ApiConnectionUpdate,
         r.status = body.status
     if body.schedule is not None:
         r.schedule_json = _normalize_schedule(body.schedule)
+    # V4.133：仅当本次确实改了配置（名称/CID/Endpoint/Token/状态/任务设置）才刷新更新时间。
+    # 编辑配置与「重新测试/拉取」是两个独立动作，测试回写只动 last_sync_at，不动更新时间。
+    if any(v is not None for v in (
+            body.name, body.cid, body.endpoint, body.token, body.status, body.schedule)):
+        r.config_updated_at = datetime.utcnow()
     db.commit(); db.refresh(r)
     return _connection_out(r)
 
@@ -4437,6 +4449,8 @@ async def api_advertiser_fetch(cid: int, body: ApiTestIn, db: Session = Depends(
         window_to=datetime.strptime(before, "%Y-%m-%dT%H:%M:%SZ"),
         started_at=datetime.utcnow())
     db.add(run)
+    # V4.133：拉取也是一次真实 API 请求，刷新同步时间（不影响配置更新时间）
+    r.last_sync_at = datetime.utcnow()
     db.commit()
     db.refresh(run)
 

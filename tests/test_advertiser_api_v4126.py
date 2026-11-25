@@ -66,9 +66,13 @@ class TestModalFormControls(unittest.TestCase):
 class TestPageStructureUnchanged(unittest.TestCase):
     def test_two_modals_still_render(self):
         page = _read("frontend/src/pages/AdvertiserApi.tsx")
-        self.assertEqual(page.count('<div className="ad-modal"'), 2)
-        self.assertEqual(page.count('className="ad-form-grid"'), 2)
-        self.assertEqual(page.count('className="ad-modal-foot"'), 2)
+        # V4.133 新增「编辑」弹窗（复用相同组件），由 2 个变为 3 个；新建/设置两个仍保留
+        self.assertEqual(page.count('<div className="ad-modal"'), 3)
+        self.assertEqual(page.count('className="ad-form-grid"'), 3)
+        self.assertEqual(page.count('className="ad-modal-foot"'), 3)
+        self.assertIn('<h3>新建 API 对接</h3>', page)
+        self.assertIn('<h3>设置 · 定期任务</h3>', page)
+        self.assertIn('<h3>编辑 API 对接</h3>', page)
 
 
 if __name__ == "__main__":

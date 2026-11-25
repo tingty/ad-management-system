@@ -924,6 +924,9 @@ class ApiConnectionOut(BaseModel):
     last_test_response_text: str = ""
     schedule: dict = {}
     created_at: Optional[str] = None
+    # V4.133：列表时间列（配置更新时间 / 最近一次请求时间），与 onupdate 语义分离
+    config_updated_at: Optional[str] = None
+    last_sync_at: Optional[str] = None
 
 
 class ApiTestIn(BaseModel):

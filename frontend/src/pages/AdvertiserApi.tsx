@@ -1,5 +1,7 @@
 /**
- * V4.128 / V4.129 / V4.131 / V4.132 · 广告主数据 / API对接。
+ * V4.128 / V4.129 / V4.131 / V4.132 / V4.133 · 广告主数据 / API对接。
+ * V4.133：列表新增「更新时间」（新建/配置变更）与「API同步时间」（最近一次请求）两列，
+ * 并新增「编辑」按钮——复用新建弹窗的 ad-modal/ad-form-grid 组件，PATCH 修改已有配置。
  * V4.132：设置弹窗新增「立即拉取明细」，按当前查询窗口拉取 PublisherCommission 并幂等落库；
  * V4.131：测试窗口默认近 7 天且可调整（CJ 明细延迟 1–3 天）；0 条明细不再回退显示聚合
  * count；抽屉显示真实查询窗口并给出空窗口原因，明细样例上限由 3 条提升到 10 条。
@@ -34,6 +36,14 @@ function daysAgo(n: number): string {
   const d = new Date()
   d.setDate(d.getDate() - n)
   return d.toISOString().slice(0, 10)
+}
+
+// V4.133：列表时间列格式化，空值显示「—」，避免 invalid date
+function fmtTime(value: string | null | undefined): string {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString('zh-CN', { hour12: false })
 }
 
 function windowPayload(since: string, before: string) {
@@ -89,6 +99,10 @@ export default function AdvertiserApi() {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ name: '', template_code: 'cj_publisher_commissions', token: '', cid: '', endpoint: '' })
   const [saving, setSaving] = useState(false)
+  // V4.133：编辑弹窗（复用新建弹窗组件样式），token 留空表示不修改
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editForm, setEditForm] = useState({ name: '', cid: '', endpoint: '', token: '' })
+  const [savingEdit, setSavingEdit] = useState(false)
 
   const [settingsId, setSettingsId] = useState<number | null>(null)
   const [settings, setSettings] = useState<ApiSchedule>(DEFAULT_SCHEDULE)
@@ -116,7 +130,7 @@ export default function AdvertiserApi() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      setShowCreate(false); setSettingsId(null); setHover(null); setTestDrawer(null)
+      setShowCreate(false); setSettingsId(null); setEditingId(null); setHover(null); setTestDrawer(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -143,6 +157,31 @@ export default function AdvertiserApi() {
       await load()
     } catch (e: any) { setMsg({ kind: 'err', text: e?.message || '保存失败' }) }
     finally { setSaving(false) }
+  }
+
+  // V4.133：编辑已有配置，弹窗预填当前值；Token 不回显，留空表示沿用原密钥
+  function openEdit(c: ApiConnection) {
+    setMsg(null); setHover(null)
+    setEditingId(c.id)
+    setEditForm({ name: c.name, cid: c.cid, endpoint: c.endpoint, token: '' })
+  }
+
+  async function saveEdit() {
+    if (editingId === null) return
+    if (!editForm.name.trim()) { setMsg({ kind: 'err', text: '请填写广告主名称' }); return }
+    if (!editForm.cid.trim()) { setMsg({ kind: 'err', text: '请填写发布者 CID' }); return }
+    setSavingEdit(true); setMsg(null)
+    try {
+      const payload: Record<string, string> = {
+        name: editForm.name.trim(), cid: editForm.cid.trim(), endpoint: editForm.endpoint.trim(),
+      }
+      if (editForm.token.trim()) payload.token = editForm.token.trim()
+      await advertiserApi.updateConnection(editingId, payload)
+      setEditingId(null)
+      setMsg({ kind: 'ok', text: '配置已更新，更新时间已刷新' })
+      await load()
+    } catch (e: any) { setMsg({ kind: 'err', text: e?.message || '保存修改失败' }) }
+    finally { setSavingEdit(false) }
   }
 
   function openSettings(c: ApiConnection) {
@@ -244,7 +283,11 @@ export default function AdvertiserApi() {
       ) : (
         <div className="card ad-table-wrap">
           <table className="ad-table">
-            <thead><tr><th>NO.</th><th>广告主</th><th>模板</th><th>状态</th><th>设置</th><th>测试</th></tr></thead>
+            <thead><tr>
+              <th>NO.</th><th>广告主</th><th>模板</th><th>状态</th>
+              <th>更新时间</th><th>API同步时间</th>
+              <th>编辑</th><th>设置</th><th>测试</th>
+            </tr></thead>
             <tbody>
               {connections.map(c => (
                 <tr key={c.id}>
@@ -267,6 +310,9 @@ export default function AdvertiserApi() {
                       onBlur={() => setHover(null)}
                     >{statusLabel(c)}</span>
                   </td>
+                  <td className="ad-time-cell">{fmtTime(c.config_updated_at || c.created_at)}</td>
+                  <td className="ad-time-cell">{fmtTime(c.last_sync_at || c.last_test_at)}</td>
+                  <td><button className="btn sm" onClick={() => openEdit(c)}>编辑</button></td>
                   <td><button className="btn sm" onClick={() => openSettings(c)}>设置</button></td>
                   <td>
                     <button
@@ -488,6 +534,43 @@ export default function AdvertiserApi() {
             <div className="ad-modal-foot">
               <button className="btn primary" disabled={saving} onClick={() => void saveNew()}>
                 {saving ? '保存并测试中…' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingId !== null && (
+        <div className="ad-modal-mask" onMouseDown={() => setEditingId(null)}>
+          <div className="ad-modal" onMouseDown={e => e.stopPropagation()}>
+            <div className="ad-modal-head">
+              <h3>编辑 API 对接</h3>
+              <button className="ad-modal-x" aria-label="关闭" onClick={() => setEditingId(null)}>×</button>
+            </div>
+            <div className="ad-form-grid">
+              <label>广告主 *
+                <input value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
+                       placeholder="例如：CJ 主账号" />
+              </label>
+              <label>发布者 CID *
+                <input value={editForm.cid} onChange={e => setEditForm(f => ({ ...f, cid: e.target.value }))}
+                       placeholder="发布者公司 ID，不是登录邮箱" />
+              </label>
+              <label className="span2">Endpoint（留空用模板默认）
+                <input value={editForm.endpoint} onChange={e => setEditForm(f => ({ ...f, endpoint: e.target.value }))}
+                       placeholder="https://commissions.api.cj.com/query" />
+              </label>
+              <label className="span2">API Token（留空表示不修改）
+                <input type="password" value={editForm.token}
+                       onChange={e => setEditForm(f => ({ ...f, token: e.target.value }))}
+                       placeholder="如需更换 Token 才填写" autoComplete="off" />
+              </label>
+            </div>
+            <p className="ad-modal-hint muted">模板与任务设置请在「设置」弹窗中调整；保存后列表「更新时间」将刷新，接口请求时间单独计入「API同步时间」。</p>
+            <div className="ad-modal-foot">
+              <button className="btn" onClick={() => setEditingId(null)}>取消</button>
+              <button className="btn primary" disabled={savingEdit} onClick={() => void saveEdit()}>
+                {savingEdit ? '保存中…' : '保存修改'}
               </button>
             </div>
           </div>

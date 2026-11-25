@@ -80,7 +80,11 @@ class TestFrontendRefactor(unittest.TestCase):
         self.assertIn('CJ联盟', self.page)
 
     def test_list_columns_exactly_as_requested(self):
-        self.assertIn('<th>NO.</th><th>广告主</th><th>模板</th><th>状态</th><th>设置</th>', self.page)
+        # V4.133：列表在「状态」后新增更新时间/API同步时间/编辑列，逐列校验以兼容布局演进
+        for col in ('<th>NO.</th>', '<th>广告主</th>', '<th>模板</th>', '<th>状态</th>',
+                    '<th>更新时间</th>', '<th>API同步时间</th>', '<th>编辑</th>',
+                    '<th>设置</th>', '<th>测试</th>'):
+            self.assertIn(col, self.page)
         self.assertIn('className="ad-no">{c.id}', self.page)
         self.assertIn('className="ad-status', self.page)
         self.assertIn('onClick={() => openSettings(c)}>设置</button>', self.page)

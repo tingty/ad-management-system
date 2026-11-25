@@ -247,10 +247,32 @@ def _migrate_v4130_1(conn) -> str:
     return f"CJ 字段映射登记新增 {added} 行（含 fact / item / ext / __skip__）"
 
 
+def _migrate_v4133_1(conn) -> str:
+    """V4.133.1：新增列表时间列 config_updated_at / last_sync_at 并回填历史值。
+
+    列由 ensure_schema 的 ADD COLUMN 补齐；这里核对存在性并为历史连接回填：
+    配置更新时间取 updated_at（旧库里它随配置变更刷新，且未被本版回写前是唯一可用值），
+    API 同步时间取 last_test_at（旧库只有测试才算请求，拉取是 V4.132 才新增的）。
+    """
+    cols = {c["name"] for c in inspect(conn).get_columns("api_connection")}
+    need = {"config_updated_at", "last_sync_at"}
+    missing = need - cols
+    if missing:
+        raise RuntimeError("api_connection 缺少列表时间列：" + ", ".join(sorted(missing)))
+    conn.execute(text("""UPDATE api_connection
+                         SET config_updated_at = COALESCE(updated_at, created_at)
+                         WHERE config_updated_at IS NULL"""))
+    conn.execute(text("""UPDATE api_connection
+                         SET last_sync_at = last_test_at
+                         WHERE last_sync_at IS NULL AND last_test_at IS NOT NULL"""))
+    return "列表时间列已就绪：config_updated_at / last_sync_at（历史值已回填）"
+
+
 MIGRATIONS = [
     ("V4.127.1", "advertiser_unified_schema", _migrate_v4127_1),
     ("V4.128.1", "advertiser_test_detail", _migrate_v4128_1),
     ("V4.130.1", "advertiser_field_map_seed", _migrate_v4130_1),
+    ("V4.133.1", "advertiser_list_timestamps", _migrate_v4133_1),
 ]
 
 

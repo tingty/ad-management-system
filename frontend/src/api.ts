@@ -1494,6 +1494,9 @@ export interface ApiConnection {
   last_test_response_text: string
   schedule: ApiSchedule
   created_at: string | null
+  // V4.133：更新时间（新建/配置变更）与 API 同步时间（最近一次请求）
+  config_updated_at: string | null
+  last_sync_at: string | null
 }
 export interface ApiTestResult {
   ok: boolean

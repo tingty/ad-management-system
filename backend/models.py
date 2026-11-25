@@ -426,6 +426,11 @@ class ApiConnection(Base):
     last_test_response_text = Column(Text, nullable=True)
     # V4.125：定期任务设置（频率 / 回溯窗口 / 首次回填 / 启停），调度执行仍在 P2 接入
     schedule_json = Column(JSON, nullable=True)
+    # V4.133：列表时间列，语义与 onupdate 分离，避免测试/拉取回写污染
+    # config_updated_at = 新建 + 配置变更（名称/CID/Endpoint/Token/状态/任务设置）的最近时间
+    # last_sync_at      = 最近一次真实接口请求（测试连接或拉取明细）的时间
+    config_updated_at = Column(DateTime, nullable=True)
+    last_sync_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 

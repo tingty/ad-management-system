@@ -2543,6 +2543,8 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .ad-page-head { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin: 0 0 12px; }
 .ad-page-title { font-size: 18px; margin: 0; font-weight: 650; color: var(--text); }
 .ad-no { width: 52px; font-variant-numeric: tabular-nums; color: var(--muted, #6b7280); }
+/* V4.133：列表时间列（更新时间 / API同步时间），紧凑且不换行 */
+.ad-time-cell { white-space: nowrap; font-size: 11.5px; color: var(--muted, #6b7280); font-variant-numeric: tabular-nums; }
 .ad-status { display: inline-flex; align-items: center; justify-content: center; min-width: 52px; height: 24px;
   padding: 0 9px; border-radius: 999px; font-size: 12px; cursor: help; outline: none; }
 .ad-status.ok { background: rgba(22,163,74,.12); color: #15803d; }
