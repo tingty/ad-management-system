@@ -482,7 +482,7 @@ advertiser_ingest.replay_mapping(...)
   <div class="phase"><b>P1 · 统一表与落库</b><br><code>ensure_schema()</code> 建表（含 V3.1 的 20 业务字段）、幂等去重、按映射到 20 字段、修正合并、取消单识别（按官方枚举更正）、订单视图；历史回填与限流重试。<span class="tag t-derive">V4.127 已完成 P1-A</span>：全部表、订单视图 <code>v_api_order_final</code>、20 行展示名种子、版本化迁移（<code>schema_migrations</code> + <code>rename_column()</code> + <code>scripts/migrate_column.py</code> 自动备份）已落地。<span class="tag t-derive">V4.132 已完成 P1-B</span>：按 <code>api_field_map</code> 分发落库、覆盖检查告警、原始层 / 事实表 / items / ext 幂等写入、订单净额归零重算、<code>replay_mapping()</code> 与运行记录；V4.134 已完成历史批量回填（P1-C）与自动调度（P2）。</div>
   <div class="phase"><b>P2 · 定期任务与可观测 <span class="tag t-derive">V4.134 已完成</span></b><br>每日调度、7 天重叠窗口、运行记录、失败留痕、手动补拉；首次启用自动回填历史，SystemState 水位去重，全局开关可停。</div>
   <div class="phase done"><b>P3 · 报表界面（V4.135 已完成）</b><br>「广告主报表」页：概览 KPI、趋势、维度排行、明细与下钻已全部实现，表头读 <code>api_field_label</code>，纯查询层零表结构变更。</div>
-  <div class="phase"><b>P4 · 第二模板验证通用性</b><br>接入第二个渠道模板，验证"加模板 + 加映射不改代码"的设计目标。</div>
+  <div class="phase done"><b>P4 · 第二模板验证通用性（V4.138 已完成）</b><br>新增协议适配层 <code>advertiser_protocol.py</code>，把请求构造 / 认证 / 响应解析 / 游标 / 幂等键 / 均价源路径全部下沉到模板 <code>protocol</code> 配置；新增第二模板 Awin（REST GET、Token 走 query、CID 走 URL path、顶层数组、幂等键 id）+ 字段映射 seed（V4.138.1 迁移）。业务链路（ingest / scheduler / reports）零硬编码、零改动：新增渠道 = 加一条模板配置 + 一份映射 seed。端到端已验证 Awin 样本明细落库、排重（unchanged）、模板隔离与报表可读。</div>
 
   <h3>9.2 开发任务清单（三条保障为硬性验收项）</h3>
   <table>

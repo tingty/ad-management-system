@@ -165,6 +165,71 @@ CJ_FIELD_MAP_SEED = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# V4.138 / P4：第二渠道模板 Awin 的字段映射 seed。
+# 结构来源：Awin Publisher API /publishers/{id}/transactions/ 官方响应字段。
+# 目的：验证"加模板 + 加映射不改代码"——映射 target 复用统一 20 列，业务代码零改动。
+# ---------------------------------------------------------------------------
+AWIN_TEMPLATE_ID = "awin_publisher_transactions"
+AWIN_FIELD_MAP_SEED = [
+    # ---- 语义源路径（幂等键 / 订单键 / 销售金额），供 ingest 反查 ----
+    ("id",                        "source_record.external_id", "direct", "Awin 交易 ID / 幂等键"),
+    ("id",                        "fact.commission_id",        "direct", "ID（复用列）"),
+    ("orderRef",                  "fact.order_id",             "direct", "订单号 / 合并键"),
+    ("saleAmount.amount",         "fact.sale_amount_usd",      "decimal", "销售金额（Awin 返回货币见 ext）"),
+    # ---- 统一 20 列映射 ----
+    ("campaign",                  "fact.advertiser_name",      "direct", "广告主名称（Awin 活动名）"),
+    ("campaign",                  "fact.campaign_name",        "direct", "品牌/活动名同取 campaign"),
+    ("transactionDate",           "fact.event_date",           "utc_date", "事件日期"),
+    ("commissionStatus",          "fact.action_status",        "enum_map", "订单状态（pending/approved/declined/deleted）"),
+    ("commissionAmount.amount",   "fact.commission_amount_usd", "decimal", "发布者佣金金额"),
+    ("__derived__is_void",        "fact.is_void",              "derived", "按订单合并净额归零判定取消单"),
+    ("clickDate",                 "fact.click_date",           "utc_datetime", "点击日期"),
+    ("customerCountry",           "fact.country",              "direct", "交易国家"),
+    ("voucherCode",               "fact.coupon",               "direct", "优惠码"),
+    ("type",                      "ext.transaction_type",      "direct", "交易类型（Sale/Lead/Bonus 等）"),
+    ("advertiserId",              "ext.advertiser_id",         "direct", "广告主 CID"),
+    ("publisherId",               "ext.publisher_id",          "direct", "发布者 ID"),
+    ("saleAmount.currency",       "ext.sale_currency",         "direct", "销售币种"),
+    ("commissionAmount.currency", "ext.commission_currency",   "direct", "佣金币种"),
+    ("clickRefs.clickRef",        "ext.click_ref",             "direct", "广告主点击引用"),
+    ("orderRef",                  "ext.order_ref",             "direct", "订单引用"),
+    ("amended",                   "ext.amended",               "bool", "是否修正交易"),
+    ("declineReason",             "ext.decline_reason",        "direct", "拒绝原因"),
+    ("url",                       "__skip__",                  "skip", "点击 URL，本轮不用"),
+    ("customParameters",          "__skip__",                  "skip", "自定义参数，落原始层保留"),
+    ("transactionParts",          "__skip__",                  "skip", "佣金组拆分，落原始层保留"),
+    ("basketProducts",            "__skip__",                  "skip", "商品篮子，落原始层保留"),
+]
+
+
+def _seed_field_map(conn, template_id: str, seed: list) -> int:
+    """幂等写入某模板的字段映射 seed（已存在不覆盖）。"""
+    added = 0
+    for source, target, transform, note in seed:
+        exists = conn.execute(
+            text("""SELECT 1 FROM api_field_map
+                    WHERE template_id=:t AND source_path=:s AND target_field=:g AND version=1"""),
+            {"t": template_id, "s": source, "g": target},
+        ).first()
+        if exists:
+            continue
+        conn.execute(
+            text("""INSERT INTO api_field_map
+                    (template_id, source_path, target_field, transform, version, enabled, note)
+                    VALUES (:t, :s, :g, :r, 1, 1, :n)"""),
+            {"t": template_id, "s": source, "g": target, "r": transform, "n": note},
+        )
+        added += 1
+    return added
+
+
+def _migrate_v4138_1(conn) -> str:
+    """V4.138.1：登记第二渠道 Awin 字段映射（不改任何表结构）。"""
+    added = _seed_field_map(conn, AWIN_TEMPLATE_ID, AWIN_FIELD_MAP_SEED)
+    return f"Awin 字段映射登记新增 {added} 行（验证加模板+映射不改代码）"
+
+
 def _current_order_view_sql(conn) -> str:
     """优先用库中持久化的视图定义（改名后已同步），否则用代码内默认定义。"""
     row = conn.execute(
@@ -284,6 +349,7 @@ MIGRATIONS = [
     ("V4.130.1", "advertiser_field_map_seed", _migrate_v4130_1),
     ("V4.133.1", "advertiser_list_timestamps", _migrate_v4133_1),
     ("V4.134.1", "advertiser_fetch_run_mode", _migrate_v4134_1),
+    ("V4.138.1", "advertiser_awin_field_map", _migrate_v4138_1),
 ]
 
 

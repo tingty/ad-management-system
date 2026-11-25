@@ -7,7 +7,7 @@
 2. 按映射分发：source_path → fact.* / item.* / ext.* / __skip__，transform 统一转换。
 3. 幂等：source_record 用 (template_id, connection_id, external_id) 去重；fact 用
    (template_id, external_id) 去重；重跑/修正单覆盖更新并重建 items / ext 子表。
-4. 派生：主表均价 = saleAmountUsd / items[].quantity 汇总；is_void 按订单净额归零重算。
+4. 派生：主表均价 = 销售金额 / 商品数量汇总（源路径由映射反查）；is_void 按订单净额归零重算。
 5. replay_mapping()：改映射后从原始层重放，支持 dry_run 预览，幂等不重复插行。
 
 不做：调度（P2）、报表数据接口（P3）、改数据库表结构与映射 seed（V4.130 已固化）。
@@ -25,6 +25,26 @@ from sqlalchemy.orm import Session
 
 from migrations import CJ_TEMPLATE_ID
 from models import ApiFactExt, ApiFactItem, ApiSourceRecord, ApiUnifiedFact
+
+# V4.138 / P4：语义源路径从映射配置反查，避免把 CJ 字段名写死在业务代码。
+# 目标字段 → 缺省源路径（兼容未登记该目标的旧模板）
+_SEMANTIC_DEFAULTS = {
+    "source_record.external_id": "commissionId",
+    "fact.order_id": "orderId",
+    "fact.sale_amount_usd": "saleAmountUsd",
+    "item.quantity": "items[].quantity",
+}
+
+
+def semantic_source(db: Session, template_id: str, target: str) -> str:
+    """从 api_field_map 反查某目标字段的上游源路径；未登记则回退缺省。"""
+    row = db.execute(
+        text("""SELECT source_path FROM api_field_map
+                WHERE template_id=:t AND target_field=:g AND enabled=1
+                ORDER BY id LIMIT 1"""),
+        {"t": template_id, "g": target},
+    ).first()
+    return (row[0] if row else None) or _SEMANTIC_DEFAULTS.get(target, "")
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +124,8 @@ def check_coverage(record: dict, db: Session,
 # ---------------------------------------------------------------------------
 # 按映射构造落库值
 # ---------------------------------------------------------------------------
-def _fact_values(record: dict, rows: Iterable[tuple[str, str, str]]) -> dict:
+def _fact_values(record: dict, rows: Iterable[tuple[str, str, str]], *,
+                 sale_source: str = "saleAmountUsd") -> dict:
     values: dict = {}
     rows = list(rows)
     quantities = [_convert(v, "decimal") for v in _get_path(record, "items[].quantity")]
@@ -117,7 +138,7 @@ def _fact_values(record: dict, rows: Iterable[tuple[str, str, str]]) -> dict:
         if source == "__derived__is_void":
             continue
         if column == "unit_price_usd":
-            sale = _convert(_get_path(record, "saleAmountUsd"), "decimal")
+            sale = _convert(_get_path(record, sale_source), "decimal")
             values[column] = (sale / qty_total) if sale is not None and qty_total else None
             continue
         values[column] = _convert(_get_path(record, source), transform)
@@ -152,9 +173,10 @@ def _ext_data(record: dict, rows: Iterable[tuple[str, str, str]]) -> dict:
     return data
 
 
-def _recalc_void(db: Session, records: list[dict], template_id: str) -> int:
+def _recalc_void(db: Session, records: list[dict], template_id: str, *,
+                 order_source: str = "orderId") -> int:
     """按订单重算 is_void：净销售额与净佣金同时归零视为取消单。"""
-    order_ids = {str(r.get("orderId") or "") for r in records} - {""}
+    order_ids = {str(_get_path(r, order_source) or "") for r in records} - {""}
     if not order_ids:
         return 0
     facts = db.query(ApiUnifiedFact).filter(
@@ -183,6 +205,9 @@ def ingest_records(db: Session, *, records: list[dict], connection_id: int | Non
                    template_id: str = CJ_TEMPLATE_ID, run_id: int | None = None) -> dict:
     """把 PublisherCommission 明细幂等写入原始层 / 统一事实表 / items / ext。"""
     rows = mapping_rows(db, template_id)
+    ext_source = semantic_source(db, template_id, "source_record.external_id")
+    sale_source = semantic_source(db, template_id, "fact.sale_amount_usd")
+    order_source = semantic_source(db, template_id, "fact.order_id")
     stats = {
         "fetched": len(records), "inserted": 0, "updated": 0,
         "unchanged": 0, "skipped": 0, "void_recalculated": 0, "warnings": [],
@@ -192,10 +217,10 @@ def ingest_records(db: Session, *, records: list[dict], connection_id: int | Non
             stats["skipped"] += 1
             stats["warnings"].append("非对象明细已跳过")
             continue
-        external_id = str(record.get("commissionId") or "").strip()
+        external_id = str(_get_path(record, ext_source) or "").strip()
         if not external_id:
             stats["skipped"] += 1
-            stats["warnings"].append("缺少 commissionId 的明细已跳过")
+            stats["warnings"].append(f"缺少 {ext_source} 的明细已跳过")
             continue
 
         unknown = check_coverage(record, db, template_id)
@@ -226,7 +251,7 @@ def ingest_records(db: Session, *, records: list[dict], connection_id: int | Non
             stats["unchanged"] += 1
             continue
 
-        values = _fact_values(record, rows)
+        values = _fact_values(record, rows, sale_source=sale_source)
         values.update({
             "source_record_id": source.id, "external_id": external_id,
             "template_id": template_id, "connection_id": connection_id, "run_id": run_id,
@@ -250,7 +275,7 @@ def ingest_records(db: Session, *, records: list[dict], connection_id: int | Non
             db.add(ApiFactExt(fact_id=fact.id, template_id=template_id, data_json=ext))
 
     db.flush()
-    stats["void_recalculated"] = _recalc_void(db, records, template_id)
+    stats["void_recalculated"] = _recalc_void(db, records, template_id, order_source=order_source)
     db.commit()
     return stats
 

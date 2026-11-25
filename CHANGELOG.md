@@ -2,6 +2,34 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.138 广告主数据 P4：第二模板通用性验证
+**发布日期**：2026-11-25 11:24
+**变更类型**：新增 / 优化
+**涉及模块**：广告主数据（协议适配层、第二渠道模板 Awin、字段映射 seed）、后端接口与请求落库链路、数据模型、系统版本、前端与菜单（API对接表单）、系统设置（版本化迁移）、唯一维护文档、专项测试、发版数据、新版通知、大模型配置（共享 schemas 未改语义）、素材创作平台（共享前端构建未改功能）
+**变更摘要**：按规划完成 P4，验证「加模板 + 加映射不改代码」的设计目标。审计发现原「模板」名不副实：请求构造、认证方式、响应解析、游标、幂等键、均价源路径全部硬编码 CJ。本版新增协议适配层把这些差异下沉到模板 `protocol` 配置，业务链路（落库 / 调度 / 报表）零改动；新增第二渠道模板 Awin（REST GET、Token 走 query、CID 走 URL path、顶层数组、幂等键 id）与一份字段映射 seed，端到端验证 Awin 明细可落库、排重、模板隔离、报表可读。新增渠道今后只需加一条模板配置 + 一份映射 seed，不再改任何业务代码。
+**更新要点**
+- 【新增】`backend/advertiser_protocol.py`：协议适配层，`build_request` / `parse_response` / `external_id_of` 按模板配置分派 graphql 与 rest 两种风格；支持 bearer / query_param 认证、body / path 型 CID、可配响应路径、游标结束标志与幂等键路径。未知模板回退 CJ 缺省，V4.124–V4.137 行为零变化。
+- 【新增】`advertiser_api.PRESET_TEMPLATES` 新增第二模板 `awin_publisher_transactions`（Awin 联盟），结构依据 Awin Publisher API 官方文档（/publishers/{id}/transactions/、accessToken query、顶层交易数组、id/orderRef/saleAmount.amount/commissionAmount.amount 等）；CJ 模板补充显式 protocol 声明（值与历史硬编码一致）。
+- 【优化】`advertiser_api.test_connection()` 改为消费协议层构造请求与解析响应，返回契约（envelope）与 CJ 请求形态（POST + Bearer + GraphQL）完全不变；REST 请求 URL 中的 Token 在回显前统一脱敏，不写日志、不回显。
+- 【优化】`advertiser_ingest.py` 幂等键 / 订单键 / 销售金额源路径由 `semantic_source()` 从 api_field_map 反查，不再把 CJ 字段名写死；落库、排重、is_void 重算逻辑对多模板通用。
+- 【新增】`migrations.py` 增加 `V4.138.1` 迁移登记 Awin 字段映射（复用统一 20 列，零表结构变更）；`_seed_field_map()` 幂等播种。
+- 【优化】前端 API对接新建弹窗的 CID 标签与 Endpoint 默认提示改为读模板 `required_fields` / `default_endpoint`，第二模板打开即显示正确字段名；列表、测试抽屉、编辑弹窗布局不变。
+- 【新增】`tests/test_advertiser_protocol_v4138.py`：18 项覆盖两模板协议分派、请求/响应契约、Token 脱敏、幂等键反查、落库排重、模板隔离、报表可读与「业务代码无渠道硬编码」静态契约；并更新 V4.127 旧断言以兼容多模板映射种子。
+**本次优化与更改的功能 / 模块**
+- 【优化】广告主数据 · API对接：模板列表新增「Awin联盟」；新建弹窗 CID 标签与 Endpoint 默认提示随模板配置变化。
+- 【新增】广告主数据 · 后端协议层：`advertiser_protocol.py` 将请求 / 认证 / 响应解析 / 幂等键全部按模板协议配置分派。
+- 【优化】广告主数据 · 请求与落库：`test_connection` 与 `ingest_records` 改为配置驱动，Token 回显脱敏，幂等键 / 订单键 / 金额源路径从映射反查。
+- 【新增】数据模型与版本化迁移：`V4.138.1` 映射种子，仅数据行、无表结构变更。
+- 【优化】唯一维护文档、专项测试、发版数据：同步 P4 完成状态与验证证据。
+**影响范围**
+- 正向：新增渠道模板不再改业务代码，验证设计目标达成；CJ 全链路行为与既有契约保持不变。
+- 边界：Awin 仅为模板与协议通用性验证，未配置真实 Access Token / CID，未对 Awin 发起真实付费请求；真实接入需在界面新建连接并保存凭据后触发测试与拉取。
+- 回滚：本版不改任何表结构（仅 V4.138.1 新增映射行）；回滚到 V4.137 只需移除协议层与第二模板/映射，历史事实表数据完全兼容。
+**验证**
+- 广告主 14 个专项 162 passed（V4.138 新增 18 项）；全量隔离库 709 passed / 2 skipped / 14 subtests；`tsc --noEmit`、`vite build`、发版校验全部通过。
+- 端到端：Awin 样本明细落库 inserted=1、重复拉取 unchanged=1（排重）、CJ 事实表行数 0（隔离）、报表 KPI 净销售 55.96 / 净佣金 5.59 可读。
+- 实测取证：CJ 请求仍为 POST + `data.publisherCommissions.records` + Bearer；Awin 请求为 `GET https://api.awin.com/publishers/{cid}/transactions/` + `accessToken` query + 顶层数组解析。
+
 ## V4.137 全系统时间统一东八区北京时间
 **发布日期**：2026-11-25 11:01
 **变更类型**：修复 / 新增

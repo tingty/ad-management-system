@@ -197,7 +197,10 @@ class TestRenameColumn(_IsolatedDB):
         cols = {c["name"] for c in self.migrations.inspect(self.engine).get_columns("api_unified_fact")}
         self.assertNotIn("sale_amount_usd", cols)
         self.assertIn("net_sale_amount_usd", cols)
-        self.assertEqual(self.q("SELECT target_field FROM api_field_map")[0][0], "fact.net_sale_amount_usd")
+        # V4.138 起库中有第二模板映射，需按本测试插入的 template_id='cj' 过滤
+        renamed = self.q("SELECT target_field FROM api_field_map WHERE template_id='cj' "
+                         "AND target_field LIKE 'fact.%sale_amount_usd'")
+        self.assertEqual(renamed[0][0], "fact.net_sale_amount_usd")
         sql = self.q("SELECT sql FROM schema_view_def WHERE name=:n", {"n": "v_api_order_final"})[0][0]
         self.assertIn("net_sale_amount_usd", sql)
         self.assertNotIn("f.sale_amount_usd", sql)

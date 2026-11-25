@@ -550,13 +550,13 @@ export default function AdvertiserApi() {
                 <input type="password" value={form.token} onChange={e => setForm(f => ({ ...f, token: e.target.value }))}
                        placeholder="Bearer 后面的个人访问令牌" autoComplete="off" />
               </label>
-              <label>发布者 CID *
+              <label>{templates.find(t => t.code === form.template_code)?.required_fields?.find(f => f.key === 'cid')?.label || '发布者 ID'} *
                 <input value={form.cid} onChange={e => setForm(f => ({ ...f, cid: e.target.value }))}
-                       placeholder="发布者公司 ID，不是登录邮箱" />
+                       placeholder="模板要求的发布者 ID，不是登录邮箱" />
               </label>
               <label className="span2">Endpoint（留空用模板默认）
                 <input value={form.endpoint} onChange={e => setForm(f => ({ ...f, endpoint: e.target.value }))}
-                       placeholder="https://commissions.api.cj.com/query" />
+                       placeholder={templates.find(t => t.code === form.template_code)?.default_endpoint || '留空使用模板默认地址'} />
               </label>
             </div>
             <div className="ad-modal-foot">
