@@ -216,8 +216,15 @@ def _task_view(j: GenerationJob) -> dict:
         "aspect_ratio": req.get("aspect_ratio") or "",
         "duration_sec": req.get("duration_sec"),
         "rights_ack": bool(req.get("rights_ack")),
+        "target_spec_id": req.get("target_spec_id") or "",
         "analysis_script_id": res.get("analysis_script_id") or "",
         "analysis_cached": bool(res.get("analysis_cached")),
+        # V4.148：创作脚本/确认闸门事实，前端只展示不自行推断
+        "creation_script_id": res.get("creation_script_id") or "",
+        "creation_status": res.get("creation_status") or "",
+        "creation_cached": bool(res.get("creation_cached")),
+        "creation_idempotency_key": res.get("creation_idempotency_key") or "",
+        "creation_cost_estimate": res.get("creation_cost_estimate") or {},
         "error_message": j.error_message or "",
         "created_at": j.created_at.isoformat() if j.created_at else "",
     }

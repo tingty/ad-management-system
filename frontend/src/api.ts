@@ -1754,8 +1754,14 @@ export interface ImitateTask {
   aspect_ratio?: string
   duration_sec?: number | null
   rights_ack?: boolean
+  target_spec_id?: string
   analysis_script_id?: string
   analysis_cached?: boolean
+  creation_script_id?: string
+  creation_status?: string
+  creation_cached?: boolean
+  creation_idempotency_key?: string
+  creation_cost_estimate?: Record<string, any>
   error_message?: string
   created_at?: string
 }
@@ -1768,6 +1774,31 @@ export interface ImitateAnalysisScript {
   script_json?: Record<string, any>
   meta_json?: Record<string, any>
   created_at?: string
+}
+
+/* V4.148 · 模仿创作视频：创作脚本 C1–C8 与确认闸门 */
+export interface ImitateCreationScript {
+  script_id: string
+  job_id?: string
+  status?: string
+  script_json?: Record<string, any>
+  meta_json?: Record<string, any>
+  created_at?: string
+}
+
+export interface ImitateVideoSpec {
+  spec_id: string
+  platform: string
+  ad_product?: string
+  asset_role?: string
+  aspect_ratios?: string[]
+  sizes?: string[]
+  duration_min?: number | null
+  duration_max?: number | null
+  verification?: string
+  verification_label?: string
+  source_url?: string
+  note?: string
 }
 
 export interface ImitateSource {
@@ -1806,4 +1837,18 @@ export const imitateVideoApi = {
     { method: 'POST' }),
   analysisScript: (jobId: string) =>
     req<ImitateAnalysisScript>(`/api/imitate-video/jobs/${encodeURIComponent(jobId)}/analysis-script`),
+  videoSpecs: () => req<{ items: ImitateVideoSpec[] }>('/api/imitate-video/video-specs'),
+  createCreationScript: (jobId: string, body: {
+    target_spec_id?: string; creation_options?: Record<string, boolean>;
+  }) => req<any>(`/api/imitate-video/jobs/${encodeURIComponent(jobId)}/create-script`,
+    { method: 'POST', body: JSON.stringify(body) }),
+  creationScript: (jobId: string) =>
+    req<ImitateCreationScript>(`/api/imitate-video/jobs/${encodeURIComponent(jobId)}/creation-script`),
+  updateCreationScript: (jobId: string, scriptJson: Record<string, any>, note?: string) =>
+    req<ImitateCreationScript>(`/api/imitate-video/jobs/${encodeURIComponent(jobId)}/creation-script`, {
+      method: 'PATCH', body: JSON.stringify({ script_json: scriptJson, note: note || '' }),
+    }),
+  confirmCreation: (jobId: string, feeAck: boolean) =>
+    req<any>(`/api/imitate-video/jobs/${encodeURIComponent(jobId)}/confirm`,
+      { method: 'POST', body: JSON.stringify({ fee_ack: feeAck }) }),
 }

@@ -380,6 +380,16 @@ def _migrate_v4145_1(conn) -> str:
     return "模仿创作视频骨架标记已就绪：imitate_video_enabled / imitate_video_kinds"
 
 
+def _migrate_v4148_1(conn) -> str:
+    """V4.148.1：创作脚本与确认闸门启用标记（开关关闭即可回滚本版入口）。"""
+    if "system_state" not in set(inspect(conn).get_table_names()):
+        return "system_state 不存在，跳过创作脚本标记"
+    conn.execute(text("""INSERT OR REPLACE INTO system_state(key, value, updated_at)
+                         VALUES(:k, :v, CURRENT_TIMESTAMP)"""),
+                 {"k": "imitate_creation_enabled", "v": "1"})
+    return "模仿创作视频创作脚本标记已就绪：imitate_creation_enabled"
+
+
 def _current_order_view_sql(conn) -> str:
     """优先用库中持久化的视图定义（改名后已同步），否则用代码内默认定义。"""
     row = conn.execute(
@@ -503,6 +513,7 @@ MIGRATIONS = [
     ("V4.143.1", "advertiser_partnerstack_field_map", _migrate_v4143_1),
     ("V4.144.2", "advertiser_partnerstack_template_id", _migrate_v4144_2),
     ("V4.145.1", "imitate_video_skeleton", _migrate_v4145_1),
+    ("V4.148.1", "imitate_creation_script", _migrate_v4148_1),
 ]
 
 

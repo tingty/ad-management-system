@@ -52,6 +52,10 @@ NEEDS_ATTENTION_CODES = {"POLL_TIMEOUT", "POLL_UNREACHABLE", "DOWNLOAD_FAILED",
                          "RATE_LIMITED", "PROVIDER_ERROR", "STORAGE_FAILED", "SUBMIT_UNKNOWN"}
 
 STAGE_LABEL = {
+    # V4.148 · 模仿创作视频：创作脚本与确认闸门（均未进入付费提交）
+    "creation_pending": "创作脚本生成中",
+    "creation_unavailable": "创作脚本不可用",
+    "creation_confirmed": "已确认待生成",
     "submitting": "提交中",
     "provider_pending": "模型生成中",
     "downloading": "下载校验中",
@@ -647,7 +651,37 @@ async def _drive(db: Session, job: GenerationJob) -> None:
             job.error_code, job.error_stage = "ANALYSIS_UNAVAILABLE", "analysis"
             job.error_message = str(result.get("reason") or "分析不可用")[:500]
             job.error_action = "请先在「系统设置 → 大模型配置」完成 analysis 用途测试并通过后重试"
-        job.next_poll_at = None   # 停在本阶段，禁止空转轮询；V4.148 创作阶段再推进
+        job.next_poll_at = None   # 停在本阶段，禁止空转轮询；由用户触发 V4.148 创作阶段
+        job.updated_at = _now()
+        db.commit()
+        return
+
+    # V4.148 · 模仿创作视频：创作脚本 C1–C8（统一文本模型，拒绝 Mock/Fallback）。
+    # 完成后停在 awaiting_confirm 等用户闸门；确认后也只到 creation_confirmed，
+    # 绝不在此进入 _provider / submit_job（V4.149 才接逐镜生成）。
+    if (job.kind or "") == "imitate_video" and stage in ("creation_pending",):
+        try:
+            from imitate_creation_script import generate_and_store
+            result = await generate_and_store(db, job)
+        except Exception as e:
+            _fail(db, job, VideoPipelineError(
+                "CREATION_ERROR", "创作脚本阶段异常：" + type(e).__name__ + ": " + str(e)[:120],
+                stage="creation"))
+            return
+        if result.get("status") == "ok":
+            job.stage, job.status = "awaiting_confirm", "queued"
+            job.progress = 60
+            job.result_json = {**(job.result_json or {}),
+                               "creation_script_id": result.get("script_id"),
+                               "creation_status": "ready",
+                               "creation_cached": bool(result.get("cached"))}
+            job.error_code = job.error_message = None
+        else:
+            job.stage, job.status = "creation_unavailable", "needs_attention"
+            job.error_code, job.error_stage = "CREATION_UNAVAILABLE", "creation"
+            job.error_message = str(result.get("reason") or "创作脚本不可用")[:500]
+            job.error_action = "请在「系统设置 → 大模型配置」测试 copy 用途（未配置时可复用已通过的 analysis）后重试"
+        job.next_poll_at = None   # 本版没有后续自动阶段，禁止空转
         job.updated_at = _now()
         db.commit()
         return

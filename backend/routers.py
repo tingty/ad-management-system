@@ -4893,3 +4893,179 @@ async def api_imitate_analysis_script(job_id: str,
     if not row:
         raise HTTPException(404, "分析脚本不存在或无权访问")
     return row
+
+
+# ============================================================
+# V4.148 · 模仿创作视频：创作脚本 C1–C8 + 确认闸门（不提交付费生成）
+# ============================================================
+def _imitate_creation_enabled(db: Session) -> bool:
+    """V4.148.1 开关：设为 0 即关闭本版入口，数据保留可回滚。"""
+    row = (db.query(SystemState)
+           .filter(SystemState.key == "imitate_creation_enabled").first())
+    return not row or str(row.value) != "0"
+
+
+@router.get("/imitate-video/video-specs")
+async def api_imitate_video_specs(db: Session = Depends(get_db),
+                                  user: User = Depends(require_roles(*CAN_EDIT))):
+    """返回规格库登记的视频投放位（前端不写死任何像素/比例/时长）。"""
+    import imitate_creation_script as ics
+    if not _imitate_creation_enabled(db):
+        raise HTTPException(409, "创作脚本模块已关闭")
+    return {"items": ics.video_spec_options()}
+
+
+@router.post("/imitate-video/jobs/{job_id}/create-script")
+async def api_imitate_create_script(job_id: str, body: dict,
+                                    db: Session = Depends(get_db),
+                                    user: User = Depends(require_roles(*CAN_EDIT))):
+    """交租约 worker 用统一文本模型生成 C1–C8；422 硬门通过后才置位。"""
+    import imitate_analysis_script as ias
+    import imitate_creation_script as ics
+    if not _imitate_creation_enabled(db):
+        raise HTTPException(409, "创作脚本模块已关闭")
+    job = imitate_video.get_task(db, user, job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在或无权访问")
+    if job.stage not in ("analysis_ready", "creation_unavailable"):
+        raise HTTPException(409, f"当前阶段（{job.stage}）不可生成创作脚本")
+    sid = str(((job.result_json or {}).get("analysis_script_id")) or "")
+    if not sid:
+        raise HTTPException(409, "请先生成分析脚本 A1–A10")
+    if not ias.get_analysis_script(db, getattr(user, "id", None), sid):
+        raise HTTPException(404, "分析脚本不存在或无权访问")
+
+    body = body or {}
+    req = dict(job.request_json or {})
+    spec_id = str(body.get("target_spec_id") or req.get("target_spec_id") or "").strip()
+    if spec_id:
+        from media_spec_library import entry_for_spec_id
+        entry = entry_for_spec_id(spec_id)
+        if not entry or entry.media != "video":
+            raise HTTPException(422, detail={"message": "目标投放规格未在视频规格库登记",
+                                             "blocked": "spec_not_registered", "spec_id": spec_id})
+        req["target_spec_id"] = entry.spec_id
+        req["target_platform"] = entry.platform
+        req["target_ad_product"] = entry.ad_product
+        req["target_aspect_ratio"] = (entry.aspect_ratios or [""])[0] or ""
+    if not req.get("target_spec_id") and not str(req.get("target_platform") or "").strip():
+        raise HTTPException(422, detail={"message": "请先选择目标投放平台与版位规格",
+                                         "blocked": "spec_required"})
+    if isinstance(body.get("creation_options"), dict):
+        req["creation_options"] = body["creation_options"]
+    job.request_json = req
+
+    missing = ics.creation_model_gate(db)
+    if missing:
+        raise HTTPException(422, detail={
+            "message": "文案模型未就绪：请先在「系统设置 → 大模型配置」测试通过（未单独配置时可复用 analysis）",
+            "models": missing, "blocked": "model_not_ready"})
+
+    from creative_tasks import _now as ct_now
+    job.stage = "creation_pending"
+    job.status = "queued"
+    job.progress = 50
+    job.next_poll_at = ct_now()
+    job.error_code = job.error_stage = job.error_message = job.error_action = None
+    job.result_json = {**(job.result_json or {}), "creation_status": "pending",
+                       "creation_cached": False}
+    job.updated_at = ct_now()
+    db.commit()
+    _audit(db, user, "imitate_creation_submit", job_id,
+           {"analysis_script_id": sid, "target_spec_id": req.get("target_spec_id") or ""})
+    return {"status": "queued", "job_id": job_id, "stage": "creation_pending"}
+
+
+@router.get("/imitate-video/jobs/{job_id}/creation-script")
+async def api_imitate_creation_script(job_id: str,
+                                      db: Session = Depends(get_db),
+                                      user: User = Depends(require_roles(*CAN_EDIT))):
+    """读取任务的创作脚本 C1–C8（owner 隔离）。未生成时返回 404。"""
+    import imitate_creation_script as ics
+    job = imitate_video.get_task(db, user, job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在或无权访问")
+    res = job.result_json or {}
+    sid = str(res.get("creation_script_id") or res.get("analysis_script_id") or "")
+    if not sid:
+        raise HTTPException(404, "创作脚本尚未生成")
+    row = ics.get_creation_script(db, getattr(user, "id", None), sid)
+    if not row:
+        raise HTTPException(404, "创作脚本不存在或无权访问")
+    return row
+
+
+@router.patch("/imitate-video/jobs/{job_id}/creation-script")
+async def api_imitate_update_creation_script(job_id: str, body: dict,
+                                             db: Session = Depends(get_db),
+                                             user: User = Depends(require_roles(*CAN_EDIT))):
+    """编辑创作脚本：逐镜改写/删镜/排序/调结构保持度后重新计价，需重新确认。"""
+    import imitate_creation_script as ics
+    if not _imitate_creation_enabled(db):
+        raise HTTPException(409, "创作脚本模块已关闭")
+    job = imitate_video.get_task(db, user, job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在或无权访问")
+    if job.stage not in ("awaiting_confirm", "creation_confirmed"):
+        raise HTTPException(409, f"当前阶段（{job.stage}）不可编辑创作脚本")
+    body = body or {}
+    out = ics.revise_creation_script(db, job, patch=body,
+                                     note=str(body.get("note") or ""))
+    if out.get("status") != "ok":
+        raise HTTPException(422, detail={"message": out.get("reason") or "脚本编辑失败",
+                                         "blocked": "creation_edit_failed"})
+    script = out.get("script_json") or {}
+    from creative_tasks import _now as ct_now
+    job.stage = "awaiting_confirm"
+    job.status = "queued"
+    job.progress = 60
+    job.next_poll_at = None
+    job.provider_config_id = job.provider_task_id = None
+    job.result_json = {**(job.result_json or {}),
+                       "creation_script_id": out.get("script_id"),
+                       "creation_status": "ready",
+                       "creation_cost_estimate": (script.get("C8") or {}).get("estimated_cost") or {}}
+    job.result_json.pop("creation_idempotency_key", None)
+    job.updated_at = ct_now()
+    db.commit()
+    _audit(db, user, "imitate_creation_edit", job_id, {"script_id": out.get("script_id")})
+    return out
+
+
+@router.post("/imitate-video/jobs/{job_id}/confirm")
+async def api_imitate_confirm_creation(job_id: str, body: dict,
+                                       db: Session = Depends(get_db),
+                                       user: User = Depends(require_roles(*CAN_EDIT))):
+    """确认闸门：冻结脚本与幂等键；本版不提交供应商、不产生视频费用。"""
+    import imitate_creation_script as ics
+    if not _imitate_creation_enabled(db):
+        raise HTTPException(409, "创作脚本模块已关闭")
+    job = imitate_video.get_task(db, user, job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在或无权访问")
+    if job.stage not in ("awaiting_confirm", "creation_confirmed"):
+        raise HTTPException(409, f"当前阶段（{job.stage}）不可确认")
+    body = body or {}
+    out = ics.confirm_creation_script(db, job, fee_ack=bool(body.get("fee_ack")))
+    if out.get("status") != "ok":
+        raise HTTPException(422, detail={
+            "message": out.get("reason") or "创作脚本未通过确认闸门",
+            "issues": out.get("issues") or [], "blocked": "creation_gate"})
+    from creative_tasks import _now as ct_now
+    job.stage = "creation_confirmed"
+    job.status = "queued"
+    job.progress = 70
+    job.next_poll_at = None
+    job.provider_config_id = job.provider_task_id = None
+    job.result_json = {**(job.result_json or {}),
+                       "creation_script_id": out.get("script_id"),
+                       "creation_status": "confirmed",
+                       "creation_idempotency_key": out.get("idempotency_key"),
+                       "creation_cost_estimate": out.get("cost_estimate") or {},
+                       "creation_confirmed_at": datetime.utcnow().isoformat() + "Z"}
+    job.updated_at = ct_now()
+    db.commit()
+    _audit(db, user, "imitate_creation_confirm", job_id,
+           {"script_id": out.get("script_id"),
+            "idempotency_key": out.get("idempotency_key")})
+    return out

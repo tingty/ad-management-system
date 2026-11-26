@@ -1,15 +1,21 @@
 /**
- * V4.145 / V4.146 · 模仿创作视频 —— 独立一级功能模块。
+ * V4.145–V4.148 · 模仿创作视频 —— 独立一级功能模块。
  *
  * V4.145：页面壳 + 后端任务列表只读展示。
  * V4.146：新建任务双入口（直链代下载 / 本地上传复用）+ 原片 <video> 预览 +
- *         元数据展示 + 权利声明确认 + 建任务。本版不调用大模型、不产生费用；
- *         分析脚本 / 创作脚本 / 出片由 V4.147–V4.149 交付。
+ *         元数据展示 + 权利声明确认 + 建任务。
+ * V4.147：分析脚本 A1–A10 查看 / 编辑 / 导出（真实视觉模型，后台任务）。
+ * V4.148：创作脚本 C1–C8（统一文本模型）+ 确认闸门 + 成本预估 + 幂等键；
+ *         逐镜快捷编辑（旁白、删镜、排序、结构保持度）与全量 JSON 编辑；
+ *         本版确认后只停在 creation_confirmed，不提交付费生成。
  *
  * 只新增本页与 API 封装，不改动现有 4 个一级模块的布局与功能。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, imitateVideoApi, ImitateTask, ImitateSource, ImitateAnalysisScript } from '../api'
+import {
+  api, imitateVideoApi, ImitateTask, ImitateSource,
+  ImitateAnalysisScript, ImitateCreationScript, ImitateVideoSpec,
+} from '../api'
 
 type Msg = { kind: 'ok' | 'err'; text: string }
 type Tab = 'url' | 'upload'
@@ -19,11 +25,17 @@ const A_LABELS: Record<string, string> = {
   A6: '色彩光影', A7: '商业信息', A8: '音频', A9: '合规标记', A10: '可模仿结论',
 }
 
+const C_LABELS: Record<string, string> = {
+  C1: '目标规格', C2: '结构方案', C3: '逐镜生成指令', C4: '风格方案',
+  C5: '商业信息方案', C6: '字幕/话术方案', C7: '合规标注', C8: '生成参数',
+}
+
 const STAGE_LABEL: Record<string, string> = {
   source_acquiring: '获取源视频', analysis_pending: '分析脚本生成中',
   analysis_ready: '分析脚本就绪', analysis_unavailable: '分析不可用',
-  analyzing: '结构分析', planning: '创作策划',
-  awaiting_confirm: '待确认', submitting: '提交中', provider_pending: '模型生成中',
+  creation_pending: '创作脚本生成中', creation_unavailable: '创作脚本不可用',
+  awaiting_confirm: '待确认', creation_confirmed: '已确认待生成',
+  planning: '创作策划', submitting: '提交中', provider_pending: '模型生成中',
   downloading: '下载校验中', validating: '复核中', completed: '已完成',
 }
 
@@ -32,11 +44,21 @@ const STATUS_LABEL: Record<string, string> = {
   needs_attention: '需关注', failed: '失败', cancelled: '已取消',
 }
 
+const COMMERCIAL_LABELS: Record<string, string> = {
+  brand: '品牌', copy: '文案', sales: '销售信息', promotion: '促销信息',
+}
+
 function sourceLabel(s?: string): string {
   if (!s) return '—'
   if (s === 'url') return '链接'
   if (s === 'upload') return '上传'
   return s
+}
+
+function specLabel(spec?: ImitateVideoSpec): string {
+  if (!spec) return '未选择'
+  const ratio = (spec.aspect_ratios || [])[0] || '比例未登记'
+  return `${spec.platform} · ${spec.ad_product || '默认版位'} · ${ratio}`
 }
 
 export default function ImitateVideo() {
@@ -51,7 +73,8 @@ export default function ImitateVideo() {
   const [source, setSource] = useState<ImitateSource | null>(null)
   const [acquiring, setAcquiring] = useState(false)
   const [rightsAck, setRightsAck] = useState(false)
-  const [targetPlatform, setTargetPlatform] = useState('')
+  const [specs, setSpecs] = useState<ImitateVideoSpec[]>([])
+  const [targetSpecId, setTargetSpecId] = useState('')
   const [structureFidelity, setStructureFidelity] = useState('medium')
   const [language, setLanguage] = useState('')
   const [creating, setCreating] = useState(false)
@@ -64,6 +87,19 @@ export default function ImitateVideo() {
   const [scriptLoading, setScriptLoading] = useState(false)
   const [scriptEditing, setScriptEditing] = useState(false)
   const [analyzingId, setAnalyzingId] = useState('')
+
+  // 创作脚本区状态（V4.148）
+  const [creationTask, setCreationTask] = useState<ImitateTask | null>(null)
+  const [creation, setCreation] = useState<ImitateCreationScript | null>(null)
+  const [creationDraft, setCreationDraft] = useState('')
+  const [creationLoading, setCreationLoading] = useState(false)
+  const [creationEditing, setCreationEditing] = useState(false)
+  const [creatingScriptId, setCreatingScriptId] = useState('')
+  const [confirmingId, setConfirmingId] = useState('')
+  const [feeAck, setFeeAck] = useState(false)
+  const [commercialOptions, setCommercialOptions] = useState<Record<string, boolean>>({
+    brand: false, copy: false, sales: false, promotion: false,
+  })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -79,13 +115,20 @@ export default function ImitateVideo() {
 
   useEffect(() => { void load() }, [load])
 
-  // 自动轮询：有分析中的任务时每 4 秒刷新列表，任务不中断、进度可订阅
   useEffect(() => {
-    if (!items.some(t => t.stage === 'analysis_pending')) return
+    void imitateVideoApi.videoSpecs()
+      .then(r => setSpecs(r?.items || []))
+      .catch(() => setSpecs([]))
+  }, [])
+
+  // 自动轮询：分析/创作生成中的任务每 4 秒刷新，切页不中断、回到页面即可续看
+  useEffect(() => {
+    if (!items.some(t => t.stage === 'analysis_pending' || t.stage === 'creation_pending')) return
     const id = window.setInterval(() => { void load() }, 4000)
     return () => window.clearInterval(id)
   }, [items, load])
 
+  // ---------------- 分析脚本 ----------------
   const triggerAnalyze = async (t: ImitateTask) => {
     setAnalyzingId(t.job_id)
     setMsg(null)
@@ -122,7 +165,7 @@ export default function ImitateVideo() {
       const parsed = JSON.parse(scriptDraft)
       setScript(s => s ? { ...s, script_json: parsed } : s)
       setScriptEditing(false)
-      setMsg({ kind: 'ok', text: '脚本草稿已在本页更新（V4.148 将支持服务端持久化回写）' })
+      setMsg({ kind: 'ok', text: '脚本草稿已在本页更新；创作脚本使用服务端持久化编辑。' })
     } catch {
       setMsg({ kind: 'err', text: 'JSON 格式不正确，请检查后重试' })
     }
@@ -139,6 +182,146 @@ export default function ImitateVideo() {
     URL.revokeObjectURL(a.href)
   }
 
+  // ---------------- 创作脚本 ----------------
+  const openCreation = async (t: ImitateTask) => {
+    setCreationTask(t)
+    setCreation(null)
+    setCreationEditing(false)
+    setFeeAck(false)
+    setCreationLoading(true)
+    try {
+      const s = await imitateVideoApi.creationScript(t.job_id)
+      setCreation(s)
+      setCreationDraft(JSON.stringify(s.script_json || {}, null, 2))
+    } catch (e: any) {
+      setMsg({ kind: 'err', text: e?.message || '创作脚本尚未生成' })
+    } finally {
+      setCreationLoading(false)
+    }
+  }
+
+  const triggerCreation = async (t: ImitateTask) => {
+    setCreatingScriptId(t.job_id)
+    setMsg(null)
+    try {
+      const specId = t.target_spec_id || targetSpecId || ''
+      if (!specId) {
+        setMsg({ kind: 'err', text: '请先为该任务选择目标投放规格' })
+        setCreationTask(t)
+        return
+      }
+      const r: any = await imitateVideoApi.createCreationScript(t.job_id, {
+        target_spec_id: specId,
+        creation_options: commercialOptions,
+      })
+      setMsg({ kind: 'ok', text: r.cached ? '命中创作脚本缓存' : '创作脚本任务已提交，后台用统一文本模型生成 C1–C8' })
+      await load()
+      setCreationTask(t)
+    } catch (e: any) {
+      setMsg({ kind: 'err', text: e?.message || '触发创作脚本失败' })
+    } finally {
+      setCreatingScriptId('')
+    }
+  }
+
+  const patchCreation = async (nextScript: Record<string, any>, note: string, okText: string) => {
+    if (!creationTask) return
+    try {
+      const out = await imitateVideoApi.updateCreationScript(creationTask.job_id, nextScript, note)
+      setCreation(out)
+      setCreationDraft(JSON.stringify(out.script_json || {}, null, 2))
+      setCreationEditing(false)
+      setFeeAck(false)
+      setMsg({ kind: 'ok', text: okText })
+      await load()
+    } catch (e: any) {
+      setMsg({ kind: 'err', text: e?.message || '创作脚本编辑失败' })
+    }
+  }
+
+  const saveCreation = () => {
+    if (!creation) return
+    try {
+      void patchCreation(JSON.parse(creationDraft), '全量 JSON 编辑', '创作脚本已保存并重新计价，请重新确认')
+    } catch {
+      setMsg({ kind: 'err', text: 'JSON 格式不正确，请检查后重试' })
+    }
+  }
+
+  const updateSection = (key: string, value: any, note: string) => {
+    if (!creation) return
+    void patchCreation({ ...(creation.script_json || {}), [key]: value }, note, '已保存并重新计价，请重新确认')
+  }
+
+  const updateFidelity = (fidelity: string) => {
+    if (!creation) return
+    const c2 = { ...(creation.script_json?.C2 || {}), fidelity }
+    updateSection('C2', c2, `结构保持度调整为 ${fidelity}`)
+  }
+
+  const updateCommercialToggle = (key: string, retain: boolean) => {
+    if (!creation) return
+    const c5 = creation.script_json?.C5 || {}
+    const toggles = { ...(c5.toggles || {}), [key]: retain }
+    const items = (c5.items || []).map((it: any) => it?.type === key
+      ? { ...it, retain, burn_in: retain, rewritten: retain ? it.rewritten : '' }
+      : it)
+    updateSection('C5', { ...c5, toggles, items }, `商业信息 ${COMMERCIAL_LABELS[key] || key} 保留项调整`)
+  }
+
+  const updateVoiceover = (text: string) => {
+    if (!creation) return
+    const c6 = { ...(creation.script_json?.C6 || {}), voiceover_text: text }
+    updateSection('C6', c6, '口播改写稿更新')
+  }
+
+  const shots: any[] = (creation?.script_json?.C3?.shots || []) as any[]
+  const moveShot = (index: number, delta: number) => {
+    if (!creation) return
+    const next = [...shots]
+    const target = index + delta
+    if (target < 0 || target >= next.length) return
+    const tmp = next[index]
+    next[index] = next[target]
+    next[target] = tmp
+    next.forEach((s, i) => { s.index = i + 1 })
+    updateSection('C3', { ...(creation.script_json?.C3 || {}), shots: next }, '逐镜顺序调整')
+  }
+  const deleteShot = (index: number) => {
+    if (!creation) return
+    const next = shots.filter((_, i) => i !== index)
+    next.forEach((s, i) => { s.index = i + 1 })
+    updateSection('C3', { ...(creation.script_json?.C3 || {}), shots: next }, '删除镜头')
+  }
+
+  const confirmCreation = async (t: ImitateTask) => {
+    setConfirmingId(t.job_id)
+    setMsg(null)
+    try {
+      const r: any = await imitateVideoApi.confirmCreation(t.job_id, feeAck)
+      setMsg({ kind: 'ok', text: `创作脚本已确认；幂等键 ${r.idempotency_key || '—'}（本版不提交付费生成）` })
+      await load()
+      if (!creationTask || creationTask.job_id !== t.job_id) await openCreation(t)
+      else setCreation(c => c ? { ...c, status: 'confirmed', meta_json: { ...(c.meta_json || {}), idempotency_key: r.idempotency_key } } : c)
+    } catch (e: any) {
+      setMsg({ kind: 'err', text: e?.message || '确认失败' })
+    } finally {
+      setConfirmingId('')
+    }
+  }
+
+  const downloadCreation = () => {
+    if (!creation) return
+    const blob = new Blob([JSON.stringify(creation.script_json || {}, null, 2)],
+      { type: 'application/json;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `imitate-creation-${creation.script_id}.json`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  // ---------------- 源视频 / 建任务 ----------------
   const acquireUrl = async () => {
     if (!url.trim()) { setMsg({ kind: 'err', text: '请填写视频直链' }); return }
     setAcquiring(true)
@@ -177,6 +360,8 @@ export default function ImitateVideo() {
   const createJob = async () => {
     if (!source) { setMsg({ kind: 'err', text: '请先获取或上传源视频' }); return }
     if (!rightsAck) { setMsg({ kind: 'err', text: '请勾选权利声明' }); return }
+    if (!targetSpecId) { setMsg({ kind: 'err', text: '请选择目标投放规格' }); return }
+    const spec = specs.find(s => s.spec_id === targetSpecId)
     setCreating(true)
     setMsg(null)
     try {
@@ -187,12 +372,15 @@ export default function ImitateVideo() {
         name: taskName.trim() || source.name || '',
         rights_ack: rightsAck,
         options: {
-          target_platform: targetPlatform.trim(),
+          target_spec_id: targetSpecId,
+          target_platform: spec?.platform || '',
+          target_ad_product: spec?.ad_product || '',
+          target_aspect_ratio: (spec?.aspect_ratios || [])[0] || '',
           structure_fidelity: structureFidelity,
           language: language.trim(),
         },
       })
-      setMsg({ kind: 'ok', text: `任务已创建：${r.job_id}（阶段：获取源视频，本版不产生费用）` })
+      setMsg({ kind: 'ok', text: `任务已创建：${r.job_id}（本步不产生费用）` })
       setSource(null)
       setTaskName(''); setUrl(''); setRightsAck(false)
       if (fileRef.current) fileRef.current.value = ''
@@ -222,8 +410,8 @@ export default function ImitateVideo() {
       </div>
 
       <p className="note" style={{ borderLeft: '3px solid var(--accent, #2b6cb0)', paddingLeft: 10 }}>
-        V4.146：可提交参考视频（直链或上传）并查看原片与元数据，任务在后台持久执行、切页不中断。
-        分析脚本、创作脚本与出片将在后续版本交付；本版不产生任何模型费用。
+        V4.148：支持分析脚本 A1–A10、创作脚本 C1–C8、逐镜编辑与确认闸门；确认后仅冻结幂等键，
+        逐镜出片由 V4.149 交付。分析/创作会调用真实模型并可能产生 token 费用，缓存命中不重复计费。
       </p>
 
       {msg && <div className={msg.kind === 'err' ? 'err' : 'ok'} style={{ margin: '10px 0' }}>{msg.text}</div>}
@@ -259,9 +447,14 @@ export default function ImitateVideo() {
             <input style={{ display: 'block', width: '100%', marginTop: 4 }} value={taskName}
               onChange={e => setTaskName(e.target.value)} placeholder="可选，默认取源视频名" />
           </label>
-          <label style={{ flex: 1, minWidth: 160 }}>目标投放平台
-            <input style={{ display: 'block', width: '100%', marginTop: 4 }} value={targetPlatform}
-              onChange={e => setTargetPlatform(e.target.value)} placeholder="如 TikTok / Meta（可选）" />
+          <label style={{ flex: 2, minWidth: 260 }}>目标投放规格（规格库）
+            <select style={{ display: 'block', width: '100%', marginTop: 4 }} value={targetSpecId}
+              onChange={e => setTargetSpecId(e.target.value)}>
+              <option value="">请选择平台 + 版位</option>
+              {specs.map(s => (
+                <option key={s.spec_id} value={s.spec_id}>{specLabel(s)}（{s.verification_label || s.verification}）</option>
+              ))}
+            </select>
           </label>
           <label style={{ minWidth: 140 }}>结构保持度
             <select style={{ display: 'block', width: '100%', marginTop: 4 }} value={structureFidelity}
@@ -289,9 +482,7 @@ export default function ImitateVideo() {
             </div>
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
               <video
-                src={source.source === 'url'
-                  ? api.fileUrl(source.file || '')
-                  : api.fileUrl(source.file || '')}
+                src={api.fileUrl(source.file || '')}
                 controls playsInline style={{ width: 320, maxWidth: '100%', background: '#000' }} />
               <div style={{ minWidth: 200 }}>
                 <table className="ad-table">
@@ -334,7 +525,7 @@ export default function ImitateVideo() {
           <thead>
             <tr>
               <th>任务</th><th>状态</th><th>阶段</th><th>来源</th>
-              <th>画幅/时长</th><th>原片</th><th>分析脚本</th><th>创建时间</th>
+              <th>画幅/时长</th><th>原片</th><th>分析脚本</th><th>创作脚本</th><th>创建时间</th>
             </tr>
           </thead>
           <tbody>
@@ -364,6 +555,25 @@ export default function ImitateVideo() {
                       onClick={() => void triggerAnalyze(t)}>
                       {analyzingId === t.job_id ? '提交中…' : '生成分析脚本'}
                     </button>
+                  ) : '—'}
+                </td>
+                <td>
+                  {t.creation_script_id ? (
+                    <a href="javascript:void(0)" onClick={() => void openCreation(t)}>
+                      查看/确认{t.creation_status === 'confirmed' ? '（已确认）' : ''}
+                    </a>
+                  ) : t.stage === 'creation_pending' ? (
+                    <span className="muted">生成中…</span>
+                  ) : t.stage === 'creation_unavailable' ? (
+                    <button className="btn" disabled={!!creatingScriptId}
+                      onClick={() => void triggerCreation(t)}>重试创作脚本</button>
+                  ) : t.stage === 'analysis_ready' ? (
+                    <button className="btn" disabled={!!creatingScriptId}
+                      onClick={() => void triggerCreation(t)}>
+                      {creatingScriptId === t.job_id ? '提交中…' : '生成创作脚本'}
+                    </button>
+                  ) : t.stage === 'awaiting_confirm' ? (
+                    <button className="btn" onClick={() => void openCreation(t)}>去确认</button>
                   ) : '—'}
                 </td>
                 <td>{t.created_at || '—'}</td>
@@ -422,6 +632,151 @@ export default function ImitateVideo() {
                 </div>
               ))}
             </div>
+          )}
+        </div>
+      )}
+
+      {/* ---- 创作脚本查看 / 编辑 / 确认（C1–C8）---- */}
+      {creationTask && (
+        <div style={{ border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 14, marginTop: 18 }}>
+          <div className="ad-panel-head">
+            <div>
+              <h3 style={{ margin: 0 }}>创作脚本 C1–C8 · {creationTask.name || creationTask.job_id}</h3>
+              <div className="muted" style={{ marginTop: 4 }}>
+                {creation?.meta_json?.model ? `模型：${String(creation.meta_json.provider || '')} / ${String(creation.meta_json.model)}` : '统一文本模型'}
+                {creation?.script_json?.C1?.spec_id ? ` · 规格：${String(creation.script_json.C1.spec_id)}` : ''}
+                {creation?.meta_json?.idempotency_key ? ` · 幂等键：${String(creation.meta_json.idempotency_key)}` : ''}
+              </div>
+            </div>
+            <div>
+              {creation && !creationEditing && (
+                <>
+                  <button className="btn" style={{ marginRight: 6 }} onClick={() => setCreationEditing(true)}>JSON 编辑</button>
+                  <button className="btn" style={{ marginRight: 6 }} onClick={downloadCreation}>导出 JSON</button>
+                </>
+              )}
+              <button className="btn" onClick={() => { setCreationTask(null); setCreation(null) }}>关闭</button>
+            </div>
+          </div>
+
+          {creationLoading && <div className="muted" style={{ padding: 16 }}>加载创作脚本…</div>}
+          {!creationLoading && !creation && (
+            <div className="muted" style={{ padding: 16 }}>
+              {creationTask.stage === 'creation_pending'
+                ? '创作脚本正在后台生成，可切页等待，回到本页点击刷新即可。'
+                : '尚无创作脚本。请先在任务列表点击「生成创作脚本」。'}
+            </div>
+          )}
+
+          {creation && (
+            <>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '10px 0', alignItems: 'center' }}>
+                <label>结构保持度
+                  <select style={{ marginLeft: 6 }} value={String(creation.script_json?.C2?.fidelity || 'medium')}
+                    onChange={e => updateFidelity(e.target.value)}>
+                    <option value="high">高（逐镜保留）</option>
+                    <option value="medium">中（保留钩子/CTA）</option>
+                    <option value="low">低（仅叙事骨架）</option>
+                  </select>
+                </label>
+                <span className="muted">
+                  预估消耗：{creation.script_json?.C8?.estimated_cost?.amount ?? '—'} {String(creation.script_json?.C8?.estimated_cost?.currency || 'USD')}
+                  （{String(creation.script_json?.C8?.estimated_cost?.note || '工程预估，非供应商报价')}）
+                </span>
+              </div>
+
+              <div style={{ border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 10, marginTop: 8 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>商业信息保留（勾选后必须改写，不逐字复制）</div>
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                  {Object.keys(COMMERCIAL_LABELS).map(k => (
+                    <label key={k}>
+                      <input type="checkbox" checked={!!creation.script_json?.C5?.toggles?.[k]}
+                        onChange={e => updateCommercialToggle(k, e.target.checked)} />
+                      {' '}{COMMERCIAL_LABELS[k]}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontWeight: 600 }}>口播改写稿（仅交付文案，人工配音）</div>
+                <textarea value={String(creation.script_json?.C6?.voiceover_text || '')}
+                  onChange={e => setCreation(s => s ? {
+                    ...s,
+                    script_json: { ...(s.script_json || {}), C6: { ...(s.script_json?.C6 || {}), voiceover_text: e.target.value } },
+                  } : s)}
+                  onBlur={() => updateVoiceover(String(creation.script_json?.C6?.voiceover_text || ''))}
+                  style={{ width: '100%', minHeight: 64, marginTop: 4 }} />
+              </div>
+
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>逐镜指令（可排序 / 删镜）</div>
+                {shots.length === 0 ? <div className="muted">暂无镜头指令。</div> : (
+                  <table className="ad-table">
+                    <thead>
+                      <tr><th>#</th><th>时码/时长</th><th>画面指令</th><th>运镜</th><th>操作</th></tr>
+                    </thead>
+                    <tbody>
+                      {shots.map((s, i) => (
+                        <tr key={`${s.index || i}-${i}`}>
+                          <td>{s.index || i + 1}</td>
+                          <td>{[s.tc_start, s.tc_end].filter(Boolean).join('→') || '—'} / {s.duration || '—'}</td>
+                          <td style={{ maxWidth: 360, whiteSpace: 'pre-wrap' }}>{s.visual_prompt || '—'}</td>
+                          <td>{s.camera || s.movement_path || '—'}</td>
+                          <td>
+                            <button className="btn" style={{ marginRight: 4 }} disabled={i === 0}
+                              onClick={() => moveShot(i, -1)}>上移</button>
+                            <button className="btn" style={{ marginRight: 4 }} disabled={i === shots.length - 1}
+                              onClick={() => moveShot(i, 1)}>下移</button>
+                            <button className="btn" onClick={() => deleteShot(i)}>删除</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {creationEditing && (
+                <div style={{ marginTop: 12 }}>
+                  <textarea value={creationDraft} onChange={e => setCreationDraft(e.target.value)}
+                    style={{ width: '100%', minHeight: 420, fontFamily: 'monospace', fontSize: 12 }} />
+                  <div style={{ marginTop: 8 }}>
+                    <button className="btn primary" style={{ marginRight: 6 }} onClick={saveCreation}>保存创作脚本</button>
+                    <button className="btn" onClick={() => { setCreationEditing(false); setCreationDraft(JSON.stringify(creation.script_json || {}, null, 2)) }}>取消</button>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--border, #ddd)' }}>
+                {!creationEditing && Object.keys(C_LABELS).map(k => (
+                  <details key={k} style={{ marginBottom: 6 }}>
+                    <summary style={{ cursor: 'pointer' }}>{k} · {C_LABELS[k]}</summary>
+                    <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12 }}>
+                      {JSON.stringify(creation.script_json?.[k] ?? {}, null, 2)}
+                    </pre>
+                  </details>
+                ))}
+              </div>
+
+              {creationTask.stage === 'awaiting_confirm' && (
+                <div style={{ marginTop: 14, padding: 12, background: 'var(--panel-soft, #f7f7f7)', borderRadius: 6 }}>
+                  <div style={{ fontWeight: 600 }}>确认闸门</div>
+                  <div className="muted" style={{ margin: '6px 0' }}>
+                    确认后冻结脚本与幂等键；本版不会提交供应商，也不会设置任何视频付费字段。
+                  </div>
+                  <label>
+                    <input type="checkbox" checked={feeAck} onChange={e => setFeeAck(e.target.checked)} />
+                    {' '}我已知晓上述预计消耗与合规标注，确认按此脚本进入后续生成
+                  </label>
+                  <button className="btn primary" style={{ marginLeft: 10 }}
+                    disabled={!feeAck || !!confirmingId}
+                    onClick={() => void confirmCreation(creationTask)}>
+                    {confirmingId ? '确认中…' : '确认并冻结脚本'}
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
