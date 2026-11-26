@@ -1,7 +1,7 @@
 # Rakuten Advertising API 接入说明与广告主 API 标准工作流
 
 > 适用系统：广告管理系统 / 广告主数据 → 广告主 API → 广告主报表  
-> 适用版本：V4.151
+> 适用版本：V4.152
 > 本文同时承担两个职责：①说明 Rakuten Advertising 佣金数据应如何拉取；②沉淀今后所有广告主 API 模板开发的标准流程。
 
 ---
@@ -90,6 +90,16 @@ refresh_token={refresh-token}&scope={account-id}
 - 刷新会让当前 access_token 立即失效。
 - Developer Portal 也可手工生成 60 分钟有效的临时 access_token，但**不适合长期自动调度**。
 
+#### V4.152 真实凭据验证补记（不记录任何密钥值）
+
+用一组真实 Application 的 `client_id / client_secret / account-id` 做只读验证，得到与上面文档示例不同的实际行为：
+
+1. 按文档示例用 `Authorization: Bearer {token-key}` + `scope={account-id}` 换 token → `401 invalid_client`。换成 `Basic`、补 `grant_type` 等变体仍为 401。
+2. 改用 body 表单 `grant_type=client_credentials&client_id=...&client_secret=...&scope={account-id}` → `HTTP 200`，返回 `access_token / expires_in=3600 / token_type=bearer`（该方式未返回 `refresh_token`，到期重新换取即可）。
+3. 用该 token 调 Events API 时若不带 `x-rm-preferred-sid` 头 → `401 missing x-rm-preferred-sid header`；带 `x-rm-preferred-sid: {account-id}` → `HTTP 200`。
+4. 因此系统新增 `oauthcc:client_id|client_secret|account_id` 组合凭据格式：**body 换 token + 业务请求自动带 SID 头**；原有直传 token 与 `oauth:token-key|account-id` 行为保持不变。
+5. 凭据值不写入代码、文档、数据库或日志；测试滑窗对 `client_id / client_secret / access_token` 全部脱敏。
+
 ### 2.2 Web Security Token
 
 Advanced Reports API 的 `token` 查询参数不是 Bearer token，而是 Publisher Dashboard 里的 Web Security Token。
@@ -162,6 +172,11 @@ Accept: application/json
 #### 长期自动拉取边界（V4.151 排查补记）
 
 官方 Events API 指南明确：该接口**不应用于历史数据**，只保存前 1–2 周数据用于 u1 点击匹配；官方也**不建议用它计算 expected commissions**，而应用 Publisher Dashboard 的 Signature Orders Report / Individual Item Report 做佣金预期核算。接口用于跟踪转化表现属于 directional 用途。
+
+**V4.152 实测补充：**
+
+- 上游对 `process_date_start` 有硬性 30 天限制：超过 30 天直接返回 `HTTP 400 RouteRequirements`，提示必须填写距今不超过 30 天的时间，更早数据应改用 Publisher Dashboard 的 Signature Orders Report。因此回填窗口不得超过 30 天，推荐按 7 天滚动。
+- 同一份凭据用不同 `x-rm-preferred-sid` 拉到的数据完全不同：本次提供的 `account-id=4572032` 在近 7 天窗口返回 0 条；改用返回值中实际出现的 `sid=4752032` 则拿到 186 条原始记录，其中 `is_event=N` 有效流水 94 条、31 个订单，币种 USD/AUD/CAD。**SID 填错时上游返回 200 空数组而不是报错**，排查空数据时必须先核对响应记录的 `sid` 是否与填写的 account-id 一致（两者极接近，易抄错）。
 
 因此系统采用以下口径：
 
@@ -259,10 +274,12 @@ Authorization: Bearer <access_token>
 - 模板 code：`rakuten_advertising`
 - 显示名：`Rakuten Advertising`
 - 数据源：`Events / transactions`
-- 凭据输入支持两种：
-  1. 直接填 `access_token`；
-  2. 填 `oauth:{token-key}|{account-id}`，系统自动调用 `/token` 换取 access_token（推荐用于调度）。
-- `token-key` 由 `Base64(client_id:client_secret)` 得到；`account-id` 作为 `scope`。当前界面仍是单一凭据输入框，未拆成 `client_id / client_secret / account_id` 三个独立字段；如需三字段录入，应作为后续版本的小改动实现。
+- 凭据输入支持三种：
+  1. 直接填 `access_token`（Developer Portal 手工生成，60 分钟有效，不适合长期调度）；
+  2. 填 `oauth:{token-key}|{account-id}`，系统用 Bearer token-key 自动调用 `/token` 换取 access_token；
+  3. **（V4.152 推荐）**填 `oauthcc:{client_id}|{client_secret}|{account-id}`，系统用 body `client_credentials` 换 token，并自动给业务请求加 `x-rm-preferred-sid: {account-id}` 头。真实验证中只有方式 3 对该 Application 可用。
+- `token-key` 由 `Base64(client_id:client_secret)` 得到；`account-id` 作为 `scope`。当前界面仍是单一凭据输入框，未拆成 `client_id / client_secret / account_id` 三个独立字段，三个值用 `|` 拼接录入；如需三字段录入，应作为后续版本的小改动实现。
+- **account-id 必须与该 Application 有权访问的 SID 一致**，填错时 Events API 返回 200 空数组而非报错，需核对响应记录的 `sid` 字段。
 
 ### 4.2 协议配置
 
@@ -275,7 +292,7 @@ Authorization: Bearer <access_token>
 - `page_param=page`、`page_size=300`、`complete_when_short=true`
 - `record_filter={field: is_event, equals: N}`：过滤 Event 重复视角，避免重复计佣
 - `external_id_path=etransaction_id`
-- `credential` 声明 token-key 换取规则
+- `credential` 声明 token-key 换取规则；`credential.alternates` 声明 `oauthcc:` 的 client_credentials 换取方式与 `request_headers`（SID 头）模板，二者都是协议层通用能力，业务代码无渠道分支
 
 ### 4.3 字段映射
 
@@ -333,7 +350,9 @@ Rakuten 实测同一批数据包含 `USD / AUD / CAD`。当前统一事实表金
 - 用真实凭据调用一次最小窗口；
 - 只看 HTTP 状态、字段名、样例值，不把 Token 写入代码/日志/数据库；
 - 对照文档确认差异（如 Rakuten 的 `commission_list_id` 单复数差异）；
-- 401/403 只记为凭据无效，不用 Mock 冒充成功。
+- 401/403 只记为凭据无效，不用 Mock 冒充成功；但下结论前要先把官方文档列出的认证方式都试一遍（Rakuten 本次 Bearer token-key 401、body client_credentials 200）；
+- 200 空数组不等于「无数据」：先核对响应中的账号 / SID 字段是否与填写值一致（本次 SID 抄错导致空数组）；
+- 记录上游对日期窗口的硬限制（本次 `process_date_start` 不得超过 30 天），回填步长不得越界。
 
 ### Step 3：新增模板配置
 

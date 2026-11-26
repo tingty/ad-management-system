@@ -218,7 +218,7 @@ PRESET_TEMPLATES: list[dict] = [
         "required_fields": [
             {
                 "key": "token",
-                "label": "API Access Token（或 oauth:token-key|account-id）",
+                "label": "API Token / oauth:token-key|account-id / oauthcc:client_id|client_secret|account-id",
                 "type": "password",
                 "required": True,
             },
@@ -251,6 +251,9 @@ PRESET_TEMPLATES: list[dict] = [
             "extra_params": {"limit": 300, "page": 1},
             # 通用凭据交换：用户可直接填 access token；若填 oauth:token-key|account-id，
             # 则在每次调用前按模板声明自动换取新的 access token。token-key 是 Base64(client_id:client_secret)。
+            # V4.152 真实验证补充：这组 Application 的 client_id/client_secret 用 Bearer token-key
+            # 换 token 返回 401 invalid_client；实际可用方式是 body 里带 client_credentials，
+            # 且换到的 token 未绑定 SID，业务请求必须带 x-rm-preferred-sid。
             "credential": {
                 "mode": "prefix_exchange",
                 "prefix": "oauth:",
@@ -263,6 +266,25 @@ PRESET_TEMPLATES: list[dict] = [
                 "content_type": "application/x-www-form-urlencoded",
                 "body": {"scope": "{account_id}"},
                 "token_path": "access_token",
+                "alternates": [
+                    {
+                        "prefix": "oauthcc:",
+                        "delimiter": "|",
+                        "parts": ["client_id", "client_secret", "account_id"],
+                        "endpoint": "https://api.linksynergy.com/token",
+                        "method": "POST",
+                        "auth": "body",
+                        "content_type": "application/x-www-form-urlencoded",
+                        "body": {
+                            "grant_type": "client_credentials",
+                            "client_id": "{client_id}",
+                            "client_secret": "{client_secret}",
+                            "scope": "{account_id}",
+                        },
+                        "token_path": "access_token",
+                        "request_headers": {"x-rm-preferred-sid": "{account_id}"},
+                    },
+                ],
             },
         },
     },
@@ -430,63 +452,79 @@ def _expand_credential_template(value: Any, parts: dict) -> Any:
 
 
 async def resolve_credential(template_code: str, token: str, *,
-                             timeout_sec: float = 20.0) -> tuple[str, list[str], str]:
-    """按模板声明处理凭据，返回 (实际请求 token, 需脱敏片段, 凭据说明)。
+                             timeout_sec: float = 20.0) -> tuple[str, list[str], str, dict]:
+    """按模板声明处理凭据，返回 (实际请求 token, 需脱敏片段, 凭据说明, 业务请求头)。
 
     默认直接把输入当作 access token，历史渠道行为零变化。模板声明 credential 且
-    输入带约定前缀时，按官方 token endpoint 自动换取 access token；Rakuten 的
-    token-key = Base64(client_id:client_secret)，scope = account-id。
+    输入带约定前缀时，按官方 token endpoint 自动换取 access token。Rakuten 的
+    token-key = Base64(client_id:client_secret)，scope = account-id；V4.152 起
+    也支持 oauthcc:client_id|client_secret|account_id 走 client_credentials，
+    并把 account-id 作为业务请求的 SID 头下发（均为模板声明的通用能力）。
     """
     import advertiser_protocol
 
     raw = (token or "").strip()
     proto = advertiser_protocol.protocol_of(template_code)
     cfg = proto.get("credential") or {}
-    if not cfg or not raw.startswith(str(cfg.get("prefix") or "")):
-        return raw, ([raw] if raw else []), ""
+    candidates = ([cfg] + list(cfg.get("alternates") or [])) if cfg else []
+    active = None
+    for item in candidates:
+        prefix = str(item.get("prefix") or "")
+        if prefix and raw.startswith(prefix):
+            active = item
+            break
+    if not active:
+        return raw, ([raw] if raw else []), "", {}
 
-    prefix = str(cfg.get("prefix") or "")
-    delimiter = str(cfg.get("delimiter") or "|")
-    names = [str(x) for x in (cfg.get("parts") or [])]
+    prefix = str(active.get("prefix") or "")
+    delimiter = str(active.get("delimiter") or "|")
+    names = [str(x) for x in (active.get("parts") or [])]
     pieces = raw[len(prefix):].split(delimiter)
     if not names or len(pieces) != len(names):
-        raise ValueError("组合凭据格式错误：应为 " + prefix + delimiter.join(names))
+        expected = " / ".join(
+            str(x.get("prefix") or "") + delimiter.join(str(p) for p in (x.get("parts") or []))
+            for x in candidates if x.get("prefix"))
+        raise ValueError("组合凭据格式错误：应为 " + expected)
     parts = {name: piece.strip() for name, piece in zip(names, pieces)}
     if any(not value for value in parts.values()):
         raise ValueError("组合凭据含空字段：" + delimiter.join(names))
 
-    endpoint = str(cfg.get("endpoint") or "")
+    endpoint = str(active.get("endpoint") or "")
     if not endpoint.startswith("https://"):
         raise ValueError("凭据交换地址必须是 HTTPS")
-    headers = {"Content-Type": str(cfg.get("content_type")
+    headers = {"Content-Type": str(active.get("content_type")
                                     or "application/x-www-form-urlencoded")}
-    if cfg.get("auth") == "bearer":
-        bearer_part = str(cfg.get("bearer_part") or "")
+    if active.get("auth") == "bearer":
+        bearer_part = str(active.get("bearer_part") or "")
         headers["Authorization"] = "Bearer " + parts.get(bearer_part, "")
     body = {key: _expand_credential_template(value, parts)
-            for key, value in dict(cfg.get("body") or {}).items()}
+            for key, value in dict(active.get("body") or {}).items()}
 
     try:
         async with httpx.AsyncClient(timeout=timeout_sec, follow_redirects=False) as c:
-            r = await c.request(str(cfg.get("method") or "POST").upper(),
+            r = await c.request(str(active.get("method") or "POST").upper(),
                                 endpoint, data=body, headers=headers)
     except httpx.HTTPError as exc:
         raise RuntimeError("凭据交换网络失败：" + _safe_error(str(exc))) from exc
     if r.status_code >= 400:
         raise RuntimeError(f"凭据交换失败（HTTP {r.status_code}）："
-                           + _safe_error(_redact_text(r.text, parts.get("token_key", ""))))
+                           + _safe_error(_redact_text(r.text, "", list(parts.values()))))
     try:
         payload = r.json()
     except Exception as exc:
         raise RuntimeError("凭据交换返回不是 JSON") from exc
-    token_path = str(cfg.get("token_path") or "access_token")
+    token_path = str(active.get("token_path") or "access_token")
     access = payload.get(token_path) if isinstance(payload, dict) else None
     access = str(access or "").strip()
     if not access:
         raise RuntimeError("凭据交换成功但未返回 " + token_path)
     secrets = [access] + [v for v in parts.values() if v]
+    request_headers = {
+        str(key): _expand_credential_template(value, parts)
+        for key, value in dict(active.get("request_headers") or {}).items()
+    }
     note = "access_token 由模板凭据交换获得；有效期按上游 expires_in 为准"
-    return access, secrets, note
+    return access, secrets, note, request_headers
 
 
 def _test_envelope(*, ok: bool, error: str, count: int, http_code: int,
@@ -550,16 +588,20 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
 
     # V4.150：模板可按声明完成凭据交换；普通 Token 直接透传，既有渠道零变化。
     try:
-        effective_token, secrets, credential_note = await resolve_credential(
+        effective_token, secrets, credential_note, credential_headers = await resolve_credential(
             template_code, token, timeout_sec=timeout_sec)
     except Exception as exc:
         return _env(ok=False, error=_safe_error(str(exc)), count=0, http_code=0, url=url,
-                    hint="组合凭据格式或凭据交换失败；请检查 token-key / account-id。")
+                    hint=("组合凭据格式或凭据交换失败；请检查 "
+                          "oauthcc:client_id|client_secret|account-id 或 oauth:token-key|account-id。"))
 
     req = advertiser_protocol.build_request(
         template_code=template_code, endpoint=endpoint, token=effective_token, cid=cid,
         since_event_date=since_event_date, before_event_date=before_event_date,
         since_commission_id=since_commission_id)
+    # V4.152：组合凭据可声明业务请求头（如 SID），由凭据片段展开；直传 token 时不注入。
+    if credential_headers:
+        req["headers"].update(credential_headers)
     url = req["url"]
     if not url.startswith("https://") and not url.startswith("http://"):
         return _env(ok=False, error="Endpoint 必须是 http(s) 地址", count=0, http_code=0, url=url)
@@ -588,7 +630,8 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
     if code == 401 or code == 403:
         return _env(
             ok=False, error=(f"认证失败（HTTP {code}）：access token 无效或已过期；"
-                             "请重新生成，或改用 oauth:token-key|account-id 自动换取"),
+                             "请重新生成，或改用 oauthcc:client_id|client_secret|account-id "
+                             "（自动换 token 并携带 SID）"),
             count=0, http_code=code, url=url, payload=payload, response_text=response_text)
     if code >= 400:
         return _env(

@@ -127,7 +127,7 @@ class TestRequestAndCredential(unittest.TestCase):
             return FakeResp()
 
         with mock.patch.object(httpx.AsyncClient, "request", new=fake_request):
-            access, secrets, note = asyncio.run(advertiser_api.resolve_credential(
+            access, secrets, note, req_headers = asyncio.run(advertiser_api.resolve_credential(
                 RAKUTEN, "oauth:TOKEN-KEY|123456"))
 
         self.assertEqual(access, "NEW-ACCESS")
@@ -138,13 +138,15 @@ class TestRequestAndCredential(unittest.TestCase):
         self.assertEqual(seen["url"], "https://api.linksynergy.com/token")
         self.assertEqual(seen["data"], {"scope": "123456"})
         self.assertEqual(seen["headers"]["Authorization"], "Bearer TOKEN-KEY")
+        self.assertEqual(req_headers, {})
 
     def test_plain_access_token_passes_through(self):
-        access, secrets, note = asyncio.run(advertiser_api.resolve_credential(
+        access, secrets, note, req_headers = asyncio.run(advertiser_api.resolve_credential(
             RAKUTEN, "PLAIN"))
         self.assertEqual(access, "PLAIN")
         self.assertEqual(secrets, ["PLAIN"])
         self.assertEqual(note, "")
+        self.assertEqual(req_headers, {})
 
 
 class TestParsing(unittest.TestCase):

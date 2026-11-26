@@ -2,6 +2,33 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.152 Rakuten client_credentials 真实验证与自动 SID 注入
+**发布日期**：2026-11-26 16:55
+**变更类型**：新增、优化
+**涉及模块**：广告主 API、Rakuten Advertising、协议适配层、标准工作流文档、专项测试、后端接口、发版数据、新版通知、系统版本
+**变更摘要**：按用户提供的 `client_id / client_secret / account-id` 完成真实只读验证，发现官方文档示例的 Bearer token-key 换取方式对该 Application 返回 401，而 body `client_credentials` 可用；该方式换到的 token 还必须携带 `x-rm-preferred-sid` 头才能访问 Events API。系统新增 `oauthcc:client_id|client_secret|account_id` 组合凭据格式（body 换 token + 凭据声明的业务请求头，均为协议层通用能力），并实测确认有效 SID 为 `4752032`（用户提供的 `4572032` 返回 200 空数组），补齐 30 天窗口硬限制与空数组排查口径。
+**更新要点**
+- 【新增】`oauthcc:` 组合凭据：按模板声明用 `grant_type=client_credentials` + `client_id/client_secret/scope` 换取 access token，并把 `account-id` 展开为业务请求的 `x-rm-preferred-sid` 头；原有直传 token 与 `oauth:token-key|account-id` 行为完全不变。
+- 【优化】凭据交换通用能力：`credential.alternates` 支持多前缀凭据格式，`auth=body` 与 `request_headers` 为通用声明；错误响应、滑窗与记录中的 client_id / client_secret / access_token 全部脱敏。
+- 【优化】真实数据口径补正：SID 抄错时 Events API 返回 200 空数组而非报错，必须核对响应记录的 `sid`；`process_date_start` 超过 30 天上游直接返回 400 RouteRequirements，回填窗口不得超过 30 天。
+- 【新增】专项测试 `tests/test_advertiser_rakuten_oauthcc_v4152.py`：覆盖模板声明、body 换 token、SID 头注入、错误脱敏、格式校验、端到端请求与文档守约。
+- 【优化】既有测试 `test_advertiser_rakuten_v4150.py` 适配凭据解析新契约（多返回业务请求头），断言保持等价。
+**本次优化与更改的功能 / 模块**
+- 【新增】广告主 API：Rakuten 连接可直接填一组 client_id/client_secret/account-id 长期自动换 token 并正确读取对应 SID 的流水，不需要每天手工更换 access token。
+- 【优化】协议适配层：多凭据格式、body 认证与业务请求头注入成为通用能力，业务层仍无渠道硬编码。
+- 【优化】标准工作流文档：沉淀「401 时穷举官方认证变体」「200 空数组先核对 SID」「日期窗口硬限制」三条真实排障经验。
+**影响范围**
+- 仅改广告主 API 模板声明、凭据解析与测试；不改数据库结构、字段映射、报表前端与其他渠道行为。
+- 现有 CJ / Awin / PartnerStack 及既有 Rakuten 直传 token / `oauth:` 连接行为不变；无需数据库迁移。
+- 回滚：回退本版代码即可；V4.150 已落库的 Rakuten 数据不受影响。
+- 真实凭据只用于本次只读验证，未写入代码、文档、数据库、测试固定值或日志。
+**验证**
+- 真实凭据只读验证：Bearer token-key 换 token 返回 401 invalid_client；body client_credentials 返回 200；不带 SID 头返回 401，带 `x-rm-preferred-sid=4752032` 返回 200、94 条有效流水、31 个订单，币种 USD/AUD/CAD；系统链路端到端复验 94 条，凭据零泄漏。
+- 专项：`test_advertiser_rakuten_oauthcc_v4152` 6 passed；`test_advertiser_rakuten_v4150` 16 passed；`test_rakuten_longterm_v4151` 3 passed。
+- 隔离库全量后端回归：干净代码副本 + 隔离 `DATABASE_URL` 下 Ran 842 / OK（5 skipped），无新增失败。
+- 前端：`npx tsc --noEmit` 与 `npm run build` 通过；本版无前端页面结构改动。
+- 发版：`prepare_release --sync` 重建发布数据后独立进程 `--check` 校验系统版本、CHANGELOG 与发布数据一致。
+
 ## V4.151 Rakuten Advertising 凭据机制与长期拉取口径补正
 **发布日期**：2026-11-26 16:41
 **变更类型**：新增、优化
