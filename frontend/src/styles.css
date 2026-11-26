@@ -2727,3 +2727,92 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px; line-height: 1.65; white-space: pre; word-break: normal; tab-size: 2; }
 .ad-filter-bar > .btn { height: 30px; padding: 0 14px; font-size: 12px; }
+
+/* ===================== V4.149 系统级 UI 组件统一规范（全模块适用） =====================
+ * 新增/重构功能统一使用 frontend/src/ui.tsx 的 Ui* 组件：
+ * - 输入 / 下拉 / 按钮同时挂 cwb-* 与 ui-* 类名，外观复用创意工作台，禁止再写独立控件样式；
+ * - 默认布局从上到下：ui-page > ui-card > ui-form > ui-form-row；
+ * - 间距统一 14px（常规）/ 10px（紧凑）/ 18px（宽松），控件高度统一 40px。
+ */
+:root {
+  --ui-gap-tight: 10px;
+  --ui-gap: 14px;
+  --ui-gap-loose: 18px;
+  --ui-control-h: 40px;
+  --ui-radius: 12px;
+}
+.ui-page { display: flex; flex-direction: column; gap: var(--ui-gap-loose); }
+.ui-card.cwb-input-card { padding: var(--ui-gap-loose); }
+.ui-card-head { display: flex; flex-direction: column; gap: 8px; margin-bottom: var(--ui-gap); }
+.ui-card-title { margin: 0; font-size: 15px; font-weight: 700; color: var(--text, #1f2937); }
+.ui-card-subtitle { font-size: 12.5px; line-height: 1.6; color: var(--muted, #6b7280); }
+.ui-form { display: flex; flex-direction: column; gap: var(--ui-gap); }
+.ui-form-row { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.ui-field-label { font-size: 13px; font-weight: 600; color: var(--text, #1f2937); text-align: left; }
+.ui-field-hint { font-size: 12px; line-height: 1.5; color: var(--muted, #6b7280); }
+.ui-input, .ui-select, .ui-textarea { width: 100%; box-sizing: border-box; }
+.ui-input.cwb-input, .ui-select.cwb-select { height: var(--ui-control-h); }
+.ui-textarea.cwb-supplement-input { min-height: 76px; }
+.ui-file { padding: 6px 10px; line-height: 26px; }
+.ui-file::file-selector-button {
+  height: 26px; margin-right: 10px; padding: 0 12px; border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px; background: var(--card, #fff); color: var(--text, #1f2937);
+  font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.ui-btn, .ui-btn-primary {
+  min-height: var(--ui-control-h);
+  box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
+  text-decoration: none;
+}
+.ui-btn.block, .ui-btn-primary.block { width: 100%; }
+.ui-btn.active { background: #e8f5ee; border-color: #16a34a; color: #15803d; font-weight: 600; }
+.ui-btn:disabled, .ui-btn-primary:disabled { opacity: .55; cursor: not-allowed; }
+.ui-action-row { display: flex; flex-direction: column; gap: 8px; }
+.ui-action-row.inline { flex-direction: row; flex-wrap: wrap; }
+.ui-stack { display: flex; flex-direction: column; }
+.ui-stack.gap-tight { gap: var(--ui-gap-tight); }
+.ui-stack.gap-normal { gap: var(--ui-gap); }
+.ui-stack.gap-loose { gap: var(--ui-gap-loose); }
+.ui-panel {
+  margin-top: var(--ui-gap);
+  padding: 14px 16px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: var(--ui-radius);
+  background: var(--card, #fff);
+}
+.ui-panel-head { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.ui-panel-title { font-size: 13.5px; font-weight: 700; color: var(--text, #1f2937); }
+.ui-panel-subtitle { font-size: 12px; line-height: 1.55; color: var(--muted, #6b7280); }
+.ui-check-row { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.55; color: var(--text, #1f2937); cursor: pointer; }
+.ui-check-row input[type=checkbox] { width: 16px; height: 16px; margin: 2px 0 0; flex: none; accent-color: #16a34a; cursor: pointer; }
+.ui-message { margin: 0 0 var(--ui-gap); padding: 10px 12px; border-radius: 9px; font-size: 13px; }
+.ui-message.err { background: #ffe3e3; color: #c92a2a; }
+.ui-message.ok { background: #d3f9d8; color: #2b8a3e; }
+.ui-video { width: 100%; max-height: 420px; background: #000; border-radius: 10px; display: block; }
+.ui-kv { display: flex; flex-direction: column; }
+.ui-kv-row { display: flex; flex-direction: column; gap: 2px; padding: 7px 0; border-bottom: 1px dashed var(--border, #e5e7eb); }
+.ui-kv-row:last-child { border-bottom: none; }
+.ui-kv-row span { font-size: 11.5px; color: var(--muted, #6b7280); }
+.ui-kv-row b { font-size: 13px; font-weight: 600; color: var(--text, #1f2937); word-break: break-word; }
+.ui-badge-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.ui-badge { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 12px; font-size: 11.5px; font-weight: 600; background: #f1f5f9; color: #334155; }
+.ui-badge.on { background: #e8f5ee; color: #15803d; }
+.ui-task-list { display: flex; flex-direction: column; gap: var(--ui-gap); }
+.ui-task-card { border: 1px solid var(--border, #e5e7eb); border-radius: var(--ui-radius); padding: 14px 16px; background: var(--card, #fff); }
+.ui-task-title { font-size: 14px; font-weight: 700; color: var(--text, #1f2937); margin-bottom: 7px; word-break: break-word; }
+.ui-task-id { font-size: 11.5px; color: var(--muted, #6b7280); margin-bottom: 10px; word-break: break-all; }
+.ui-task-meta { display: flex; flex-direction: column; margin: 10px 0; }
+.ui-task-actions { display: flex; flex-direction: column; gap: 8px; }
+.ui-script-list { display: flex; flex-direction: column; gap: var(--ui-gap-tight); }
+.ui-script-details { border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: #fff; padding: 9px 12px; }
+.ui-script-details summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text, #1f2937); }
+.ui-script-details pre { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--card-2, #f8fafc);
+  white-space: pre-wrap; word-break: break-word; font-size: 12.5px; line-height: 1.6; color: var(--text, #1f2937); }
+.ui-shot-list { display: flex; flex-direction: column; gap: var(--ui-gap-tight); }
+.ui-shot-card { border: 1px solid var(--border, #e5e7eb); border-radius: 10px; padding: 12px; background: #fafbfc; }
+.ui-shot-head { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.ui-shot-line { font-size: 12.5px; line-height: 1.6; color: var(--text, #1f2937); margin: 4px 0; word-break: break-word; }
+.ui-shot-line span { color: var(--muted, #6b7280); font-weight: 600; }
+.ui-empty { padding: 24px 0; text-align: center; color: var(--muted, #6b7280); font-size: 13px; }
+.ui-json-textarea.cwb-supplement-input { min-height: 300px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; }

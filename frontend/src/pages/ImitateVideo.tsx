@@ -1,21 +1,27 @@
 /**
- * V4.145–V4.148 · 模仿创作视频 —— 独立一级功能模块。
+ * V4.145–V4.149 · 模仿创作视频 —— 独立一级功能模块。
  *
  * V4.145：页面壳 + 后端任务列表只读展示。
  * V4.146：新建任务双入口（直链代下载 / 本地上传复用）+ 原片 <video> 预览 +
  *         元数据展示 + 权利声明确认 + 建任务。
  * V4.147：分析脚本 A1–A10 查看 / 编辑 / 导出（真实视觉模型，后台任务）。
  * V4.148：创作脚本 C1–C8（统一文本模型）+ 确认闸门 + 成本预估 + 幂等键；
- *         逐镜快捷编辑（旁白、删镜、排序、结构保持度）与全量 JSON 编辑；
- *         本版确认后只停在 creation_confirmed，不提交付费生成。
+ *         逐镜快捷编辑与全量 JSON 编辑；本版确认后只停在 creation_confirmed。
+ * V4.149：按系统级 UI 规范重构——输入 / 下拉 / 文本域 / 按钮统一复用创意工作台样式；
+ *         页面全部改为自上而下布局，任务列表由宽表改为纵向卡片，统一高度与间距。
  *
- * 只新增本页与 API 封装，不改动现有 4 个一级模块的布局与功能。
+ * 业务逻辑保持不变；本版只改 UI 结构与样式。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
   api, imitateVideoApi, ImitateTask, ImitateSource,
   ImitateAnalysisScript, ImitateCreationScript, ImitateVideoSpec,
 } from '../api'
+import {
+  UiActionRow, UiButton, UiCard, UiCheckRow, UiFormRow, UiInput,
+  UiLinkButton, UiPanel, UiSelect, UiStack, UiTextarea,
+} from '../ui'
 
 type Msg = { kind: 'ok' | 'err'; text: string }
 type Tab = 'url' | 'upload'
@@ -59,6 +65,24 @@ function specLabel(spec?: ImitateVideoSpec): string {
   if (!spec) return '未选择'
   const ratio = (spec.aspect_ratios || [])[0] || '比例未登记'
   return `${spec.platform} · ${spec.ad_product || '默认版位'} · ${ratio}`
+}
+
+function MetaRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="ui-kv-row">
+      <span>{label}</span>
+      <b>{value || '未知'}</b>
+    </div>
+  )
+}
+
+function ScriptDetails({ code, label, value }: { code: string; label: string; value: any }) {
+  return (
+    <details className="ui-script-details">
+      <summary>{code} · {label}</summary>
+      <pre>{JSON.stringify(value ?? {}, null, 2)}</pre>
+    </details>
+  )
 }
 
 export default function ImitateVideo() {
@@ -399,386 +423,300 @@ export default function ImitateVideo() {
   }
 
   return (
-    <div className="card">
-      <div className="ad-panel-head">
-        <div>
-          <h2 style={{ margin: 0 }}>模仿创作视频</h2>
-          <div className="muted" style={{ marginTop: 6 }}>
-            以专业投放视频为学习对象，解构其创作方案后重新演绎出符合投放规格的新视频。
-          </div>
-        </div>
-      </div>
+    <div className="ui-page">
+      {msg && <div className={`ui-message ${msg.kind === 'err' ? 'err' : 'ok'}`}>{msg.text}</div>}
 
-      <p className="note" style={{ borderLeft: '3px solid var(--accent, #2b6cb0)', paddingLeft: 10 }}>
-        V4.148：支持分析脚本 A1–A10、创作脚本 C1–C8、逐镜编辑与确认闸门；确认后仅冻结幂等键，
-        逐镜出片由 V4.149 交付。分析/创作会调用真实模型并可能产生 token 费用，缓存命中不重复计费。
-      </p>
+      {/* ---- 新建任务：从上到下的单列表单 ---- */}
+      <UiCard title="新建任务 · 源视频" subtitle="链接或上传专业投放视频，系统学习其创作结构后重新演绎。">
+        <div className="ui-form">
+          <UiFormRow label="参考来源">
+            <UiActionRow inline>
+              <UiButton block active={tab === 'url'} onClick={() => switchTab('url')}>视频链接</UiButton>
+              <UiButton block active={tab === 'upload'} onClick={() => switchTab('upload')}>本地上传</UiButton>
+            </UiActionRow>
+          </UiFormRow>
 
-      {msg && <div className={msg.kind === 'err' ? 'err' : 'ok'} style={{ margin: '10px 0' }}>{msg.text}</div>}
+          {tab === 'url' ? (
+            <UiFormRow label="视频直链" hint="仅支持 http/https 直链，文件不超过 200MB。">
+              <UiInput placeholder="粘贴视频直链" value={url} onChange={e => setUrl(e.target.value)} />
+              <UiButton variant="primary" block onClick={() => void acquireUrl()} disabled={acquiring}>
+                {acquiring ? '获取中…' : '获取源视频'}
+              </UiButton>
+            </UiFormRow>
+          ) : (
+            <UiFormRow label="本地视频" hint="支持 MP4 / MOV / WEBM / M4V，文件不超过 200MB。">
+              <UiInput ref={fileRef} type="file" className="ui-file"
+                accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.m4v"
+                onChange={e => { const f = e.target.files?.[0]; if (f) void uploadFile(f) }} />
+            </UiFormRow>
+          )}
 
-      {/* ---- 新建任务：双入口 ---- */}
-      <div className="ad-panel-head" style={{ marginTop: 16 }}>
-        <h3 style={{ margin: 0 }}>新建任务 · 源视频</h3>
-        <div>
-          <button className="btn" style={{ marginRight: 6, background: tab === 'url' ? 'var(--accent, #2b6cb0)' : undefined, color: tab === 'url' ? '#fff' : undefined }} onClick={() => switchTab('url')}>视频链接</button>
-          <button className="btn" style={{ background: tab === 'upload' ? 'var(--accent, #2b6cb0)' : undefined, color: tab === 'upload' ? '#fff' : undefined }} onClick={() => switchTab('upload')}>本地上传</button>
-        </div>
-      </div>
+          <UiFormRow label="任务名称" htmlFor="iv-task-name">
+            <UiInput id="iv-task-name" value={taskName} onChange={e => setTaskName(e.target.value)}
+              placeholder="可选，默认取源视频名" />
+          </UiFormRow>
 
-      <div style={{ display: 'grid', gap: 10, marginTop: 10 }}>
-        {tab === 'url' ? (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <input style={{ flex: 1, minWidth: 260 }} placeholder="粘贴视频直链（http/https，≤200MB）"
-              value={url} onChange={e => setUrl(e.target.value)} />
-            <button className="btn primary" onClick={() => void acquireUrl()} disabled={acquiring}>
-              {acquiring ? '获取中…' : '获取源视频'}
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.m4v"
-              ref={fileRef} onChange={e => { const f = e.target.files?.[0]; if (f) void uploadFile(f) }} />
-            <span className="muted">支持 MP4 / MOV / WEBM，≤200MB</span>
-          </div>
-        )}
-
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <label style={{ flex: 1, minWidth: 180 }}>任务名称
-            <input style={{ display: 'block', width: '100%', marginTop: 4 }} value={taskName}
-              onChange={e => setTaskName(e.target.value)} placeholder="可选，默认取源视频名" />
-          </label>
-          <label style={{ flex: 2, minWidth: 260 }}>目标投放规格（规格库）
-            <select style={{ display: 'block', width: '100%', marginTop: 4 }} value={targetSpecId}
-              onChange={e => setTargetSpecId(e.target.value)}>
+          <UiFormRow label="目标投放规格" htmlFor="iv-target-spec">
+            <UiSelect id="iv-target-spec" value={targetSpecId} onChange={e => setTargetSpecId(e.target.value)}>
               <option value="">请选择平台 + 版位</option>
               {specs.map(s => (
                 <option key={s.spec_id} value={s.spec_id}>{specLabel(s)}（{s.verification_label || s.verification}）</option>
               ))}
-            </select>
-          </label>
-          <label style={{ minWidth: 140 }}>结构保持度
-            <select style={{ display: 'block', width: '100%', marginTop: 4 }} value={structureFidelity}
-              onChange={e => setStructureFidelity(e.target.value)}>
+            </UiSelect>
+          </UiFormRow>
+
+          <UiFormRow label="结构保持度" htmlFor="iv-fidelity">
+            <UiSelect id="iv-fidelity" value={structureFidelity} onChange={e => setStructureFidelity(e.target.value)}>
               <option value="high">高（逐镜保留）</option>
               <option value="medium">中（保留钩子/CTA）</option>
               <option value="low">低（仅叙事骨架）</option>
-            </select>
-          </label>
-          <label style={{ minWidth: 130 }}>目标语言
-            <select style={{ display: 'block', width: '100%', marginTop: 4 }} value={language}
-              onChange={e => setLanguage(e.target.value)}>
+            </UiSelect>
+          </UiFormRow>
+
+          <UiFormRow label="目标语言" htmlFor="iv-language">
+            <UiSelect id="iv-language" value={language} onChange={e => setLanguage(e.target.value)}>
               <option value="">跟随原片</option>
               <option value="en">英文</option>
               <option value="zh">中文</option>
-            </select>
-          </label>
+            </UiSelect>
+          </UiFormRow>
         </div>
 
-        {/* ---- 原片预览 + 元数据 ---- */}
+        {/* ---- 原片预览 + 元数据：单列纵向 ---- */}
         {source && (
-          <div style={{ border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 12 }}>
-            <div className="muted" style={{ marginBottom: 8 }}>
-              源视频：{source.name || '—'} · {source.source === 'url' ? '链接获取' : '本地上传'}
-            </div>
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-              <video
-                src={api.fileUrl(source.file || '')}
-                controls playsInline style={{ width: 320, maxWidth: '100%', background: '#000' }} />
-              <div style={{ minWidth: 200 }}>
-                <table className="ad-table">
-                  <tbody>
-                    <tr><td>分辨率</td><td>{source.width && source.height ? `${source.width}×${source.height}` : (source.source === 'upload' ? '建任务时补全' : '未知')}</td></tr>
-                    <tr><td>画幅比</td><td>{source.aspect_ratio || '未知'}</td></tr>
-                    <tr><td>时长</td><td>{source.duration_sec ? `${source.duration_sec.toFixed(1)} 秒` : '未知'}</td></tr>
-                    <tr><td>帧率</td><td>{source.fps || '未知'}</td></tr>
-                    <tr><td>音轨</td><td>{source.has_audio ? '有' : '无'}</td></tr>
-                    <tr><td>大小</td><td>{source.bytes ? `${(source.bytes / 1024 / 1024).toFixed(1)} MB` : '—'}</td></tr>
-                  </tbody>
-                </table>
+          <UiPanel title="源视频预览与元数据" subtitle={`${source.name || '—'} · ${sourceLabel(source.source)}`}>
+            <UiStack>
+              <video className="ui-video" src={api.fileUrl(source.file || '')} controls playsInline />
+              <div className="ui-kv">
+                <MetaRow label="分辨率" value={source.width && source.height ? `${source.width}×${source.height}` : (source.source === 'upload' ? '建任务时补全' : '未知')} />
+                <MetaRow label="画幅比" value={source.aspect_ratio} />
+                <MetaRow label="时长" value={source.duration_sec ? `${source.duration_sec.toFixed(1)} 秒` : '未知'} />
+                <MetaRow label="帧率" value={source.fps} />
+                <MetaRow label="音轨" value={source.has_audio ? '有' : '无'} />
+                <MetaRow label="大小" value={source.bytes ? `${(source.bytes / 1024 / 1024).toFixed(1)} MB` : '—'} />
               </div>
-            </div>
-            <label style={{ display: 'block', marginTop: 12 }}>
-              <input type="checkbox" checked={rightsAck} onChange={e => setRightsAck(e.target.checked)} />
-              {' '}我已获得该视频的使用授权，仅用于学习其创作结构并重新创作（权利声明将留痕）
-            </label>
-            <button className="btn primary" style={{ marginTop: 10 }} onClick={() => void createJob()} disabled={creating}>
-              {creating ? '创建中…' : '确认源视频并创建任务'}
-            </button>
+              <UiCheckRow checked={rightsAck} onChange={setRightsAck}>
+                我已获得该视频的使用授权，仅用于学习其创作结构并重新创作（权利声明将留痕）
+              </UiCheckRow>
+              <UiButton variant="primary" block onClick={() => void createJob()} disabled={creating}>
+                {creating ? '创建中…' : '确认源视频并创建任务'}
+              </UiButton>
+            </UiStack>
+          </UiPanel>
+        )}
+      </UiCard>
+
+      {/* ---- 任务列表：宽表改为纵向卡片 ---- */}
+      <UiCard title="任务列表" actions={<UiButton block onClick={() => void load()} disabled={loading}>{loading ? '刷新中…' : '刷新'}</UiButton>}>
+        {loading && <div className="ui-empty">加载中…</div>}
+        {!loading && items.length === 0 && <div className="ui-empty">暂无任务，请先在上方提交参考视频。</div>}
+        {!loading && items.length > 0 && (
+          <div className="ui-task-list">
+            {items.map(t => (
+              <div className="ui-task-card" key={t.job_id}>
+                <div className="ui-task-title">{t.name || t.job_id}</div>
+                <div className="ui-task-id">任务号：{t.job_id}</div>
+                <div className="ui-badge-row">
+                  <span className="ui-badge on">{STATUS_LABEL[t.status] || t.status}</span>
+                  <span className="ui-badge">{t.stage ? (STAGE_LABEL[t.stage] || t.stage) : '—'}</span>
+                  <span className="ui-badge">来源：{sourceLabel(t.source)}</span>
+                </div>
+                <div className="ui-task-meta">
+                  <MetaRow label="画幅 / 时长" value={[t.aspect_ratio, t.duration_sec ? `${t.duration_sec.toFixed(1)}s` : ''].filter(Boolean).join(' / ') || '—'} />
+                  <MetaRow label="创建时间" value={t.created_at} />
+                </div>
+                <UiStack gap="tight">
+                  {t.source_file && (
+                    <UiLinkButton block href={imitateVideoApi.sourceUrl(t.job_id)} target="_blank" rel="noreferrer">预览原片</UiLinkButton>
+                  )}
+                  {t.analysis_script_id ? (
+                    <UiButton block onClick={() => void openScript(t)}>查看分析脚本{t.analysis_cached ? '（缓存）' : ''}</UiButton>
+                  ) : t.stage === 'analysis_pending' ? (
+                    <div className="ui-badge">分析脚本生成中…</div>
+                  ) : t.stage === 'analysis_unavailable' ? (
+                    <UiButton block disabled={!!analyzingId} onClick={() => void triggerAnalyze(t)}>重试分析</UiButton>
+                  ) : t.stage === 'source_acquiring' ? (
+                    <UiButton block disabled={!!analyzingId} onClick={() => void triggerAnalyze(t)}>
+                      {analyzingId === t.job_id ? '提交中…' : '生成分析脚本'}
+                    </UiButton>
+                  ) : null}
+
+                  {t.creation_script_id ? (
+                    <UiButton block onClick={() => void openCreation(t)}>查看/确认创作脚本{t.creation_status === 'confirmed' ? '（已确认）' : ''}</UiButton>
+                  ) : t.stage === 'creation_pending' ? (
+                    <div className="ui-badge">创作脚本生成中…</div>
+                  ) : t.stage === 'creation_unavailable' ? (
+                    <UiButton block disabled={!!creatingScriptId} onClick={() => void triggerCreation(t)}>重试创作脚本</UiButton>
+                  ) : t.stage === 'analysis_ready' ? (
+                    <UiButton block disabled={!!creatingScriptId} onClick={() => void triggerCreation(t)}>
+                      {creatingScriptId === t.job_id ? '提交中…' : '生成创作脚本'}
+                    </UiButton>
+                  ) : t.stage === 'awaiting_confirm' ? (
+                    <UiButton block onClick={() => void openCreation(t)}>去确认创作脚本</UiButton>
+                  ) : null}
+                </UiStack>
+              </div>
+            ))}
           </div>
         )}
-      </div>
-
-      {/* ---- 任务列表 ---- */}
-      <div className="ad-panel-head" style={{ marginTop: 20 }}>
-        <h3 style={{ margin: 0 }}>任务列表</h3>
-        <button className="btn" onClick={() => void load()} disabled={loading}>
-          {loading ? '刷新中…' : '刷新'}
-        </button>
-      </div>
-
-      {loading && <div className="muted">加载中…</div>}
-      {!loading && items.length === 0 && (
-        <div className="muted" style={{ padding: '24px 0' }}>暂无任务，请先在上方提交参考视频。</div>
-      )}
-      {!loading && items.length > 0 && (
-        <table className="ad-table">
-          <thead>
-            <tr>
-              <th>任务</th><th>状态</th><th>阶段</th><th>来源</th>
-              <th>画幅/时长</th><th>原片</th><th>分析脚本</th><th>创作脚本</th><th>创建时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map(t => (
-              <tr key={t.job_id}>
-                <td>{t.name || t.job_id}</td>
-                <td>{STATUS_LABEL[t.status] || t.status}</td>
-                <td>{t.stage ? (STAGE_LABEL[t.stage] || t.stage) : '—'}</td>
-                <td>{sourceLabel(t.source)}</td>
-                <td>{[t.aspect_ratio, t.duration_sec ? `${t.duration_sec.toFixed(1)}s` : ''].filter(Boolean).join(' / ') || '—'}</td>
-                <td>
-                  {t.source_file && (
-                    <a href={imitateVideoApi.sourceUrl(t.job_id)} target="_blank" rel="noreferrer">预览</a>
-                  )}
-                </td>
-                <td>
-                  {t.analysis_script_id ? (
-                    <a href="javascript:void(0)" onClick={() => void openScript(t)}>
-                      查看{t.analysis_cached ? '（缓存）' : ''}
-                    </a>
-                  ) : t.stage === 'analysis_pending' ? (
-                    <span className="muted">生成中…</span>
-                  ) : t.stage === 'analysis_unavailable' ? (
-                    <button className="btn" onClick={() => void triggerAnalyze(t)}>重试分析</button>
-                  ) : t.stage === 'source_acquiring' ? (
-                    <button className="btn" disabled={!!analyzingId}
-                      onClick={() => void triggerAnalyze(t)}>
-                      {analyzingId === t.job_id ? '提交中…' : '生成分析脚本'}
-                    </button>
-                  ) : '—'}
-                </td>
-                <td>
-                  {t.creation_script_id ? (
-                    <a href="javascript:void(0)" onClick={() => void openCreation(t)}>
-                      查看/确认{t.creation_status === 'confirmed' ? '（已确认）' : ''}
-                    </a>
-                  ) : t.stage === 'creation_pending' ? (
-                    <span className="muted">生成中…</span>
-                  ) : t.stage === 'creation_unavailable' ? (
-                    <button className="btn" disabled={!!creatingScriptId}
-                      onClick={() => void triggerCreation(t)}>重试创作脚本</button>
-                  ) : t.stage === 'analysis_ready' ? (
-                    <button className="btn" disabled={!!creatingScriptId}
-                      onClick={() => void triggerCreation(t)}>
-                      {creatingScriptId === t.job_id ? '提交中…' : '生成创作脚本'}
-                    </button>
-                  ) : t.stage === 'awaiting_confirm' ? (
-                    <button className="btn" onClick={() => void openCreation(t)}>去确认</button>
-                  ) : '—'}
-                </td>
-                <td>{t.created_at || '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      </UiCard>
 
       {/* ---- 分析脚本查看 / 编辑（A1–A10）---- */}
       {scriptTask && (
-        <div style={{ border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 14, marginTop: 18 }}>
-          <div className="ad-panel-head">
-            <div>
-              <h3 style={{ margin: 0 }}>分析脚本 A1–A10 · {scriptTask.name || scriptTask.job_id}</h3>
-              <div className="muted" style={{ marginTop: 4 }}>
-                {script?.meta_json?.model ? `模型：${String(script.meta_json.provider || '')} / ${String(script.meta_json.model)}` : '真实视觉模型分析'}
-                {script?.meta_json?.frames ? ` · 抽帧 ${String(script.meta_json.frames)} 张` : ''}
-              </div>
-            </div>
-            <div>
+        <UiCard
+          title={`分析脚本 A1–A10 · ${scriptTask.name || scriptTask.job_id}`}
+          subtitle={script?.meta_json?.model
+            ? `模型：${String(script.meta_json.provider || '')} / ${String(script.meta_json.model)}${script?.meta_json?.frames ? ` · 抽帧 ${String(script.meta_json.frames)} 张` : ''}`
+            : '真实视觉模型分析'}
+          actions={(
+            <>
               {script && !scriptEditing && (
                 <>
-                  <button className="btn" style={{ marginRight: 6 }} onClick={() => setScriptEditing(true)}>编辑</button>
-                  <button className="btn" style={{ marginRight: 6 }} onClick={downloadScript}>导出 JSON</button>
+                  <UiButton block onClick={() => setScriptEditing(true)}>编辑</UiButton>
+                  <UiButton block onClick={downloadScript}>导出 JSON</UiButton>
                 </>
               )}
-              <button className="btn" onClick={() => { setScriptTask(null); setScript(null) }}>关闭</button>
-            </div>
-          </div>
-
-          {scriptLoading && <div className="muted" style={{ padding: 16 }}>加载分析脚本…</div>}
+              <UiButton block onClick={() => { setScriptTask(null); setScript(null) }}>关闭</UiButton>
+            </>
+          )}
+        >
+          {scriptLoading && <div className="ui-empty">加载分析脚本…</div>}
           {!scriptLoading && !script && (
-            <div className="muted" style={{ padding: 16 }}>
-              尚无分析脚本。可在任务列表点击「生成分析脚本」（使用系统已配置的真实视觉模型）。
-            </div>
+            <div className="ui-empty">尚无分析脚本。可在任务卡片点击「生成分析脚本」（使用系统已配置的真实视觉模型）。</div>
           )}
           {!scriptLoading && scriptEditing && (
-            <div style={{ marginTop: 10 }}>
-              <textarea value={scriptDraft} onChange={e => setScriptDraft(e.target.value)}
-                style={{ width: '100%', minHeight: 420, fontFamily: 'monospace', fontSize: 12 }} />
-              <div style={{ marginTop: 8 }}>
-                <button className="btn primary" style={{ marginRight: 6 }} onClick={saveScriptLocal}>保存草稿</button>
-                <button className="btn" onClick={() => { setScriptEditing(false); setScriptDraft(JSON.stringify(script?.script_json || {}, null, 2)) }}>取消</button>
-              </div>
-            </div>
+            <UiStack>
+              <UiTextarea value={scriptDraft} onChange={e => setScriptDraft(e.target.value)} className="ui-json-textarea" />
+              <UiActionRow>
+                <UiButton variant="primary" block onClick={saveScriptLocal}>保存草稿</UiButton>
+                <UiButton block onClick={() => { setScriptEditing(false); setScriptDraft(JSON.stringify(script?.script_json || {}, null, 2)) }}>取消</UiButton>
+              </UiActionRow>
+            </UiStack>
           )}
           {!scriptLoading && !scriptEditing && script?.script_json && (
-            <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+            <div className="ui-script-list">
               {Object.keys(A_LABELS).map(k => (
-                <div key={k} style={{ borderLeft: '3px solid var(--accent, #2b6cb0)', paddingLeft: 10 }}>
-                  <div style={{ fontWeight: 600 }}>{k} · {A_LABELS[k]}</div>
-                  <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12 }}>
-                    {JSON.stringify(script.script_json?.[k] ?? {}, null, 2)}
-                  </pre>
-                </div>
+                <ScriptDetails key={k} code={k} label={A_LABELS[k]} value={script.script_json?.[k] ?? {}} />
               ))}
             </div>
           )}
-        </div>
+        </UiCard>
       )}
 
       {/* ---- 创作脚本查看 / 编辑 / 确认（C1–C8）---- */}
       {creationTask && (
-        <div style={{ border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 14, marginTop: 18 }}>
-          <div className="ad-panel-head">
-            <div>
-              <h3 style={{ margin: 0 }}>创作脚本 C1–C8 · {creationTask.name || creationTask.job_id}</h3>
-              <div className="muted" style={{ marginTop: 4 }}>
-                {creation?.meta_json?.model ? `模型：${String(creation.meta_json.provider || '')} / ${String(creation.meta_json.model)}` : '统一文本模型'}
-                {creation?.script_json?.C1?.spec_id ? ` · 规格：${String(creation.script_json.C1.spec_id)}` : ''}
-                {creation?.meta_json?.idempotency_key ? ` · 幂等键：${String(creation.meta_json.idempotency_key)}` : ''}
-              </div>
-            </div>
-            <div>
+        <UiCard
+          title={`创作脚本 C1–C8 · ${creationTask.name || creationTask.job_id}`}
+          subtitle={`${creation?.meta_json?.model ? `模型：${String(creation.meta_json.provider || '')} / ${String(creation.meta_json.model)}` : '统一文本模型'}${creation?.script_json?.C1?.spec_id ? ` · 规格：${String(creation.script_json.C1.spec_id)}` : ''}${creation?.meta_json?.idempotency_key ? ` · 幂等键：${String(creation.meta_json.idempotency_key)}` : ''}`}
+          actions={(
+            <>
               {creation && !creationEditing && (
                 <>
-                  <button className="btn" style={{ marginRight: 6 }} onClick={() => setCreationEditing(true)}>JSON 编辑</button>
-                  <button className="btn" style={{ marginRight: 6 }} onClick={downloadCreation}>导出 JSON</button>
+                  <UiButton block onClick={() => setCreationEditing(true)}>JSON 编辑</UiButton>
+                  <UiButton block onClick={downloadCreation}>导出 JSON</UiButton>
                 </>
               )}
-              <button className="btn" onClick={() => { setCreationTask(null); setCreation(null) }}>关闭</button>
-            </div>
-          </div>
-
-          {creationLoading && <div className="muted" style={{ padding: 16 }}>加载创作脚本…</div>}
+              <UiButton block onClick={() => { setCreationTask(null); setCreation(null) }}>关闭</UiButton>
+            </>
+          )}
+        >
+          {creationLoading && <div className="ui-empty">加载创作脚本…</div>}
           {!creationLoading && !creation && (
-            <div className="muted" style={{ padding: 16 }}>
+            <div className="ui-empty">
               {creationTask.stage === 'creation_pending'
                 ? '创作脚本正在后台生成，可切页等待，回到本页点击刷新即可。'
-                : '尚无创作脚本。请先在任务列表点击「生成创作脚本」。'}
+                : '尚无创作脚本。请先在任务卡片点击「生成创作脚本」。'}
             </div>
           )}
 
           {creation && (
-            <>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '10px 0', alignItems: 'center' }}>
-                <label>结构保持度
-                  <select style={{ marginLeft: 6 }} value={String(creation.script_json?.C2?.fidelity || 'medium')}
-                    onChange={e => updateFidelity(e.target.value)}>
-                    <option value="high">高（逐镜保留）</option>
-                    <option value="medium">中（保留钩子/CTA）</option>
-                    <option value="low">低（仅叙事骨架）</option>
-                  </select>
-                </label>
-                <span className="muted">
-                  预估消耗：{creation.script_json?.C8?.estimated_cost?.amount ?? '—'} {String(creation.script_json?.C8?.estimated_cost?.currency || 'USD')}
-                  （{String(creation.script_json?.C8?.estimated_cost?.note || '工程预估，非供应商报价')}）
-                </span>
-              </div>
+            <UiStack>
+              <UiFormRow label="结构保持度" htmlFor="iv-creation-fidelity">
+                <UiSelect id="iv-creation-fidelity" value={String(creation.script_json?.C2?.fidelity || 'medium')}
+                  onChange={e => updateFidelity(e.target.value)}>
+                  <option value="high">高（逐镜保留）</option>
+                  <option value="medium">中（保留钩子/CTA）</option>
+                  <option value="low">低（仅叙事骨架）</option>
+                </UiSelect>
+              </UiFormRow>
 
-              <div style={{ border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 10, marginTop: 8 }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>商业信息保留（勾选后必须改写，不逐字复制）</div>
-                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <UiPanel title="成本预估" subtitle={`${creation.script_json?.C8?.estimated_cost?.amount ?? '—'} ${String(creation.script_json?.C8?.estimated_cost?.currency || 'USD')} · ${String(creation.script_json?.C8?.estimated_cost?.note || '工程预估，非供应商报价')}`} />
+
+              <UiPanel title="商业信息保留" subtitle="勾选后必须改写，不逐字复制原文。">
+                <UiStack gap="tight">
                   {Object.keys(COMMERCIAL_LABELS).map(k => (
-                    <label key={k}>
-                      <input type="checkbox" checked={!!creation.script_json?.C5?.toggles?.[k]}
-                        onChange={e => updateCommercialToggle(k, e.target.checked)} />
-                      {' '}{COMMERCIAL_LABELS[k]}
-                    </label>
+                    <UiCheckRow key={k} checked={!!creation.script_json?.C5?.toggles?.[k]}
+                      onChange={v => updateCommercialToggle(k, v)}>
+                      {COMMERCIAL_LABELS[k]}
+                    </UiCheckRow>
                   ))}
-                </div>
-              </div>
+                </UiStack>
+              </UiPanel>
 
-              <div style={{ marginTop: 10 }}>
-                <div style={{ fontWeight: 600 }}>口播改写稿（仅交付文案，人工配音）</div>
-                <textarea value={String(creation.script_json?.C6?.voiceover_text || '')}
+              <UiFormRow label="口播改写稿" hint="仅交付文案，人工配音。">
+                <UiTextarea value={String(creation.script_json?.C6?.voiceover_text || '')}
                   onChange={e => setCreation(s => s ? {
                     ...s,
                     script_json: { ...(s.script_json || {}), C6: { ...(s.script_json?.C6 || {}), voiceover_text: e.target.value } },
                   } : s)}
-                  onBlur={() => updateVoiceover(String(creation.script_json?.C6?.voiceover_text || ''))}
-                  style={{ width: '100%', minHeight: 64, marginTop: 4 }} />
-              </div>
+                  onBlur={() => updateVoiceover(String(creation.script_json?.C6?.voiceover_text || ''))} />
+              </UiFormRow>
 
-              <div style={{ marginTop: 12 }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>逐镜指令（可排序 / 删镜）</div>
-                {shots.length === 0 ? <div className="muted">暂无镜头指令。</div> : (
-                  <table className="ad-table">
-                    <thead>
-                      <tr><th>#</th><th>时码/时长</th><th>画面指令</th><th>运镜</th><th>操作</th></tr>
-                    </thead>
-                    <tbody>
-                      {shots.map((s, i) => (
-                        <tr key={`${s.index || i}-${i}`}>
-                          <td>{s.index || i + 1}</td>
-                          <td>{[s.tc_start, s.tc_end].filter(Boolean).join('→') || '—'} / {s.duration || '—'}</td>
-                          <td style={{ maxWidth: 360, whiteSpace: 'pre-wrap' }}>{s.visual_prompt || '—'}</td>
-                          <td>{s.camera || s.movement_path || '—'}</td>
-                          <td>
-                            <button className="btn" style={{ marginRight: 4 }} disabled={i === 0}
-                              onClick={() => moveShot(i, -1)}>上移</button>
-                            <button className="btn" style={{ marginRight: 4 }} disabled={i === shots.length - 1}
-                              onClick={() => moveShot(i, 1)}>下移</button>
-                            <button className="btn" onClick={() => deleteShot(i)}>删除</button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              <UiPanel title="逐镜指令" subtitle="可调整顺序或删除镜头；每次修改都会自动重新计价并作废旧幂等键。">
+                {shots.length === 0 ? <div className="ui-empty">暂无镜头指令。</div> : (
+                  <div className="ui-shot-list">
+                    {shots.map((s, i) => (
+                      <div className="ui-shot-card" key={`${s.index || i}-${i}`}>
+                        <div className="ui-shot-head">
+                          <span className="ui-badge on">#{s.index || i + 1}</span>
+                          <span className="ui-badge">{[s.tc_start, s.tc_end].filter(Boolean).join('→') || '时码未定'}</span>
+                          <span className="ui-badge">时长 {s.duration || '—'}</span>
+                        </div>
+                        <div className="ui-shot-line"><span>画面指令：</span>{s.visual_prompt || '—'}</div>
+                        <div className="ui-shot-line"><span>运镜：</span>{s.camera || s.movement_path || '—'}</div>
+                        <UiActionRow inline>
+                          <UiButton disabled={i === 0} onClick={() => moveShot(i, -1)}>上移</UiButton>
+                          <UiButton disabled={i === shots.length - 1} onClick={() => moveShot(i, 1)}>下移</UiButton>
+                          <UiButton onClick={() => deleteShot(i)}>删除</UiButton>
+                        </UiActionRow>
+                      </div>
+                    ))}
+                  </div>
                 )}
-              </div>
+              </UiPanel>
 
               {creationEditing && (
-                <div style={{ marginTop: 12 }}>
-                  <textarea value={creationDraft} onChange={e => setCreationDraft(e.target.value)}
-                    style={{ width: '100%', minHeight: 420, fontFamily: 'monospace', fontSize: 12 }} />
-                  <div style={{ marginTop: 8 }}>
-                    <button className="btn primary" style={{ marginRight: 6 }} onClick={saveCreation}>保存创作脚本</button>
-                    <button className="btn" onClick={() => { setCreationEditing(false); setCreationDraft(JSON.stringify(creation.script_json || {}, null, 2)) }}>取消</button>
-                  </div>
-                </div>
+                <UiStack>
+                  <UiTextarea value={creationDraft} onChange={e => setCreationDraft(e.target.value)} className="ui-json-textarea" />
+                  <UiActionRow>
+                    <UiButton variant="primary" block onClick={saveCreation}>保存创作脚本</UiButton>
+                    <UiButton block onClick={() => { setCreationEditing(false); setCreationDraft(JSON.stringify(creation.script_json || {}, null, 2)) }}>取消</UiButton>
+                  </UiActionRow>
+                </UiStack>
               )}
 
-              <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--border, #ddd)' }}>
-                {!creationEditing && Object.keys(C_LABELS).map(k => (
-                  <details key={k} style={{ marginBottom: 6 }}>
-                    <summary style={{ cursor: 'pointer' }}>{k} · {C_LABELS[k]}</summary>
-                    <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12 }}>
-                      {JSON.stringify(creation.script_json?.[k] ?? {}, null, 2)}
-                    </pre>
-                  </details>
+              <div className="ui-script-list">
+                {Object.keys(C_LABELS).map(k => (
+                  <ScriptDetails key={k} code={k} label={C_LABELS[k]} value={creation.script_json?.[k] ?? {}} />
                 ))}
               </div>
 
               {creationTask.stage === 'awaiting_confirm' && (
-                <div style={{ marginTop: 14, padding: 12, background: 'var(--panel-soft, #f7f7f7)', borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600 }}>确认闸门</div>
-                  <div className="muted" style={{ margin: '6px 0' }}>
-                    确认后冻结脚本与幂等键；本版不会提交供应商，也不会设置任何视频付费字段。
-                  </div>
-                  <label>
-                    <input type="checkbox" checked={feeAck} onChange={e => setFeeAck(e.target.checked)} />
-                    {' '}我已知晓上述预计消耗与合规标注，确认按此脚本进入后续生成
-                  </label>
-                  <button className="btn primary" style={{ marginLeft: 10 }}
-                    disabled={!feeAck || !!confirmingId}
-                    onClick={() => void confirmCreation(creationTask)}>
-                    {confirmingId ? '确认中…' : '确认并冻结脚本'}
-                  </button>
-                </div>
+                <UiPanel title="确认闸门" subtitle="确认后冻结脚本与幂等键；本版不会提交供应商，也不会设置任何视频付费字段。">
+                  <UiStack>
+                    <UiCheckRow checked={feeAck} onChange={setFeeAck}>
+                      我已知晓上述预计消耗与合规标注，确认按此脚本进入后续生成
+                    </UiCheckRow>
+                    <UiButton variant="primary" block disabled={!feeAck || !!confirmingId}
+                      onClick={() => void confirmCreation(creationTask)}>
+                      {confirmingId ? '确认中…' : '确认并冻结脚本'}
+                    </UiButton>
+                  </UiStack>
+                </UiPanel>
               )}
-            </>
+            </UiStack>
           )}
-        </div>
+        </UiCard>
       )}
     </div>
   )
