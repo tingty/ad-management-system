@@ -196,6 +196,76 @@ PRESET_TEMPLATES: list[dict] = [
             "extra_params": {"limit": 250, "order_by": "-created_at"},
         },
     },
+    {
+        # V4.150：Rakuten Advertising 流量商佣金流水模板。
+        # 官方资料：
+        #   - https://developers.rakutenadvertising.com/guides/access_tokens
+        #   - https://developers.rakutenadvertising.com/documentation/en-US/affiliate_apis
+        #     GET /events/1.0/transactions
+        # 关键口径：Commissioning Lists API 是「动态佣金规则/SKU 名单」，不是已产生佣金；
+        # Advanced Reports 主要是付款历史/付款明细，且还需 Web Security Token；
+        # 本模板选 Events transactions，因为它是官方唯一明确返回逐笔
+        # etransaction_id / order_id / sku_number / sale_amount / commissions 的佣金流水接口。
+        "code": "rakuten_advertising",
+        "name": "Rakuten Advertising",
+        "vendor": "Rakuten Advertising",
+        "description": "读取 Events API transactions 逐笔佣金流水（订单/商品、销售额、佣金、币种与处理时间）。",
+        "record_object": "Transaction",
+        "record_object_desc": "Rakuten Events transaction: a commission event with order, SKU, sale amount and commission.",
+        "method": "GET",
+        "auth_type": "bearer",
+        "default_endpoint": "https://api.linksynergy.com",
+        "required_fields": [
+            {
+                "key": "token",
+                "label": "API Access Token（或 oauth:token-key|account-id）",
+                "type": "password",
+                "required": True,
+            },
+        ],
+        "query_name": "transactions",
+        "pagination": "page/limit 分页；本页条数小于 limit 即结束",
+        "limits": "Token 端点 100 次/分钟；Events 默认 limit=100（本模板固定 300）；token-key 生成的 access_token 有效期 3600 秒",
+        "framework_version": "advertiser-api/1.0",
+        "status": "active",
+        "protocol": {
+            "style": "rest", "http_method": "GET", "auth": "bearer", "cid_in": "none",
+            "endpoint_path": "events/1.0/transactions",
+            "records_path": "",
+            "record_wrappers": ["transactions", "events", "results", "data"],
+            "single_record": True,
+            # 实测同一 etransaction_id 会各返回一条 is_event=N 与 is_event=Y，
+            # 佣金金额完全相同；Y 是 Event 视角，计入会重复计算佣金。报表只取 N。
+            "record_filter": {"field": "is_event", "equals": "N"},
+            "count_path": "",
+            "cursor_path": "",
+            "complete_path": "",
+            "complete_when_short": True,
+            "page_size": 300,
+            "page_param": "page",
+            "external_id_path": "etransaction_id",
+            "date_params": {
+                "since": "process_date_start", "before": "process_date_end",
+            },
+            "date_value_format": "rakuten_datetime",
+            "extra_params": {"limit": 300, "page": 1},
+            # 通用凭据交换：用户可直接填 access token；若填 oauth:token-key|account-id，
+            # 则在每次调用前按模板声明自动换取新的 access token。token-key 是 Base64(client_id:client_secret)。
+            "credential": {
+                "mode": "prefix_exchange",
+                "prefix": "oauth:",
+                "delimiter": "|",
+                "parts": ["token_key", "account_id"],
+                "endpoint": "https://api.linksynergy.com/token",
+                "method": "POST",
+                "auth": "bearer",
+                "bearer_part": "token_key",
+                "content_type": "application/x-www-form-urlencoded",
+                "body": {"scope": "{account_id}"},
+                "token_path": "access_token",
+            },
+        },
+    },
 ]
 
 
@@ -326,25 +396,97 @@ def build_test_payload(cid: str, since_event_date: str, before_event_date: str) 
     return build_detail_payload(cid, since_event_date, before_event_date)
 
 
-def _redact_text(text: str, token: str = "") -> str:
-    """脱敏完整响应文本：只替换 Token 本体与 Bearer 片段，不截断内容。"""
+def _redact_text(text: str, token: str = "", secrets: Optional[list[str]] = None) -> str:
+    """脱敏完整响应文本：替换 Token / 组合凭据片段与 Bearer 片段，不截断内容。"""
     s = text or ""
-    if token:
-        s = s.replace(token, "***")
+    values = [token] + list(secrets or [])
+    for value in values:
+        if value:
+            s = s.replace(value, "***")
     return re.sub(r"Bearer\s+\S+", "Bearer ***", s, flags=re.I)
 
 
-def _redact_record(record: dict, token: str = "") -> dict:
-    """脱敏单条 PublisherCommission 明细（递归处理 items / verticalAttributes 中的字符串）。"""
+def _redact_record(record: dict, token: str = "", secrets: Optional[list[str]] = None) -> dict:
+    """脱敏单条明细（递归处理容器中的字符串）。"""
     def walk(value):
         if isinstance(value, str):
-            return _redact_text(value, token)
+            return _redact_text(value, token, secrets)
         if isinstance(value, list):
             return [walk(v) for v in value]
         if isinstance(value, dict):
             return {k: walk(v) for k, v in value.items()}
         return value
     return walk(record) if isinstance(record, dict) else record
+
+
+def _expand_credential_template(value: Any, parts: dict) -> Any:
+    """把 {part_name} 占位符替换为用户输入的凭据片段（配置驱动，不含渠道字段）。"""
+    if not isinstance(value, str):
+        return value
+    out = value
+    for key, item in parts.items():
+        out = out.replace("{" + key + "}", str(item))
+    return out
+
+
+async def resolve_credential(template_code: str, token: str, *,
+                             timeout_sec: float = 20.0) -> tuple[str, list[str], str]:
+    """按模板声明处理凭据，返回 (实际请求 token, 需脱敏片段, 凭据说明)。
+
+    默认直接把输入当作 access token，历史渠道行为零变化。模板声明 credential 且
+    输入带约定前缀时，按官方 token endpoint 自动换取 access token；Rakuten 的
+    token-key = Base64(client_id:client_secret)，scope = account-id。
+    """
+    import advertiser_protocol
+
+    raw = (token or "").strip()
+    proto = advertiser_protocol.protocol_of(template_code)
+    cfg = proto.get("credential") or {}
+    if not cfg or not raw.startswith(str(cfg.get("prefix") or "")):
+        return raw, ([raw] if raw else []), ""
+
+    prefix = str(cfg.get("prefix") or "")
+    delimiter = str(cfg.get("delimiter") or "|")
+    names = [str(x) for x in (cfg.get("parts") or [])]
+    pieces = raw[len(prefix):].split(delimiter)
+    if not names or len(pieces) != len(names):
+        raise ValueError("组合凭据格式错误：应为 " + prefix + delimiter.join(names))
+    parts = {name: piece.strip() for name, piece in zip(names, pieces)}
+    if any(not value for value in parts.values()):
+        raise ValueError("组合凭据含空字段：" + delimiter.join(names))
+
+    endpoint = str(cfg.get("endpoint") or "")
+    if not endpoint.startswith("https://"):
+        raise ValueError("凭据交换地址必须是 HTTPS")
+    headers = {"Content-Type": str(cfg.get("content_type")
+                                    or "application/x-www-form-urlencoded")}
+    if cfg.get("auth") == "bearer":
+        bearer_part = str(cfg.get("bearer_part") or "")
+        headers["Authorization"] = "Bearer " + parts.get(bearer_part, "")
+    body = {key: _expand_credential_template(value, parts)
+            for key, value in dict(cfg.get("body") or {}).items()}
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout_sec, follow_redirects=False) as c:
+            r = await c.request(str(cfg.get("method") or "POST").upper(),
+                                endpoint, data=body, headers=headers)
+    except httpx.HTTPError as exc:
+        raise RuntimeError("凭据交换网络失败：" + _safe_error(str(exc))) from exc
+    if r.status_code >= 400:
+        raise RuntimeError(f"凭据交换失败（HTTP {r.status_code}）："
+                           + _safe_error(_redact_text(r.text, parts.get("token_key", ""))))
+    try:
+        payload = r.json()
+    except Exception as exc:
+        raise RuntimeError("凭据交换返回不是 JSON") from exc
+    token_path = str(cfg.get("token_path") or "access_token")
+    access = payload.get(token_path) if isinstance(payload, dict) else None
+    access = str(access or "").strip()
+    if not access:
+        raise RuntimeError("凭据交换成功但未返回 " + token_path)
+    secrets = [access] + [v for v in parts.values() if v]
+    note = "access_token 由模板凭据交换获得；有效期按上游 expires_in 为准"
+    return access, secrets, note
 
 
 def _test_envelope(*, ok: bool, error: str, count: int, http_code: int,
@@ -406,8 +548,16 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
     if requires_cid(template_code) and not cid:
         return _env(ok=False, error="该模板要求的发布者 ID 必填", count=0, http_code=0, url=url)
 
+    # V4.150：模板可按声明完成凭据交换；普通 Token 直接透传，既有渠道零变化。
+    try:
+        effective_token, secrets, credential_note = await resolve_credential(
+            template_code, token, timeout_sec=timeout_sec)
+    except Exception as exc:
+        return _env(ok=False, error=_safe_error(str(exc)), count=0, http_code=0, url=url,
+                    hint="组合凭据格式或凭据交换失败；请检查 token-key / account-id。")
+
     req = advertiser_protocol.build_request(
-        template_code=template_code, endpoint=endpoint, token=token, cid=cid,
+        template_code=template_code, endpoint=endpoint, token=effective_token, cid=cid,
         since_event_date=since_event_date, before_event_date=before_event_date,
         since_commission_id=since_commission_id)
     url = req["url"]
@@ -416,7 +566,7 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
 
     payload = req["json_body"] or {}
     display_url = _redact_text(advertiser_protocol.request_display(
-        method=req["method"], url=url, params=req["params"]), token)
+        method=req["method"], url=url, params=req["params"]), effective_token, secrets)
     try:
         async with httpx.AsyncClient(timeout=timeout_sec, follow_redirects=False) as c:
             # V4.138：CJ(GraphQL POST) 保留 .post() 调用形态，兼容既有 mock 与契约；
@@ -428,16 +578,18 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
                     req["method"], url, json=req["json_body"],
                     params=req["params"] or None, headers=req["headers"])
     except httpx.HTTPError as e:
+        text = _redact_text(str(e), effective_token, secrets)
         return _env(
-            ok=False, error="网络请求失败：" + _safe_error(_redact_text(str(e), token)), count=0,
-            http_code=0, url=url, payload=payload, response_text=_redact_text(str(e), token))
+            ok=False, error="网络请求失败：" + _safe_error(text), count=0,
+            http_code=0, url=url, payload=payload, response_text=text)
 
     code = r.status_code
-    response_text = _redact_text(r.text, token)
+    response_text = _redact_text(r.text, effective_token, secrets)
     if code == 401 or code == 403:
         return _env(
-            ok=False, error=f"认证失败（HTTP {code}）：请检查 Token 是否有效", count=0,
-            http_code=code, url=url, payload=payload, response_text=response_text)
+            ok=False, error=(f"认证失败（HTTP {code}）：access token 无效或已过期；"
+                             "请重新生成，或改用 oauth:token-key|account-id 自动换取"),
+            count=0, http_code=code, url=url, payload=payload, response_text=response_text)
     if code >= 400:
         return _env(
             ok=False, error=f"上游返回 HTTP {code}：{_safe_error(response_text)}", count=0,
@@ -453,19 +605,21 @@ async def test_connection(*, template_code: str, endpoint: str, token: str, cid:
     if errors:
         msg = errors[0].get("message", "") if isinstance(errors, list) and errors else str(errors)
         return _env(
-            ok=False, error="GraphQL 错误：" + _safe_error(_redact_text(msg, token)), count=0, http_code=code,
+            ok=False, error="GraphQL 错误：" + _safe_error(_redact_text(msg, effective_token, secrets)),
+            count=0, http_code=code,
             url=url, payload=payload, response_text=response_text,
-            response=_redact_record(body, token))
+            response=_redact_record(body, effective_token, secrets))
 
     parsed = advertiser_protocol.parse_response(template_code=template_code, body=body)
-    records = [_redact_record(r, token) for r in parsed["records"]]
+    records = [_redact_record(r, effective_token, secrets) for r in parsed["records"]]
     result = _env(
         ok=True, error="", count=parsed["count"], http_code=code,
         url=display_url, request_method=req["method"], payload=payload,
-        response_text=response_text, response=_redact_record(body, token),
+        response_text=response_text, response=_redact_record(body, effective_token, secrets),
         payload_complete=parsed["complete"], max_commission_id=parsed["cursor"],
         record_object=(tpl.get("record_object") or "PublisherCommission"),
-        record_count=len(records), sample_records=records[:10])
+        record_count=len(records), sample_records=records[:10],
+        credential_note=credential_note)
     if not records:
         if (tpl.get("protocol") or {}).get("style", "graphql") == "rest":
             result["hint"] = (

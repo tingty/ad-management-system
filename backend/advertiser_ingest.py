@@ -86,10 +86,23 @@ def _convert(value: Any, transform: str | None) -> Any:
             text_value = str(value).replace("Z", "+00:00")
             dt = datetime.fromisoformat(text_value)
             return dt.replace(tzinfo=None)
+        if transform == "rakuten_datetime":
+            # 官方 Events API 示例："Wed Apr 15 2020 21:20:27 GMT+0000 (UTC)"，UTC 时间。
+            raw = str(value).strip()
+            try:
+                dt = datetime.strptime(raw, "%a %b %d %Y %H:%M:%S GMT+0000 (UTC)")
+            except ValueError:
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc)
+            return dt.replace(tzinfo=None)
         if transform == "bool":
             if isinstance(value, bool):
                 return value
             return str(value).strip().lower() in ("true", "1", "yes")
+        if transform == "yn_bool":
+            # Rakuten Events：is_event 官方枚举为 "Y"/"N"。
+            return str(value).strip().upper() == "Y"
         if transform == "skip":
             return None
     except (ValueError, TypeError, InvalidOperation):

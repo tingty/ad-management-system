@@ -52,7 +52,16 @@ def _dig(obj: Any, path: str) -> Any:
 def _date_value(text: str, value_format: str) -> Any:
     """按协议把系统统一的 UTC 窗口字符串转成上游要求的日期值。"""
     value = str(text or "").strip()
-    if value_format != "epoch_ms" or not value:
+    if not value:
+        return value
+    if value_format == "rakuten_datetime":
+        # Events API 官方文档示例：YYYY-MM-DD HH:mm:ss（UTC）。
+        try:
+            moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return moment.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return value
+    if value_format != "epoch_ms":
         return value
     try:
         try:
@@ -140,6 +149,13 @@ def build_request(*, template_code: str, endpoint: str, token: str, cid: str,
                 params[cid_param] = cid
         if since_commission_id and proto.get("cursor_param"):
             params[str(proto["cursor_param"])] = since_commission_id
+        # V4.150：页码型分页（Rakuten Events 等）复用同一个 cursor 入参；
+        # 调度层看到的仍是统一的 cursor 字符串，业务代码无需知道是页码还是游标。
+        if since_commission_id and proto.get("page_param"):
+            try:
+                params[str(proto["page_param"])] = int(since_commission_id)
+            except (TypeError, ValueError):
+                params[str(proto["page_param"])] = since_commission_id
 
     return {"method": method, "url": url, "headers": headers,
             "json_body": json_body, "params": params}
@@ -161,7 +177,28 @@ def parse_response(*, template_code: str, body: dict) -> dict:
     records_raw = _dig(body, paths.get("records_path") or "")
     if records_raw is None and style == "rest" and isinstance(body, list):
         records_raw = body  # 顶层数组型响应（如 Awin transactions）
-    records = [r for r in (records_raw or []) if isinstance(r, dict)]
+    # V4.150：包装键由模板声明，支持 {transactions:[...]} / {data:[...]} 等形态。
+    if records_raw is None and isinstance(body, dict):
+        for key in proto.get("record_wrappers") or []:
+            candidate = body.get(str(key))
+            if isinstance(candidate, list):
+                records_raw = candidate
+                break
+    # V4.150：官方 OpenAPI 把单笔 transaction 声明为 object；若响应体本身含幂等键，
+    # 就把它当作单条记录，避免把「有数据」误判成空窗口。
+    if (records_raw is None and proto.get("single_record") and isinstance(body, dict)
+            and body.get(str(proto.get("external_id_path") or "")) is not None):
+        records_raw = [body]
+    raw_records = [r for r in (records_raw or []) if isinstance(r, dict)]
+    records = list(raw_records)
+    # V4.150：通用记录过滤器。Rakuten 同一交易会回 is_event=N/Y 两条同额记录，
+    # 只保留交易视角 N，避免报表重复计佣；分页完成判断仍用原始条数。
+    filter_cfg = proto.get("record_filter") or {}
+    if filter_cfg and filter_cfg.get("field"):
+        expected = str(filter_cfg.get("equals") or "").upper()
+        field = str(filter_cfg["field"])
+        records = [r for r in records
+                   if str(_dig(r, field) if "." in field else r.get(field) or "").upper() == expected]
     count_raw = _dig(body, paths.get("count_path") or "")
     if count_raw is None:
         count_raw = len(records)
@@ -176,8 +213,23 @@ def parse_response(*, template_code: str, body: dict) -> dict:
     # PartnerStack 型游标：响应只给 has_more，游标取本页最后一条记录的 key。
     if not cursor and proto.get("cursor_from_last") and records:
         cursor = records[-1].get(str(proto.get("external_id_path") or "key")) or ""
+    # V4.150：页码型协议用「本页不满」判定结束，并把下一页页码作为统一 cursor。
+    if proto.get("page_param"):
+        page_size = int(proto.get("page_size") or 0)
+        if proto.get("complete_when_short") and page_size > 0:
+            complete = len(raw_records) < page_size
+        else:
+            complete = not raw_records
+        if not complete:
+            try:
+                current = int(cursor or (proto.get("extra_params") or {}).get("page", 1))
+            except (TypeError, ValueError):
+                current = 1
+            cursor = str(current + 1)
+        else:
+            cursor = ""
     # rest 无游标协议：单窗口即完成（数据窗口由调度层分片保证）
-    if style == "rest" and not paths.get("cursor_path") and not proto.get("cursor_from_last"):
+    elif style == "rest" and not paths.get("cursor_path") and not proto.get("cursor_from_last"):
         complete = True
         cursor = ""
     return {

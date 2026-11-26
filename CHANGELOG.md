@@ -2,6 +2,38 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.150 广告主 API：Rakuten Advertising 佣金流水模板 + 报表入库 + 标准工作流
+**发布日期**：2026-11-26 16:18
+**变更类型**：新增、优化
+**涉及模块**：广告主数据、广告主 API、Rakuten Advertising、广告主报表、后端接口、数据模型与迁移、协议适配层、字段映射、标准工作流文档、专项测试、发版数据、新版通知、系统版本
+**变更摘要**：按用户提供的三篇 Rakuten Advertising 官方资料和真实 API Token，完成渠道口径核实与「广告主 API → 数据拉取入库 → 广告主报表」全链路开发。明确 Events transactions 才是订单/商品级佣金流水，Commissioning Lists 是动态佣金规则清单、Advanced Reports 是付款历史；新增 `rakuten_advertising` 模板、通用凭据交换与页码分页能力、实测字段映射和去重口径，并将「文档取证 → 凭据验证 → 模板配置 → 映射 → 入库 → 报表 → 发版 → 真实验收」沉淀为标准工作流，供后续所有广告主 API 模板复用。
+**更新要点**
+- 【新增】Rakuten Advertising 模板：按官方文档声明 `GET https://api.linksynergy.com/events/1.0/transactions`，Bearer access token、UTC `YYYY-MM-DD HH:mm:ss` 日期参数、`page/limit` 分页、`etransaction_id` 幂等键；界面字段只要求一个凭据输入框，不沿用 CJ / Awin 的 Token+CID+Endpoint 三元结构。
+- 【新增】通用凭据交换能力：模板声明 `credential` 后，可填 `oauth:{token-key}|{account-id}` 自动调用官方 `/token` 换取 3600 秒有效的 access token；也可直接填 access token。token-key、access token 与响应文本均参与脱敏，不写库、不回显、不进日志。
+- 【新增】通用响应能力：协议层新增记录包装键、单对象响应、页码分页、短页结束判断与通用记录过滤器；老模板保持默认行为，业务层 `advertiser_ingest` / `advertiser_scheduler` / `advertiser_reports` 零渠道硬编码。
+- 【新增】Rakuten 字段映射：登记 `rakuten_advertising` 的 `api_field_map`，把订单号、广告主 MID、SKU、商品名、销售金额、佣金、币种、Offer、佣金规则清单 ID、锁定状态等映射到统一事实表、商品子表与扩展层；新增 `rakuten_datetime` 与 `yn_bool` 两个通用转换。
+- 【优化】真实数据口径修正：官方 OpenAPI 示例写 `commissions_list_id`，实测返回 `commission_list_id`；同一 `etransaction_id` 会各返回一条 `is_event=N/Y` 且金额相同，模板只保留交易视角 `is_event=N`，分页完成判断仍按原始返回条数，避免重复计佣及提前停页。
+- 【新增】广告主报表可见：Rakuten 流水经幂等写入后进入 `v_api_order_final`，广告主报表的 KPI、明细与下钻无需任何前端硬编码即可展示该连接数据；币种保留在 `ext.currency`，跨币种汇总需先按币种筛选或后续接汇率归一化。
+- 【新增】标准工作流文档：`docs/Rakuten_Advertising_API接入说明与广告主API标准工作流.md` 完整梳理 token 获取、Events / Commissioning Lists / Advanced Reports 三类接口用途与结构、推荐拉取顺序、字段映射口径，以及今后新增广告主 API 模板的九步标准流程。
+- 【新增】专项守约测试 `tests/test_advertiser_rakuten_v4150.py`：覆盖模板声明、官方参数、组合凭据交换、页码游标、重复 Event 视图过滤、字段覆盖、落库与报表可见性、业务层无渠道硬编码、工作流文档存在。
+**本次优化与更改的功能 / 模块**
+- 【新增】广告主 API：Rakuten Advertising 成为第四个预置模板，后续新建连接即可选择并测试、拉取、回填、调度。
+- 【新增】协议适配层：凭据交换、页码分页、记录过滤与单对象响应解析成为通用能力，不再为单个渠道改业务代码。
+- 【新增】广告主报表：Rakuten 逐笔佣金流水进入统一事实表，报表可按连接查看 KPI、明细与下钻。
+- 【新增】开发流程：广告主 API 接入工作流文档成为后续所有渠道模板开发的统一检查清单。
+**影响范围**
+- 现有 CJ / Awin / PartnerStack 模板的字段、请求、响应解析与调度行为不变；协议层新能力均有默认关闭值。
+- 不改现有四个一级模块、不改模仿创作视频；不新增数据库业务表，只新增版本化字段映射迁移与展示枚举补充。
+- 回滚：回退本版代码并将数据库 `schema_migrations` 中 `V4.150.1` 标记移除即可；已落库的 Rakuten 原始事实数据不会自动删除，可按 template_id 精确清理。
+**验证**
+- 专项：`test_advertiser_rakuten_v4150` 16 passed；广告主相关回归 `test_advertiser_*` 233 passed。
+- 真实接口：用户提供的新 access token 调用 Events transactions 返回 HTTP 200；近 7 天原始 184 条、`is_event=N` 92 条；字段与实测结构一致。
+- 真实入库与报表：隔离库拉取 92 条、inserted 92、warnings 0；报表 KPI 明细 92 条、订单数 31，佣金净额 830.4275（原币数值，含 USD/AUD/CAD，需按币种解读）。
+- 前端：`npx tsc --noEmit` 与 `npm run build` 通过；本版无前端页面结构改动，新模板由既有配置驱动界面自动显示。
+- 隔离库全量后端回归：在全新代码克隆副本 + 隔离 `DATABASE_URL` 下 Ran 833 / OK（5 skipped），无新增失败。
+- 发版：`prepare_release --sync` 重建发布数据后独立进程 `--check` 校验系统版本、CHANGELOG 与发布数据一致。
+- 说明：首个提供的 Token 实测 401 已过期，换用用户提供的新 Token 后验证成功；真实凭据未写入仓库、日志或测试固定值。
+
 ## V4.149 系统级 UI 统一规范：控件复用创意工作台 + 纵向单列布局
 **发布日期**：2026-11-26 15:47
 **变更类型**：优化、新增

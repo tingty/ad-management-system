@@ -266,6 +266,45 @@ PARTNERSTACK_FIELD_MAP_SEED = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# V4.150：Rakuten Advertising Events API /events/1.0/transactions 字段映射 seed。
+# 官方 schema（eventsAPIResponse）是一条逐笔佣金流水：etransaction_id 为唯一键，
+# order_id 为广告主订单号，sku_number / product_name 为商品信息，commissions 为佣金。
+# 官方无审核状态枚举，transaction_type(batch/realtime) 仅作事件类型/状态展示。
+# ---------------------------------------------------------------------------
+RAKUTEN_TEMPLATE_ID = "rakuten_advertising"
+RAKUTEN_FIELD_MAP_SEED = [
+    # ---- 幂等键与统一报表核心列 ----
+    ("etransaction_id",           "source_record.external_id", "direct", "Rakuten 交易唯一 ID / 幂等键"),
+    ("etransaction_id",           "fact.commission_id",        "direct", "交易 ID 作为佣金流水 ID"),
+    ("advertiser_id",             "fact.advertiser_name",      "direct", "广告主 MID（官方不返回名称，显示 MID）"),
+    ("advertiser_id",             "ext.advertiser_id",         "direct", "广告主 MID"),
+    ("order_id",                  "fact.order_id",             "direct", "广告主订单号 / 合并键"),
+    ("transaction_date",          "fact.event_date",           "rakuten_datetime", "下单时间（UTC）→ 事件日期"),
+    ("process_date",              "fact.posting_date",         "rakuten_datetime", "Rakuten 处理时间（UTC）"),
+    ("transaction_type",          "fact.action_status",        "direct", "官方无审核状态；展示 batch/realtime"),
+    ("transaction_type",          "fact.event_name",           "direct", "事件类型：batch/realtime"),
+    ("sale_amount",               "fact.sale_amount_usd",      "decimal", "商品销售金额（币种见 currency）"),
+    ("commissions",               "fact.commission_amount_usd", "decimal", "发布者基础佣金"),
+    ("sid",                       "fact.publisher_id",         "direct", "Rakuten Publisher SID"),
+    ("is_event",                  "ext.is_event",              "yn_bool", "是否为 Event（Y/N）"),
+    ("__derived__is_void",        "fact.is_void",              "derived", "按订单净额归零判定取消单"),
+    # ---- 商品与扩展层 ----
+    ("sku_number",                "item.sku",                  "direct", "商品 SKU（广告主未上报则为空）"),
+    ("quantity",                  "item.quantity",             "direct", "商品数量"),
+    ("sale_amount",               "item.unit_price_usd",       "decimal", "单条流水销售额；多件时需在原始层核对"),
+    ("commissions",               "item.commission_usd",       "decimal", "单条流水佣金"),
+    ("product_name",              "ext.product_name",          "direct", "商品名称（广告主可选上报）"),
+    ("offer_id",                  "ext.offer_id",              "direct", "产生佣金的 Offer ID"),
+    # 实测响应是单数 commission_list_id（OpenAPI 文档示例写复数），以真实返回为准。
+    ("commission_list_id",        "ext.commission_list_id",    "direct", "动态佣金规则清单 ID"),
+    ("lock_status",               "ext.lock_status",           "direct", "订单锁定状态（实测可为 #N/A）"),
+    ("order_auto_lock_date",      "ext.order_auto_lock_date",  "direct", "订单自动锁定日期"),
+    ("currency",                  "ext.currency",              "direct", "销售与佣金币种"),
+    ("u1",                        "ext.u1",                    "direct", "发布者点击回溯参数"),
+]
+
+
 def _seed_field_map(conn, template_id: str, seed: list) -> int:
     """幂等写入某模板的字段映射 seed（已存在不覆盖）。"""
     added = 0
@@ -388,6 +427,26 @@ def _migrate_v4148_1(conn) -> str:
                          VALUES(:k, :v, CURRENT_TIMESTAMP)"""),
                  {"k": "imitate_creation_enabled", "v": "1"})
     return "模仿创作视频创作脚本标记已就绪：imitate_creation_enabled"
+
+
+def _migrate_v4150_1(conn) -> str:
+    """V4.150.1：登记 Rakuten Advertising Events 逐笔佣金流水字段映射。"""
+    added = _seed_field_map(conn, RAKUTEN_TEMPLATE_ID, RAKUTEN_FIELD_MAP_SEED)
+    row = conn.execute(
+        text("""SELECT id, enum_map_json FROM api_field_label
+                WHERE scope='fact' AND column_key='action_status'""")
+    ).first()
+    if row:
+        try:
+            labels = json.loads(row[1] or "{}") if isinstance(row[1], str) else dict(row[1] or {})
+        except (ValueError, TypeError):
+            labels = {}
+        labels.update({"batch": "批量", "realtime": "实时"})
+        conn.execute(
+            text("UPDATE api_field_label SET enum_map_json=:m WHERE id=:i"),
+            {"m": json.dumps(labels, ensure_ascii=False), "i": row[0]},
+        )
+    return f"Rakuten Advertising 字段映射登记新增 {added} 行；交易类型枚举已补充"
 
 
 def _current_order_view_sql(conn) -> str:
@@ -514,6 +573,7 @@ MIGRATIONS = [
     ("V4.144.2", "advertiser_partnerstack_template_id", _migrate_v4144_2),
     ("V4.145.1", "imitate_video_skeleton", _migrate_v4145_1),
     ("V4.148.1", "imitate_creation_script", _migrate_v4148_1),
+    ("V4.150.1", "advertiser_rakuten_field_map", _migrate_v4150_1),
 ]
 
 
