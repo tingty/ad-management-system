@@ -2,6 +2,30 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.151 Rakuten Advertising 凭据机制与长期拉取口径补正
+**发布日期**：2026-11-26 16:41
+**变更类型**：新增、优化
+**涉及模块**：广告主 API、Rakuten Advertising、标准工作流文档、专项测试、后端接口、系统版本、数据模型、发版数据、新版通知
+**变更摘要**：继续核对 Rakuten 官方 Token 指南与 Events API 指南，明确 `client_id + client_secret + account-id` 的官方用法、access token 1 小时有效期/刷新机制，以及 Events API 只保留前 1–2 周、用于转化跟踪而非财务结算的长期拉取边界。V4.150 已实现的 `oauth:token-key|account-id` 可长期自动换取 token，当前界面仍未拆成三个独立输入字段；同步补正工作流文档并增加静态守约测试。
+**更新要点**
+- 【优化】凭据机制说明：明确 `token-key = Base64(client_id:client_secret)`，`account-id` 作为 `/token` 的 `scope`，业务接口只携带 `Authorization: Bearer <access_token>`，不直接发送 client_id / client_secret。
+- 【优化】长期自动运行说明：access token 有效期 3600 秒，refresh token 刷新会立即使当前 token 失效；token endpoint 与 Events endpoint 均限制 100 次/分钟。系统当前每次调度自动换 token，凭据不人工每 1 小时更换。
+- 【优化】数据口径补正：官方明确 Events API 不用于历史数据，只保存前 1–2 周，且不推荐用于计算 expected commissions；系统应长期滚动拉取并本地沉淀，财务/付款对账仍需 Advanced Reports 或 Publisher Dashboard 报表。
+- 【新增】静态守约测试 `tests/test_rakuten_longterm_v4151.py`：检查工作流文档包含三字段凭据转换、组合凭据输入、token 有效期/限流、Events 1–2 周保留与财务对账边界，防止后续文档回退。
+**本次优化与更改的功能 / 模块**
+- 【优化】Rakuten Advertising 接入文档：补充凭据机制与长期拉取边界，避免把 Events API 误当作完整历史佣金结算源。
+- 【新增】文档守约测试：把本次排查结论固化为可回归检查。
+**影响范围**
+- 仅更新说明文档、新增文档守约测试并升版本；不改任何渠道请求、凭据解析、字段映射、入库或报表代码。
+- 现有 CJ / Awin / PartnerStack / Rakuten 连接行为与数据口径不变；无需数据库迁移，前端页面不变。
+- 回滚：回退本版代码即可；V4.150 已落库的 Rakuten 数据不受影响。
+**验证**
+- 专项：`test_rakuten_longterm_v4151` 3 passed；新版通知 14 passed。
+- 隔离库全量后端回归：在全新代码克隆副本 + 隔离 `DATABASE_URL` 下 Ran 836 / OK（5 skipped），无新增失败。
+- 前端：`npx tsc --noEmit` 与 `npm run build` 通过；本版无前端页面改动。
+- 发版：`prepare_release --sync` 重建发布数据后独立进程 `--check` 校验系统版本、CHANGELOG 与发布数据一致。
+- 说明：本次未获得真实 client_id / client_secret / account-id，因此只完成官方文档核验与现有代码契约核对，未用该组三项凭据做真实换 token 请求；真实联调仍为外部验收项。
+
 ## V4.150 广告主 API：Rakuten Advertising 佣金流水模板 + 报表入库 + 标准工作流
 **发布日期**：2026-11-26 16:18
 **变更类型**：新增、优化

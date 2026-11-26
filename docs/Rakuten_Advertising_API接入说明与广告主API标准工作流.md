@@ -1,7 +1,7 @@
 # Rakuten Advertising API 接入说明与广告主 API 标准工作流
 
 > 适用系统：广告管理系统 / 广告主数据 → 广告主 API → 广告主报表  
-> 适用版本：V4.150  
+> 适用版本：V4.151
 > 本文同时承担两个职责：①说明 Rakuten Advertising 佣金数据应如何拉取；②沉淀今后所有广告主 API 模板开发的标准流程。
 
 ---
@@ -159,6 +159,18 @@ Accept: application/json
 - `lock_status` 实测可为 `#N/A`，不是标准状态枚举。
 - 实测字段是 `commission_list_id`（单数），官方文档示例曾写 `commissions_list_id`（复数），**以真实返回为准**。
 
+#### 长期自动拉取边界（V4.151 排查补记）
+
+官方 Events API 指南明确：该接口**不应用于历史数据**，只保存前 1–2 周数据用于 u1 点击匹配；官方也**不建议用它计算 expected commissions**，而应用 Publisher Dashboard 的 Signature Orders Report / Individual Item Report 做佣金预期核算。接口用于跟踪转化表现属于 directional 用途。
+
+因此系统采用以下口径：
+
+- 可以长期做到的是**持续增量拉取 + 本地沉淀**：每日/每小时长期滚动拉取最近 1–2 周，按 `etransaction_id` 幂等 upsert，重复扫描窗口内已落库数据不重复计佣。
+- 不能把 Events API 当作**多年历史回溯源**：超过 1–2 周后上游可能不再返回，历史完整性以系统本地已落库数据为准。
+- 财务/付款对账仍需 Advanced Reports + Web Security Token，或 Publisher Dashboard 报表；广告主报表中的 Events 数据应标注为“投放转化/佣金流水视角”，不替代后台最终结算。
+- 凭据层面可以长期自动运行：`token-key` 只要 Application 的 client_id/client_secret 未撤销就可持续换取新 token；access token 仅 1 小时有效。系统每次调度用 `oauth:{token-key}|{account-id}` 自动换 token，不需要人工每天更换。
+- token endpoint 与 Events endpoint 均为 100 次/分钟；应避免把所有连接集中在同一分钟、同一窗口反复全量拉取。
+
 ### 2.4 Commissioning Lists API（规则清单，不是佣金流水）
 
 官方帮助中心：<https://pubhelp.rakutenadvertising.com/hc/en-us/articles/50298549908109-Commissioning-Lists-API>
@@ -250,6 +262,7 @@ Authorization: Bearer <access_token>
 - 凭据输入支持两种：
   1. 直接填 `access_token`；
   2. 填 `oauth:{token-key}|{account-id}`，系统自动调用 `/token` 换取 access_token（推荐用于调度）。
+- `token-key` 由 `Base64(client_id:client_secret)` 得到；`account-id` 作为 `scope`。当前界面仍是单一凭据输入框，未拆成 `client_id / client_secret / account_id` 三个独立字段；如需三字段录入，应作为后续版本的小改动实现。
 
 ### 4.2 协议配置
 
