@@ -152,3 +152,77 @@ async def fetch_remote_bytes(url: str, *, max_bytes: int = DEFAULT_MAX_BYTES,
         return {"content": content, "content_type": ctype,
                 "final_url": checked["url"], "host": checked["host"]}
     raise SSRFError("重定向次数过多")
+
+
+# ---------------------------------------------------------------------------
+# V4.146 · 模仿创作视频 源视频流式下载
+# ---------------------------------------------------------------------------
+VIDEO_MAX_BYTES = 200 * 1024 * 1024   # 源视频上限 200MB（与上传端点一致）
+
+
+async def fetch_remote_file(url: str, out_path: str, *,
+                            max_bytes: int = VIDEO_MAX_BYTES,
+                            timeout=None,
+                            resolver: Optional[Callable[[str], list[str]]] = None,
+                            streamer=None) -> dict:
+    """安全地流式下载远程文件到 out_path；逐跳校验重定向，边下边写、累加限大小。
+
+    与 ``fetch_remote_bytes`` 的区别：后者一次性把内容读进内存（图片用，默认 12MB），
+    本函数用 ``client.stream`` + ``aiter_bytes`` 落盘，适合 200MB 源视频，避免爆内存。
+    SSRF 语义完全一致：每一跳都过 ``validate_url``，杜绝 302 到内网。
+
+    返回 ``{"path", "bytes", "content_type", "final_url", "host"}``。
+    ``streamer`` 可注入以便测试（签名 ``(client, url) -> async context manager``，
+    产出含 ``status_code`` / ``headers`` / ``aiter_bytes`` 的响应）；生产用 httpx。
+    """
+    import os
+    import httpx
+    from urllib.parse import urljoin
+
+    if timeout is None:
+        timeout = httpx.Timeout(120.0, read=600.0)
+    current = validate_url(url, resolver=resolver)["url"]
+    tmp = out_path + ".part"
+    for _hop in range(MAX_REDIRECTS + 1):
+        checked = validate_url(current, resolver=resolver)
+        # content-type 早拒：只在确定是 200 之后才检查，避免误伤重定向响应。
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            cm = streamer(client, checked["url"]) if streamer is not None \
+                else client.stream("GET", checked["url"])
+            async with cm as resp:
+                status = int(getattr(resp, "status_code", 0) or 0)
+                if status in (301, 302, 303, 307, 308):
+                    loc = (getattr(resp, "headers", {}) or {}).get("location") or ""
+                    if not loc:
+                        raise SSRFError("重定向缺少目标地址")
+                    current = urljoin(checked["url"], loc)
+                    continue  # 下一跳重新 validate_url
+                if status != 200:
+                    raise SSRFError(f"无法获取资源（HTTP {status}）")
+                ctype = str((getattr(resp, "headers", {}) or {}).get("content-type") or "")
+                ctype = ctype.split(";")[0].strip().lower()
+                # 明确是网页/JSON 的响应直接拒绝（下载到了错误页/接口错误）
+                if ctype and not (ctype.startswith("video/")
+                                  or ctype in ("application/octet-stream",
+                                               "binary/octet-stream")):
+                    raise SSRFError(f"链接返回的不是视频文件（content-type={ctype[:40]}）")
+                total = 0
+                wrote = False
+                try:
+                    with open(tmp, "wb") as f:
+                        wrote = True
+                        async for chunk in resp.aiter_bytes(1 << 20):
+                            total += len(chunk)
+                            if total > max_bytes:
+                                raise SSRFError(
+                                    f"源视频超过 {max_bytes // (1024 * 1024)}MB 限制，已中止下载")
+                            f.write(chunk)
+                    if total == 0:
+                        raise SSRFError("下载到的文件为空")
+                    os.replace(tmp, out_path)
+                finally:
+                    if wrote and os.path.exists(tmp):
+                        os.remove(tmp)
+                return {"path": out_path, "bytes": total, "content_type": ctype,
+                        "final_url": checked["url"], "host": checked["host"]}
+    raise SSRFError("重定向次数过多")

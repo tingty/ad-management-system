@@ -2,6 +2,31 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.146 模仿创作视频：源视频获取（直链代下载 / 上传复用 / 原片预览 / 建任务）
+**发布日期**：2026-11-26 14:52
+**变更类型**：新增
+**涉及模块**：模仿创作视频、SSRF 安全下载、元数据解析、后端接口、前端页面、专项测试、发版数据、系统版本
+**变更摘要**：按《模仿创作视频 需求规格与技术开发任务书》交付第二切片——用户可提交参考视频直链（服务端代下载）或本地上传，系统完成 SSRF 逐跳校验、200MB 流式落盘、容器校验与 ffmpeg 元数据解析（时长 / 分辨率 / 画幅比 / 帧率 / 音轨），支持原片鉴权预览与权利人声明确认，并新建 `imitate_video` 任务。本版仍不调用大模型、不提交视频生成、不产生任何费用；分析脚本 / 创作脚本 / 出片由 V4.147–V4.149 交付。
+**更新要点**
+- 【新增】SSRF 流式下载：`ssrf_guard.py` 新增 `fetch_remote_file()`，复用 `validate_url` 的逐跳重定向校验与 DNS 复检，改用 `client.stream` + `aiter_bytes` 边下边写（≤200MB、逐块累加超限即中止并清理临时文件、content-type 早拒网页/JSON），不影响图片链路 `fetch_remote_bytes`（默认 12MB 内存下载）。
+- 【新增】元数据解析：`imitate_video.py` 新增 `probe_source_video()`，用 imageio-ffmpeg 自带 ffmpeg 解析时长 / 宽高 / 画幅比（gcd 化简）/ 帧率 / 音轨有无 / 编码，拿不到留空不猜测；`file_sha256()` 分块算哈希支撑同片复用。
+- 【新增】源视频登记与任务创建：`_register_source()` 复用 `creative_asset_sources` 按 sha256 幂等登记原件（owner 隔离、失败降级不影响建任务）；`create_task()` 只写 `GenerationJob(kind=imitate_video, stage=source_acquiring, provider_config_id=None, next_poll_at=None)`，worker 不领取、绝不进入提交分支。
+- 【新增】后端接口：`routers.py` 新增 `POST /api/imitate-video/source/fetch-url`（直链代下载）、`POST /api/imitate-video/jobs`（建任务，强制权利声明）、`GET /api/imitate-video/jobs/{job_id}/source`（owner 隔离鉴权预览，避免 /files 静态挂载越权），关键操作写 `_audit`。
+- 【新增】前端交互：`ImitateVideo.tsx` 新增新建任务双入口（视频链接 / 本地上传 Tab）、原片 `<video>` 预览、元数据表、目标平台 / 结构保持度 / 目标语言选项、权利声明勾选；`api.ts` 新增 `ImitateSource` 与 `fetchSource / createJob / sourceUrl` 封装，复用 `api.fileUrl` 拼预览地址。
+- 【新增】专项测试 `tests/test_imitate_video_v4146.py`：覆盖 SSRF 流式下载写盘、重定向到内网拦截、体积上限清理、content-type 早拒、旧图片函数不变、ffmpeg 元数据实测、sha256 幂等登记、建任务费用安全（三个付费字段为空）、owner 隔离、端点与前端双入口静态契约共 13 项。
+**本次优化与更改的功能 / 模块**
+- 【新增】模仿创作视频：用户可提交参考视频（直链或上传），查看原片与元数据并建任务，切页不中断。
+- 【新增】SSRF 安全下载：新增流式文件下载能力，逐跳防内网穿透、200MB 上限、错误页早拒。
+- 【新增】任务创建安全：源视频快照写 request_json + 原件按 hash 幂等登记，任务停在获取源视频阶段不计费。
+**影响范围**
+- 仅影响「模仿创作视频」一级模块与 SSRF 工具模块（新增函数，不改既有函数）；现有 4 个一级模块布局与功能不变。
+- 直链下载仅接受 http/https 公网地址，禁止内网 / 本地 / 云元数据地址，重定向逐跳校验。
+**验证**
+- 专项：`test_imitate_video_v4146` 13 passed（含重定向到内网拦截、体积上限、建任务三付费字段为空的静态与运行时断言）。
+- 前端：`npx tsc --noEmit` 与 `npm run build` 通过。
+- 隔离库全量后端回归：774 passed 基础上新增 13 项，回归通过。
+- 发版：`prepare_release --sync` 重建发布数据后独立进程 `--check` 校验系统版本、CHANGELOG 与发布数据一致。
+
 ## V4.145 新增一级模块「模仿创作视频」骨架（菜单 / 页面壳 / 数据模型 / 任务状态机）
 **发布日期**：2026-11-26 14:29
 **变更类型**：新增

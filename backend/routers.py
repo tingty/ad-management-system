@@ -4723,3 +4723,109 @@ async def api_imitate_video_tasks(db: Session = Depends(get_db),
     V4.145 骨架版：仅列出生效的 imitate_video 任务；不创建、不计费、不提交生成。
     """
     return imitate_video.list_tasks(db, user)
+
+
+# ============================================================
+# V4.146 · 模仿创作视频：源视频获取（直链下载 / 上传复用 / 原片预览 / 建任务）
+# ============================================================
+@router.post("/imitate-video/source/fetch-url")
+async def api_imitate_fetch_source_url(body: dict,
+                                       db: Session = Depends(get_db),
+                                       user: User = Depends(require_roles(*CAN_EDIT))):
+    """服务端代下载参考视频直链：SSRF 逐跳校验 → 流式落盘(≤200MB) → 容器校验 → 元数据。
+
+    只落源视频，不建任务、不调用模型、不产生费用。返回源视频快照供前端预览与建任务。
+    """
+    import ssrf_guard
+    from providers import verify_video_file, align_video_ext
+
+    url = str((body or {}).get("url") or "").strip()
+    if not url:
+        raise HTTPException(400, "请填写视频直链")
+    name = str((body or {}).get("name") or "").strip()
+    tmp_name = f"imvsrc_{int(__import__('time').time() * 1000)}_{imitate_video._uid()}.mp4"
+    path = os.path.join(UPLOAD_DIR, tmp_name)
+    try:
+        await ssrf_guard.fetch_remote_file(url, path)
+    except ssrf_guard.SSRFError as e:
+        raise HTTPException(400, "链接校验失败：" + str(e)[:160])
+    except Exception as e:
+        if os.path.exists(path):
+            os.remove(path)
+        raise HTTPException(400, "下载失败：" + str(e)[:160])
+    try:
+        verdict = verify_video_file(path)
+        if not verdict.get("ok"):
+            raise HTTPException(400, "链接返回的不是有效视频：" + str(verdict.get("reason") or "")[:120])
+        final = align_video_ext(path, verdict.get("container") or "")
+        path = final
+    except HTTPException:
+        if os.path.exists(path):
+            os.remove(path)
+        raise
+    meta = imitate_video.probe_source_video(path)
+    snap = imitate_video._register_source(
+        db, user, path=path, source="url", source_url=url, name=name,
+        verdict=verdict, meta=meta)
+    _audit(db, user, "imitate_source_fetch", snap.get("file"),
+           {"source_url": url[:300], "file_hash": snap.get("file_hash")})
+    return {"status": "ok", **snap}
+
+
+@router.post("/imitate-video/jobs")
+async def api_imitate_create_job(body: dict,
+                                 db: Session = Depends(get_db),
+                                 user: User = Depends(require_roles(*CAN_EDIT))):
+    """用已落盘的源视频新建模仿创作任务（仅写任务事实，不计费、不提交生成）。
+
+    file 接受 fetch-url 返回的 /files/<name>，或 upload-video 返回的路径/URL；
+    只取 basename 并限定在 UPLOAD_DIR 内，防路径穿越。校验通过后登记源视频并建任务。
+    """
+    import urllib.parse
+    from providers import verify_video_file
+
+    body = body or {}
+    raw_file = str(body.get("file") or "").strip()
+    if not raw_file:
+        raise HTTPException(400, "请先获取或上传源视频")
+    fname = os.path.basename(urllib.parse.unquote(raw_file.split("?")[0]))
+    if not fname:
+        raise HTTPException(400, "源视频文件名非法")
+    path = os.path.join(UPLOAD_DIR, fname)
+    if not os.path.isfile(path):
+        raise HTTPException(400, "源视频文件不存在或已被清理")
+    verdict = verify_video_file(path)
+    if not verdict.get("ok"):
+        raise HTTPException(400, "源视频校验失败：" + str(verdict.get("reason") or "")[:120])
+    meta = imitate_video.probe_source_video(path)
+    snap = imitate_video._register_source(
+        db, user, path=path,
+        source=str(body.get("source") or "upload"),
+        source_url=str(body.get("source_url") or ""),
+        name=str(body.get("name") or ""),
+        verdict=verdict, meta=meta)
+    rights_ack = bool(body.get("rights_ack"))
+    if not rights_ack:
+        raise HTTPException(400, "请确认已获得该视频的使用授权（权利声明）")
+    job = imitate_video.create_task(
+        db, user, source_snapshot=snap,
+        options=body.get("options") or {}, rights_ack=rights_ack)
+    _audit(db, user, "imitate_job_create", job["job_id"],
+           {"file_hash": snap.get("file_hash"), "source": snap.get("source")})
+    return {"status": "ok", **job, "source": snap}
+
+
+@router.get("/imitate-video/jobs/{job_id}/source")
+async def api_imitate_job_source(job_id: str,
+                                 db: Session = Depends(get_db),
+                                 user: User = Depends(require_roles(*CAN_EDIT))):
+    """鉴权预览源视频：按 owner 隔离，避免 /files 静态挂载无鉴权导致越权访问。"""
+    job = imitate_video.get_task(db, user, job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在或无权访问")
+    rel = str((job.request_json or {}).get("file") or "")
+    fname = os.path.basename(rel)
+    path = os.path.join(UPLOAD_DIR, fname)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "源视频文件不存在或已被清理")
+    return FileResponse(path, media_type="video/mp4", filename=fname)

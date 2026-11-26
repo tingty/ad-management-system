@@ -1742,16 +1742,51 @@ export interface ReportDrilldown {
   chain?: string[]
 }
 
-/* V4.145 · 模仿创作视频（骨架）：任务视图类型与接口。 */
+/* V4.145 / V4.146 · 模仿创作视频：任务视图、源视频快照与接口。 */
 export interface ImitateTask {
   job_id: string
   name?: string
   status: string
   stage?: string
   source?: string
+  source_url?: string
+  source_file?: string
+  aspect_ratio?: string
+  duration_sec?: number | null
+  rights_ack?: boolean
   created_at?: string
+}
+
+export interface ImitateSource {
+  status?: string
+  name?: string
+  source?: string
+  source_url?: string
+  file?: string
+  file_path?: string
+  file_hash?: string
+  container?: string
+  bytes?: number
+  duration_sec?: number | null
+  width?: number | null
+  height?: number | null
+  aspect_ratio?: string
+  fps?: string
+  has_audio?: boolean
+  codec?: string
+  probe_available?: boolean
 }
 
 export const imitateVideoApi = {
   tasks: () => req<ImitateTask[]>('/api/imitate-video/tasks'),
+  fetchSource: (url: string, name?: string) =>
+    req<ImitateSource>('/api/imitate-video/source/fetch-url', {
+      method: 'POST', body: JSON.stringify({ url, name: name || '' }),
+    }),
+  createJob: (body: {
+    file: string; source?: string; source_url?: string; name?: string;
+    rights_ack: boolean; options?: Record<string, unknown>;
+  }) => req<{ status: string; job_id: string; stage: string; source: ImitateSource }>(
+    '/api/imitate-video/jobs', { method: 'POST', body: JSON.stringify(body) }),
+  sourceUrl: (jobId: string) => `${API_BASE}/api/imitate-video/jobs/${encodeURIComponent(jobId)}/source`,
 }
