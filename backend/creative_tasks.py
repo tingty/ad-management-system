@@ -624,6 +624,34 @@ async def _drive(db: Session, job: GenerationJob) -> None:
     evidence.setdefault("polls", [])
     stage = job.stage or "submitting"
 
+    # V4.147 · 模仿创作视频：分析脚本阶段（真实视觉模型，绝不进视频提交分支）。
+    # analysis_pending 由端点在 422 硬门后置位；分析完成停在 analysis_ready 交 V4.148。
+    if (job.kind or "") == "imitate_video" and stage in ("analysis_pending",):
+        try:
+            from imitate_analysis_script import analyze_and_store
+            result = await analyze_and_store(db, job)
+        except Exception as e:
+            _fail(db, job, VideoPipelineError(
+                "ANALYSIS_ERROR", "分析阶段异常：" + type(e).__name__ + ": " + str(e)[:120],
+                stage="analysis"))
+            return
+        if result.get("status") == "ok":
+            job.stage, job.status = "analysis_ready", "queued"
+            job.progress = 30
+            job.result_json = {**(job.result_json or {}),
+                               "analysis_script_id": result.get("script_id"),
+                               "analysis_cached": bool(result.get("cached"))}
+            job.error_code = job.error_message = None
+        else:
+            job.stage, job.status = "analysis_unavailable", "needs_attention"
+            job.error_code, job.error_stage = "ANALYSIS_UNAVAILABLE", "analysis"
+            job.error_message = str(result.get("reason") or "分析不可用")[:500]
+            job.error_action = "请先在「系统设置 → 大模型配置」完成 analysis 用途测试并通过后重试"
+        job.next_poll_at = None   # 停在本阶段，禁止空转轮询；V4.148 创作阶段再推进
+        job.updated_at = _now()
+        db.commit()
+        return
+
     if stage in ("submitting", ""):
         prov = _provider(db, job)
         if prov is None:

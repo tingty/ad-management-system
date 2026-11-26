@@ -2,6 +2,34 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.147 模仿创作视频：分析脚本 A1–A10（真实视觉模型 + 逐镜抽帧 + 同片缓存）
+**发布日期**：2026-11-26 15:18
+**变更类型**：新增
+**涉及模块**：模仿创作视频、分析脚本、视觉模型调用、任务引擎、后端接口、前端页面、专项测试、发版数据、系统版本
+**变更摘要**：按《模仿创作视频 需求规格与技术开发任务书》交付第三切片——对参考视频做真实解构，输出完整、系统、具象的分析脚本 A1–A10（全局规格 / 叙事骨架 / 内容布局 / 逐镜镜头表 / 运动轨迹 / 色彩光影 / 商业信息 / 音频 / 合规标记 / 可模仿结论），落 `imitate_analysis_script.script_json`。分析走系统统一配置的 analysis 用途真实视觉模型，绝不走 Mock/Fallback；同 file_hash 命中已分析记录直接复用，不重复产生 token 费用。任务由租约 worker 异步推进，用户可切页并随时回看进度与脚本。
+**更新要点**
+- 【新增】分析器模块 `imitate_analysis_script.py`：抽帧 + Pillow 全局取色（十六进制主色/辅色/点缀色）+ 真实 OCR + 现有 6 维解构摘要作为证据，送 analysis 视觉模型归纳 A1–A10 严格 JSON；缺项白名单归一化、A6 颜色用真实取色兜底、结果落表并记 model/file_hash/抽帧时码元数据。视觉调用自建 httpx（仿 deconstruct_image），配置缺失 / 协议不符 / 调用失败 / JSON 不可解析一律返回 unavailable + reason，不臆造、不冒充已分析。
+- 【新增】费用与诚实红线：分析器绝不调用 `get_llm_with_info` / MockLLM / FallbackLLM / 视频提交入口（静态 AST 测试守约）；端点触发前复用工作坊 `missing_models(db, ["analysis"])` 的 422 硬门，未测试通过的 analysis 模型直接拦截；worker 分析分支绝不进入 submitting 付费分支。
+- 【新增】逐镜抽帧：`video_vision_audit.extract_frames()` 新增可选 `times` 参数（自定义采样时间点、上限 24 帧），不传时沿用旧首/中/尾三点，既有解构/视觉复核调用零影响；分析器按时长均匀取 6 点支撑 A4/A5 逐镜具象。
+- 【新增】同片缓存：`cached_script()` 按 owner + file_hash + analyzed 命中即复用（换模型不误用旧脚本）；端点命中缓存时同步挂载脚本到任务、不调用模型。
+- 【新增】任务引擎：`creative_tasks._drive()` 新增 imitate_video 分析分支（analysis_pending → analysis_ready / analysis_unavailable），成功停在 analysis_ready 交 V4.148，失败标 needs_attention 并写明修复动作，`next_poll_at=None` 禁止空转。
+- 【新增】后端接口：`POST /api/imitate-video/jobs/{id}/analyze`（422 硬门 + 置位交 worker）、`GET /api/imitate-video/jobs/{id}/analysis-script`（owner 隔离读取）；列表补 analysis_script_id / analysis_cached / error_message。
+- 【新增】前端交互：`ImitateVideo.tsx` 新增 A1–A10 分区查看、JSON 编辑草稿、导出 JSON、生成/重试分析按钮；分析中有任务时每 4 秒轮询进度（切页不中断，回到页面即可查看）；阶段标签补齐 analysis_pending/ready/unavailable。`api.ts` 新增 `ImitateAnalysisScript` 与 analyze/analysisScript 封装。
+- 【新增】专项测试 `tests/test_imitate_analysis_v4147.py`：覆盖取色十六进制、A1–A10 归一化完整性、去代码围栏解析、缓存命中零模型调用、真实视觉归纳（HTTP 替身断言 messages 含 image_url）、不可用不臆造、A6 取色兜底、worker 不进付费分支、422 硬门、自定义抽帧时间点共 13 项。
+**本次优化与更改的功能 / 模块**
+- 【新增】模仿创作视频：用户可对参考视频一键生成 A1–A10 完整分析脚本并查看、编辑、导出。
+- 【新增】视觉分析：统一配置 analysis 用途的真实视觉模型归纳，禁 Mock/Fallback 冒充，缺配置 422 拦截。
+- 【新增】缓存与任务：同 file_hash 复用分析结果不重复计费；分析由 worker 异步推进、进度可订阅。
+**影响范围**
+- 仅影响「模仿创作视频」一级模块与 `video_vision_audit.extract_frames`（新增可选参数，旧调用不变）；现有 4 个一级模块布局与功能不变。
+- 分析会产生真实视觉模型 token 费用，仅在用户主动点「生成分析脚本」且模型测试通过后发生；缓存命中不计费。
+**验证**
+- 专项：`test_imitate_analysis_v4147` 13 passed；相关回归 imitate_video 21 / video_deconstruct 14 / quality_audit 9 均通过（HTTP 与视觉通道全部替身，无真实付费）。
+- 前端：`npx tsc --noEmit` 与 `npm run build` 通过。
+- 隔离库全量后端回归：800 passed 基础上新增 13 项，回归通过。
+- 发版：`prepare_release --sync` 重建发布数据后独立进程 `--check` 校验系统版本、CHANGELOG 与发布数据一致。
+- 说明：真实视觉模型出脚本为外部验收项；当前库内 analysis 配置未测试通过（且 `.env` 的 DashScope key 返回 401），需用户在「系统设置 → 大模型配置」填入有效 key 并测试通过后，点「生成分析脚本」即可真实出稿；本版测试全程用替身，不冒充真实分析已通过。
+
 ## V4.146 模仿创作视频：源视频获取（直链代下载 / 上传复用 / 原片预览 / 建任务）
 **发布日期**：2026-11-26 14:52
 **变更类型**：新增

@@ -4829,3 +4829,67 @@ async def api_imitate_job_source(job_id: str,
     if not os.path.isfile(path):
         raise HTTPException(404, "源视频文件不存在或已被清理")
     return FileResponse(path, media_type="video/mp4", filename=fname)
+
+
+# ============================================================
+# V4.147 · 模仿创作视频：分析脚本 A1–A10（真实视觉模型）
+# ============================================================
+@router.post("/imitate-video/jobs/{job_id}/analyze")
+async def api_imitate_analyze(job_id: str,
+                              db: Session = Depends(get_db),
+                              user: User = Depends(require_roles(*CAN_EDIT))):
+    """触发分析脚本生成：先过 analysis 模型 422 硬门，再交租约 worker 异步执行。
+
+    任务不中断：置位 analysis_pending + next_poll_at 后返回，worker 用真实视觉模型
+    生成 A1–A10；前端轮询任务状态 / 分析脚本即可。绝不在此调用视频提交分支。
+    """
+    import imitate_analysis_script as ias
+    job = imitate_video.get_task(db, user, job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在或无权访问")
+    if job.stage not in ("source_acquiring", "analysis_unavailable"):
+        raise HTTPException(409, f"当前阶段（{job.stage}）不可触发分析")
+    # 模型硬门：未测试通过的 analysis 配置直接 422，不产生任何费用
+    missing = cw_workshop.missing_models(db, ["analysis"])
+    if missing:
+        raise HTTPException(422, detail={
+            "message": "分析视觉模型未就绪：请先在「系统设置 → 大模型配置」完成测试并通过",
+            "models": missing, "blocked": "model_not_ready"})
+    # 缓存命中：同 file_hash 已有 analyzed 脚本，直接挂到本任务，不重复调用模型
+    req = job.request_json or {}
+    hit = ias.cached_script(db, getattr(user, "id", None),
+                            str(req.get("file_hash") or ""))
+    if hit:
+        job.stage, job.status = "analysis_ready", "queued"
+        job.progress = 30
+        job.result_json = {**(job.result_json or {}),
+                           "analysis_script_id": hit.get("script_id"),
+                           "analysis_cached": True}
+        job.next_poll_at = None
+        db.commit()
+        return {"status": "ok", "cached": True, **hit}
+    # 交 worker 异步分析
+    from creative_tasks import _now as ct_now
+    job.stage = "analysis_pending"
+    job.status = "queued"
+    job.next_poll_at = ct_now()
+    db.commit()
+    return {"status": "queued", "job_id": job_id, "stage": "analysis_pending"}
+
+
+@router.get("/imitate-video/jobs/{job_id}/analysis-script")
+async def api_imitate_analysis_script(job_id: str,
+                                      db: Session = Depends(get_db),
+                                      user: User = Depends(require_roles(*CAN_EDIT))):
+    """读取任务的分析脚本 A1–A10（owner 隔离）。未生成时返回 404。"""
+    import imitate_analysis_script as ias
+    job = imitate_video.get_task(db, user, job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在或无权访问")
+    sid = str(((job.result_json or {}).get("analysis_script_id")) or "")
+    if not sid:
+        raise HTTPException(404, "分析脚本尚未生成，请先触发分析")
+    row = ias.get_analysis_script(db, getattr(user, "id", None), sid)
+    if not row:
+        raise HTTPException(404, "分析脚本不存在或无权访问")
+    return row

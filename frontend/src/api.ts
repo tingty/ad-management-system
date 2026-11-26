@@ -1754,6 +1754,19 @@ export interface ImitateTask {
   aspect_ratio?: string
   duration_sec?: number | null
   rights_ack?: boolean
+  analysis_script_id?: string
+  analysis_cached?: boolean
+  error_message?: string
+  created_at?: string
+}
+
+/* V4.147 · 模仿创作视频：分析脚本 A1–A10 */
+export interface ImitateAnalysisScript {
+  script_id: string
+  job_id?: string
+  status?: string
+  script_json?: Record<string, any>
+  meta_json?: Record<string, any>
   created_at?: string
 }
 
@@ -1789,4 +1802,8 @@ export const imitateVideoApi = {
   }) => req<{ status: string; job_id: string; stage: string; source: ImitateSource }>(
     '/api/imitate-video/jobs', { method: 'POST', body: JSON.stringify(body) }),
   sourceUrl: (jobId: string) => `${API_BASE}/api/imitate-video/jobs/${encodeURIComponent(jobId)}/source`,
+  analyze: (jobId: string) => req<any>(`/api/imitate-video/jobs/${encodeURIComponent(jobId)}/analyze`,
+    { method: 'POST' }),
+  analysisScript: (jobId: string) =>
+    req<ImitateAnalysisScript>(`/api/imitate-video/jobs/${encodeURIComponent(jobId)}/analysis-script`),
 }

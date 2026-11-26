@@ -204,6 +204,7 @@ def create_task(db: Session, user: User, *, source_snapshot: dict,
 # ---------------------------------------------------------------------------
 def _task_view(j: GenerationJob) -> dict:
     req = j.request_json or {}
+    res = j.result_json or {}
     return {
         "job_id": j.job_id,
         "name": req.get("name") or req.get("source_name") or "",
@@ -215,6 +216,9 @@ def _task_view(j: GenerationJob) -> dict:
         "aspect_ratio": req.get("aspect_ratio") or "",
         "duration_sec": req.get("duration_sec"),
         "rights_ack": bool(req.get("rights_ack")),
+        "analysis_script_id": res.get("analysis_script_id") or "",
+        "analysis_cached": bool(res.get("analysis_cached")),
+        "error_message": j.error_message or "",
         "created_at": j.created_at.isoformat() if j.created_at else "",
     }
 

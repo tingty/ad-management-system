@@ -62,14 +62,28 @@ def _sample_times(duration_sec: float, count: int) -> list[float]:
 
 
 def extract_frames(video_path: str, duration_sec: float = 0,
-                   count: int = DEFAULT_FRAMES) -> tuple[list[bytes], dict]:
-    """抽首 / 中 / 尾帧，返回 JPEG 字节列表；任何失败都返回可追溯原因。"""
+                   count: int = DEFAULT_FRAMES,
+                   times: list[float] | None = None) -> tuple[list[bytes], dict]:
+    """抽首 / 中 / 尾帧，返回 JPEG 字节列表；任何失败都返回可追溯原因。
+
+    V4.147：times 可指定自定义采样时间点（逐镜 3–5 帧），上限 24 帧；不传则沿用
+    旧的首/中/尾三点采样，既有调用完全不受影响。
+    """
     exe = _ffmpeg_exe()
     if not exe or not video_path or not __import__("os").path.exists(video_path):
         return [], {"status": "unavailable", "reason": "ffmpeg 或成片文件不可用"}
+    if times is not None:
+        try:
+            d = float(duration_sec or 0)
+            pts = sorted({round(max(0.0, min(float(t), max(0.0, d - 0.05))), 2)
+                          for t in list(times)[:24]})
+        except (TypeError, ValueError):
+            pts = _sample_times(duration_sec, count)
+    else:
+        pts = _sample_times(duration_sec, count)
     frames: list[bytes] = []
     errors: list[str] = []
-    for t in _sample_times(duration_sec, count):
+    for t in pts:
         cmd = [exe, "-hide_banner", "-loglevel", "error", "-ss", str(t),
                "-i", video_path, "-frames:v", "1", "-f", "image2pipe",
                "-vcodec", "mjpeg", "-"]
@@ -84,7 +98,7 @@ def extract_frames(video_path: str, duration_sec: float = 0,
         frames.append(p.stdout)
     if not frames:
         return [], {"status": "unavailable", "reason": "抽帧失败：" + "；".join(errors[:2])}
-    return frames, {"status": "ok", "frames": len(frames), "times": _sample_times(duration_sec, count)[:len(frames)]}
+    return frames, {"status": "ok", "frames": len(frames), "times": pts[:len(frames)]}
 
 
 def _parse_texts(raw: str) -> tuple[list[str], str]:

@@ -9,13 +9,20 @@
  * 只新增本页与 API 封装，不改动现有 4 个一级模块的布局与功能。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, imitateVideoApi, ImitateTask, ImitateSource } from '../api'
+import { api, imitateVideoApi, ImitateTask, ImitateSource, ImitateAnalysisScript } from '../api'
 
 type Msg = { kind: 'ok' | 'err'; text: string }
 type Tab = 'url' | 'upload'
 
+const A_LABELS: Record<string, string> = {
+  A1: '全局规格', A2: '叙事骨架', A3: '内容布局', A4: '逐镜镜头表', A5: '运动轨迹',
+  A6: '色彩光影', A7: '商业信息', A8: '音频', A9: '合规标记', A10: '可模仿结论',
+}
+
 const STAGE_LABEL: Record<string, string> = {
-  source_acquiring: '获取源视频', analyzing: '结构分析', planning: '创作策划',
+  source_acquiring: '获取源视频', analysis_pending: '分析脚本生成中',
+  analysis_ready: '分析脚本就绪', analysis_unavailable: '分析不可用',
+  analyzing: '结构分析', planning: '创作策划',
   awaiting_confirm: '待确认', submitting: '提交中', provider_pending: '模型生成中',
   downloading: '下载校验中', validating: '复核中', completed: '已完成',
 }
@@ -50,6 +57,14 @@ export default function ImitateVideo() {
   const [creating, setCreating] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // 分析脚本区状态（V4.147）
+  const [scriptTask, setScriptTask] = useState<ImitateTask | null>(null)
+  const [script, setScript] = useState<ImitateAnalysisScript | null>(null)
+  const [scriptDraft, setScriptDraft] = useState('')
+  const [scriptLoading, setScriptLoading] = useState(false)
+  const [scriptEditing, setScriptEditing] = useState(false)
+  const [analyzingId, setAnalyzingId] = useState('')
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -63,6 +78,66 @@ export default function ImitateVideo() {
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  // 自动轮询：有分析中的任务时每 4 秒刷新列表，任务不中断、进度可订阅
+  useEffect(() => {
+    if (!items.some(t => t.stage === 'analysis_pending')) return
+    const id = window.setInterval(() => { void load() }, 4000)
+    return () => window.clearInterval(id)
+  }, [items, load])
+
+  const triggerAnalyze = async (t: ImitateTask) => {
+    setAnalyzingId(t.job_id)
+    setMsg(null)
+    try {
+      const r: any = await imitateVideoApi.analyze(t.job_id)
+      setMsg({ kind: 'ok', text: r.cached ? '命中缓存，分析脚本已就绪' : '分析任务已提交，正在用真实视觉模型生成 A1–A10 脚本' })
+      await load()
+      if (r.cached || r.script_id) await openScript(t)
+    } catch (e: any) {
+      setMsg({ kind: 'err', text: e?.message || '触发分析失败' })
+    } finally {
+      setAnalyzingId('')
+    }
+  }
+
+  const openScript = async (t: ImitateTask) => {
+    setScriptTask(t)
+    setScript(null)
+    setScriptEditing(false)
+    setScriptLoading(true)
+    try {
+      const s = await imitateVideoApi.analysisScript(t.job_id)
+      setScript(s)
+      setScriptDraft(JSON.stringify(s.script_json || {}, null, 2))
+    } catch (e: any) {
+      setMsg({ kind: 'err', text: e?.message || '分析脚本尚未生成' })
+    } finally {
+      setScriptLoading(false)
+    }
+  }
+
+  const saveScriptLocal = () => {
+    try {
+      const parsed = JSON.parse(scriptDraft)
+      setScript(s => s ? { ...s, script_json: parsed } : s)
+      setScriptEditing(false)
+      setMsg({ kind: 'ok', text: '脚本草稿已在本页更新（V4.148 将支持服务端持久化回写）' })
+    } catch {
+      setMsg({ kind: 'err', text: 'JSON 格式不正确，请检查后重试' })
+    }
+  }
+
+  const downloadScript = () => {
+    if (!script) return
+    const blob = new Blob([JSON.stringify(script.script_json || {}, null, 2)],
+      { type: 'application/json;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `imitate-analysis-${script.script_id}.json`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
 
   const acquireUrl = async () => {
     if (!url.trim()) { setMsg({ kind: 'err', text: '请填写视频直链' }); return }
@@ -259,7 +334,7 @@ export default function ImitateVideo() {
           <thead>
             <tr>
               <th>任务</th><th>状态</th><th>阶段</th><th>来源</th>
-              <th>画幅/时长</th><th>原片</th><th>创建时间</th>
+              <th>画幅/时长</th><th>原片</th><th>分析脚本</th><th>创建时间</th>
             </tr>
           </thead>
           <tbody>
@@ -275,11 +350,80 @@ export default function ImitateVideo() {
                     <a href={imitateVideoApi.sourceUrl(t.job_id)} target="_blank" rel="noreferrer">预览</a>
                   )}
                 </td>
+                <td>
+                  {t.analysis_script_id ? (
+                    <a href="javascript:void(0)" onClick={() => void openScript(t)}>
+                      查看{t.analysis_cached ? '（缓存）' : ''}
+                    </a>
+                  ) : t.stage === 'analysis_pending' ? (
+                    <span className="muted">生成中…</span>
+                  ) : t.stage === 'analysis_unavailable' ? (
+                    <button className="btn" onClick={() => void triggerAnalyze(t)}>重试分析</button>
+                  ) : t.stage === 'source_acquiring' ? (
+                    <button className="btn" disabled={!!analyzingId}
+                      onClick={() => void triggerAnalyze(t)}>
+                      {analyzingId === t.job_id ? '提交中…' : '生成分析脚本'}
+                    </button>
+                  ) : '—'}
+                </td>
                 <td>{t.created_at || '—'}</td>
               </tr>
             ))}
           </tbody>
         </table>
+      )}
+
+      {/* ---- 分析脚本查看 / 编辑（A1–A10）---- */}
+      {scriptTask && (
+        <div style={{ border: '1px solid var(--border, #ddd)', borderRadius: 6, padding: 14, marginTop: 18 }}>
+          <div className="ad-panel-head">
+            <div>
+              <h3 style={{ margin: 0 }}>分析脚本 A1–A10 · {scriptTask.name || scriptTask.job_id}</h3>
+              <div className="muted" style={{ marginTop: 4 }}>
+                {script?.meta_json?.model ? `模型：${String(script.meta_json.provider || '')} / ${String(script.meta_json.model)}` : '真实视觉模型分析'}
+                {script?.meta_json?.frames ? ` · 抽帧 ${String(script.meta_json.frames)} 张` : ''}
+              </div>
+            </div>
+            <div>
+              {script && !scriptEditing && (
+                <>
+                  <button className="btn" style={{ marginRight: 6 }} onClick={() => setScriptEditing(true)}>编辑</button>
+                  <button className="btn" style={{ marginRight: 6 }} onClick={downloadScript}>导出 JSON</button>
+                </>
+              )}
+              <button className="btn" onClick={() => { setScriptTask(null); setScript(null) }}>关闭</button>
+            </div>
+          </div>
+
+          {scriptLoading && <div className="muted" style={{ padding: 16 }}>加载分析脚本…</div>}
+          {!scriptLoading && !script && (
+            <div className="muted" style={{ padding: 16 }}>
+              尚无分析脚本。可在任务列表点击「生成分析脚本」（使用系统已配置的真实视觉模型）。
+            </div>
+          )}
+          {!scriptLoading && scriptEditing && (
+            <div style={{ marginTop: 10 }}>
+              <textarea value={scriptDraft} onChange={e => setScriptDraft(e.target.value)}
+                style={{ width: '100%', minHeight: 420, fontFamily: 'monospace', fontSize: 12 }} />
+              <div style={{ marginTop: 8 }}>
+                <button className="btn primary" style={{ marginRight: 6 }} onClick={saveScriptLocal}>保存草稿</button>
+                <button className="btn" onClick={() => { setScriptEditing(false); setScriptDraft(JSON.stringify(script?.script_json || {}, null, 2)) }}>取消</button>
+              </div>
+            </div>
+          )}
+          {!scriptLoading && !scriptEditing && script?.script_json && (
+            <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+              {Object.keys(A_LABELS).map(k => (
+                <div key={k} style={{ borderLeft: '3px solid var(--accent, #2b6cb0)', paddingLeft: 10 }}>
+                  <div style={{ fontWeight: 600 }}>{k} · {A_LABELS[k]}</div>
+                  <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12 }}>
+                    {JSON.stringify(script.script_json?.[k] ?? {}, null, 2)}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
