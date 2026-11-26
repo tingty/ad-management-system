@@ -38,6 +38,9 @@ from media_spec_library import validate_video_delivery as spec_validate_delivery
 # ---------------- 常量 ----------------
 ACTIVE = ("queued", "running")
 TERMINAL = ("succeeded", "failed", "canceled", "needs_attention")
+# V4.145：worker 接管的视频类任务 kind。imitate_video（模仿创作视频）与 video 共用
+# 同一租约 worker / 状态机 / 续查逻辑，仅在业务语义上区分，不新增进程内任务字典。
+VIDEO_KINDS = ("video", "imitate_video")
 LEASE_SECONDS = 300          # 单次领取的租约：足够覆盖一次下载 + 校验
 WORKER_TICK = 1.5            # worker 轮询间隔（秒）
 VIDEO_CONCURRENCY = 2        # 同一供应商配置下并发出片上限（超出的排队，不无限 create_task）
@@ -218,7 +221,7 @@ def job_to_task(job: GenerationJob) -> dict:
     """子任务视图：图片与视频共用一套字段，前端只按 kind 区分展示。"""
     meta = job.request_json or {}
     result = job.result_json or {}
-    is_video = (job.kind or "") == "video"
+    is_video = (job.kind or "") in VIDEO_KINDS
     assets = [a for a in (result.get("assets") or []) if isinstance(a, dict)]
     if not is_video and not assets:
         # 图片任务的结果是 images 数组；统一映射成 assets，前端不必写两套渲染
@@ -540,12 +543,12 @@ def _claim(batch_ids_limit: int = MAX_CLAIM_PER_TICK) -> list[str]:
         # 已在跑（本进程）或他进程租约未到期的任务不领
         busy = {}
         for j in (db.query(GenerationJob)
-                  .filter(GenerationJob.kind == "video",
+                  .filter(GenerationJob.kind.in_(VIDEO_KINDS),
                           GenerationJob.status == "running").all()):
             if _n(j.lease_until) and _n(j.lease_until) > now:
                 busy[j.provider_config_id] = busy.get(j.provider_config_id, 0) + 1
         rows = (db.query(GenerationJob)
-                .filter(GenerationJob.kind == "video",
+                .filter(GenerationJob.kind.in_(VIDEO_KINDS),
                         GenerationJob.status.in_(ACTIVE),
                         GenerationJob.next_poll_at.isnot(None),
                         GenerationJob.next_poll_at <= now)
@@ -946,7 +949,7 @@ def recover() -> int:
     try:
         now = _now()
         for job in (db.query(GenerationJob)
-                    .filter(GenerationJob.kind == "video",
+                    .filter(GenerationJob.kind.in_(VIDEO_KINDS),
                             GenerationJob.status == "running",
                             GenerationJob.lease_until.isnot(None),
                             GenerationJob.lease_until < now).all()):

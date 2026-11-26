@@ -17,7 +17,7 @@ export type TaskFilter = 'active' | 'done' | 'needs'
 export interface CreativeSubtask {
   job_id: string
   batch_id: string
-  kind: string            // video / images
+  kind: string            // video / images / imitate_video
   status: string
   stage: string
   stage_label: string

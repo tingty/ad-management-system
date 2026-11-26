@@ -20,7 +20,7 @@ const FILTERS: { key: TaskFilter; label: string }[] = [
   { key: 'needs', label: '需处理' },
 ]
 
-const KIND_LABEL: Record<string, string> = { video: '视频', images: '图片', image: '图片', copy: '文案' }
+const KIND_LABEL: Record<string, string> = { video: '视频', images: '图片', image: '图片', copy: '文案', imitate_video: '模仿创作视频' }
 
 /** V4.137：解析口径收敛到统一时间工具（无时区后缀按 UTC，带后缀原样解析）。 */
 function parseUtcMs(iso?: string): number {

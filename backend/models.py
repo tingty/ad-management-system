@@ -611,3 +611,23 @@ class ApiFetchRun(Base):
     error = Column(Text, nullable=True)
     started_at = Column(DateTime, default=utcnow)
     finished_at = Column(DateTime, nullable=True)
+
+
+class ImitateAnalysisScript(Base):
+    """V4.145 · 模仿创作视频：参考视频解构出的分析脚本（骨架版，不调用模型、不产生费用）。
+    后续 V4.147 写入 A1–A10 完整分析脚本，V4.148 写入创作脚本；本版仅建表占位。"""
+    __tablename__ = "imitate_analysis_script"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    script_id = Column(String(40), unique=True, index=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    owner_name = Column(String(64), nullable=True)
+    job_id = Column(String(40), nullable=True, index=True)
+    source_url = Column(String(1000), nullable=True)
+    source_asset_id = Column(String(40), nullable=True, index=True)
+    file_hash = Column(String(64), nullable=True, index=True)
+    status = Column(String(24), default="draft")       # draft / analyzed / linked
+    script_json = Column(JSON, nullable=True)          # A1–A10 分析脚本
+    creation_json = Column(JSON, nullable=True)        # V4.148 创作脚本 C1–C8
+    meta_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

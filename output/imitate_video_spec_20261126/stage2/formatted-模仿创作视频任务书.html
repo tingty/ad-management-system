@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="docx-page-size" content="A4">
+<title>模仿创作视频 需求规格与技术开发任务书</title>
+<style>
+:root {
+  --typography-fontFamily-heading: "Microsoft YaHei", "微软雅黑", sans-serif;
+  --typography-fontFamily-body: "SimSun", "宋体", serif;
+  --typography-fontFamily-mono: "Consolas", monospace;
+  --typography-fontSize-h1: 20pt;
+  --typography-fontSize-h2: 15pt;
+  --typography-fontSize-h3: 13pt;
+  --typography-fontSize-body: 12pt;
+  --typography-fontSize-small: 10.5pt;
+  --typography-lineHeight-body: 1.6;
+  --typography-lineHeight-heading: 1.35;
+  --typography-fontWeight-bold: 700;
+  --typography-fontWeight-normal: 400;
+  --fs-h1: var(--typography-fontSize-h1);
+  --fs-h2: var(--typography-fontSize-h2);
+  --fs-h3: var(--typography-fontSize-h3);
+  --fs-body: var(--typography-fontSize-body);
+  --fs-small: var(--typography-fontSize-small);
+  --ff-heading: var(--typography-fontFamily-heading);
+  --ff-body: var(--typography-fontFamily-body);
+  --ff-mono: var(--typography-fontFamily-mono);
+  --lh-body: var(--typography-lineHeight-body);
+  --lh-heading: var(--typography-lineHeight-heading);
+  --fw-bold: var(--typography-fontWeight-bold);
+  --fw-normal: var(--typography-fontWeight-normal);
+  --color-primary: #1565C0;
+  --color-text: #212121;
+  --color-muted: #616161;
+  --color-border: #D7DEE8;
+  --color-bg: #F5F7FA;
+  --color-head-bg: #E8F0FB;
+  --color-callout-bg: #EEF4FB;
+  --color-warn-bg: #FDF3E7;
+  --color-warn: #A85B00;
+  --fs-cover-title: 30pt;
+  --fs-cover-sub: 15pt;
+  --spacing-paragraph: 0.7em;
+  --spacing-section: 1.8em;
+  --spacing-block: 1em;
+  --page-content-width: var(--layout-contentWidth, 15.6cm);
+}
+@page { margin: 2.4cm 2.2cm 2.2cm 2.4cm; @bottom-center { content: counter(page); } }
+@page cover { @bottom-center { content: none; } }
+section[role="cover"] { page: cover; }
+body { max-width: var(--page-content-width); margin-left: auto; margin-right: auto; font-family: var(--ff-body); font-size: var(--fs-body); line-height: var(--lh-body); color: var(--color-text); }
+p { font-family: var(--ff-body); font-size: var(--fs-body); line-height: var(--lh-body); text-indent: 2em; margin: var(--spacing-paragraph) 0; text-align: justify; }
+h1 { font-family: var(--ff-heading); font-size: var(--fs-h1); font-weight: var(--fw-bold); color: var(--color-primary); line-height: var(--lh-heading); margin: var(--spacing-section) 0 var(--spacing-block) 0; }
+h2 { font-family: var(--ff-heading); font-size: var(--fs-h2); font-weight: var(--fw-bold); color: var(--color-primary); line-height: var(--lh-heading); margin: var(--spacing-section) 0 var(--spacing-block) 0; }
+h3 { font-family: var(--ff-heading); font-size: var(--fs-h3); font-weight: var(--fw-bold); color: var(--color-text); line-height: var(--lh-heading); margin: var(--spacing-block) 0 0.5em 0; }
+ul, ol { margin: var(--spacing-paragraph) 0; padding-left: 2em; }
+li { font-family: var(--ff-body); font-size: var(--fs-body); line-height: var(--lh-body); margin: 0.3em 0; }
+table { width: 100%; border-collapse: collapse; margin: var(--spacing-block) 0; font-family: var(--ff-body); font-size: var(--fs-small); }
+caption { font-family: var(--ff-heading); font-size: var(--fs-small); font-weight: var(--fw-bold); color: var(--color-muted); text-align: left; margin-bottom: 0.4em; }
+th { background-color: var(--color-head-bg); color: var(--color-text); font-weight: var(--fw-bold); text-align: left; padding: 6px 8px; border: 0.5px solid var(--color-border); font-family: var(--ff-heading); }
+td { padding: 6px 8px; border: 0.5px solid var(--color-border); vertical-align: top; line-height: 1.45; }
+p.cover-title { font-family: var(--ff-heading); font-size: var(--fs-cover-title); font-weight: var(--fw-bold); color: var(--color-primary); text-align: center; text-indent: 0; line-height: 1.25; margin-top: 4.5cm; }
+p.cover-sub { font-family: var(--ff-heading); font-size: var(--fs-cover-sub); color: var(--color-muted); text-align: center; text-indent: 0; margin-top: 1cm; }
+p.cover-meta { font-family: var(--ff-body); font-size: var(--fs-body); color: var(--color-muted); text-align: center; text-indent: 0; margin-top: 5cm; }
+p.toc-title { font-family: var(--ff-heading); font-size: var(--fs-h1); font-weight: var(--fw-bold); color: var(--color-primary); text-align: center; text-indent: 0; margin-bottom: 1em; }
+nav.doc-toc ol.toc-list { list-style: none; padding-left: 0; }
+nav.doc-toc ol.toc-list ol { list-style: none; padding-left: 1.6em; }
+nav.doc-toc li { font-family: var(--ff-body); font-size: var(--fs-body); margin: 0.35em 0; }
+.executive-summary { background: var(--color-callout-bg); border: 0.5px solid var(--color-border); padding: 10px 14px; margin: var(--spacing-block) 0; }
+.executive-summary p { text-indent: 2em; }
+p.note { border-left: 3px solid var(--color-primary); background: var(--color-callout-bg); padding: 8px 10px; text-indent: 0; }
+p.warn { border-left: 3px solid var(--color-warn); background: var(--color-warn-bg); padding: 8px 10px; text-indent: 0; color: var(--color-warn); }
+</style>
+</head>
+<body>
+<section role="cover">
+<p class="cover-title">模仿创作视频<br>需求规格与技术开发任务书</p>
+<p class="cover-sub">《广告管理系统》独立一级功能模块 · 参数冻结版</p>
+<p class="cover-meta">版本 V1.0　|　2026 年 11 月 26 日<br>依据：源功能策划草案 + 已确认规划口径 + 现有系统架构调研</p>
+</section>
+<section role="cover">
+<nav class="doc-toc" aria-label="文档目录">
+<p class="toc-title">目录</p>
+<ol class="toc-list">
+<li><a href="#s0">执行摘要</a></li>
+<li><a href="#s1">一、编制依据与草案纠偏</a></li>
+<li><a href="#s2">二、模块定位与边界</a></li>
+<li><a href="#s3">三、端到端管线与状态机</a></li>
+<li><a href="#s4">四、功能需求详述</a></li>
+<li><a href="#s5">五、分析脚本与创作脚本完整规格</a></li>
+<li><a href="#s6">六、商业信息呈现与三道防线</a></li>
+<li><a href="#s7">七、页面设计与交互</a></li>
+<li><a href="#s8">八、数据模型与接口清单</a></li>
+<li><a href="#s9">九、大模型调用设计</a></li>
+<li><a href="#s10">十、待确认事项确认结论</a></li>
+<li><a href="#s11">十一、权限、合规与边界用例</a></li>
+<li><a href="#s12">十二、技术开发流程与版本切分</a></li>
+<li><a href="#s13">十三、测试矩阵</a></li>
+<li><a href="#s14">十四、交付与后续</a></li>
+</ol>
+</nav>
+</section>
+<section role="body" data-page-restart="1">
+<h1 id="s0">执行摘要</h1>
+<div class="executive-summary">
+<p>本任务书将「模仿创作视频」定义为《广告管理系统》中一个独立的、一级菜单级功能模块，入口 <code>#/imitatevideo</code>。它以一条专业投放视频（链接或本地上传）为学习对象，系统性解构其创作方案，输出完整的<strong>分析脚本</strong>；再叠加用户创作选项，重新演绎出内容独立、符合目标媒体投放规格的<strong>创作脚本</strong>；最后复用系统现有大模型配置、租约任务 worker 与视频三道防线，逐镜生成并复核出片。</p>
+<p>与系统现有「创意工作台」以落地页/产品事实 + 证据链为输入不同，本模块以「一条完整参考视频」为输入，产出「模仿其结构与方法论、但内容与画面全新」的再创作视频。其存在价值在于：现有视频创作链路未产生理想案例，本模块通过向好老师学习的方式加强优质视频素材的生成能力。</p>
+<p>本任务书基于用户提供的《AI视频重制工作台 V1.0 草案》及本轮对话已确认的规划口径编制，是参数冻结后的开发与验收依据。源草案中挂靠平台、技术栈、权限模型、模型配置等假设与现有系统不符，已逐项纠偏（见第一章）。C-M1 至 C-M8 待确认事项用户已答复「没有异议」，全部按建议默认值执行（见第十章）。</p>
+</div>
+
+<h1 id="s1">一、编制依据与草案纠偏</h1>
+<h2>（一）编制依据</h2>
+<ul>
+<li>源草案：《AI视频重制工作台 产品功能策划 V1.0》（2026-11-26），提供 F1–F6 模块、S1–S6 管线与五类模型调用的原始设想。</li>
+<li>用户三条核心要求：以专业投放视频为学习对象、尽可能消化其创作方案；商业信息可作为选项保留但须优化调整；输出完整且具象的分析脚本与创作脚本；新片符合媒体投放规格；保持新片独立与创新、不直接复制。</li>
+<li>现有系统架构只读调研结论（见本章第三节）。</li>
+</ul>
+<h2>（二）草案纠偏对照</h2>
+<p>源草案多处技术假设与现有《广告管理系统》真实实现不符，本任务书按下列口径纠偏：</p>
+<table>
+<caption>表 1-1 草案假设与任务书口径对照</caption>
+<thead><tr><th>编号</th><th>源草案假设</th><th>系统真实情况</th><th>任务书口径</th></tr></thead>
+<tbody>
+<tr><td>D1</td><td>挂靠 RM BI System / WorkHub 侧边栏、非独立 App</td><td>React + FastAPI + SQLite，已有 4 个一级分组</td><td>独立一级菜单「模仿创作视频」，入口 <code>#/imitatevideo</code></td></tr>
+<tr><td>D2</td><td>PostgreSQL + 对象存储</td><td>SQLite(WAL) + <code>backend/uploads/</code> + <code>/files</code> 静态挂载</td><td>沿用本地存储，不引入对象存储</td></tr>
+<tr><td>D3</td><td>5 类模型含独立 VLM / 图像编辑 / TTS，走统一网关</td><td><code>model_configs</code> 仅 text/image/video 三模态，analysis/copy/image/video 四用途，无 TTS、无独立 vision</td><td>严格复用统一配置，不新建大模型配置模块；TTS 首期不做（C-M2）</td></tr>
+<tr><td>D4</td><td>独立异步队列 + 进程池 + FFmpeg worker</td><td>已有 <code>creative_tasks.py</code> 租约 worker + 完整状态机 + 按 provider_task_id 续查</td><td>直接复用，扩展新 kind 与阶段，不引入新队列</td></tr>
+<tr><td>D5</td><td>社交平台页解析、每 2–3 秒抽帧、delogo、ASS 字幕烧录、TTS 配音</td><td>仅直链下载；抽帧与解构已有；无系统 ffmpeg/ffprobe/TTS</td><td>首期仅直链、逐镜 3–5 帧；烧录/配音按需另定，列二期</td></tr>
+<tr><td>D6</td><td>权限经理/员工两级、30 秒成片 P50≤15 分钟</td><td>admin/manager/editor/viewer 四级，VIDEO_CONCURRENCY=2</td><td>沿用四级角色；性能目标按真实供应商重估</td></tr>
+</tbody>
+</table>
+<h2>（三）可复用能力清单</h2>
+<table>
+<caption>表 1-2 现有能力复用方式</caption>
+<thead><tr><th>能力</th><th>现有实现</th><th>复用方式</th></tr></thead>
+<tbody>
+<tr><td>一级菜单与路由</td><td><code>frontend/src/App.tsx</code> 菜单数组、hash 路由</td><td>新增一个一级入口，不改现有 4 个模块布局与功能</td></tr>
+<tr><td>异步任务</td><td><code>creative_tasks.py</code> 租约 worker、<code>generation_jobs</code>/<code>creative_batches</code></td><td>复用同一 worker，扩展新 kind 与阶段；禁止新增进程内任务字典</td></tr>
+<tr><td>大模型配置</td><td><code>providers.py</code> get_llm_with_info/get_video，<code>last_test_ok</code> 硬门</td><td>只读复用，不新建配置模块</td></tr>
+<tr><td>视频理解与解构</td><td><code>video_vision_audit</code>、<code>asset_video_deconstruct.deconstruct_video</code></td><td>作为分析脚本的底层能力</td></tr>
+<tr><td>三道防线</td><td><code>brand_lexicon</code>/<code>video_text_guard</code>/<code>video_vision_audit</code>/<code>VideoTextOverlay</code></td><td>品牌字样不交给视频模型画，成片视觉 OCR 复核</td></tr>
+<tr><td>规格库</td><td><code>media_spec_library</code> 主素材类尺寸与 spec_id</td><td>成片规格唯一来源，前端不写死像素</td></tr>
+<tr><td>上传与存储</td><td><code>/api/assets/upload-video</code>、<code>/files</code> 静态挂载</td><td>本地上传入口与 video 文件落盘复用</td></tr>
+<tr><td>时间与发版</td><td><code>timeutil.py</code>/<code>datetime.ts</code>；<code>prepare_release.py</code> + CHANGELOG + tag/push</td><td>全链路沿用</td></tr>
+</tbody>
+</table>
+
+<h1 id="s2">二、模块定位与边界</h1>
+<h2>（一）定位</h2>
+<table>
+<caption>表 2-1 模块定位</caption>
+<thead><tr><th>维度</th><th>定义</th></tr></thead>
+<tbody>
+<tr><td>名称 / 入口</td><td>「模仿创作视频」，独立一级菜单，单入口 <code>#/imitatevideo</code>（无需改 tabFromHash）</td></tr>
+<tr><td>独立性</td><td>与素材工作坊、创意工作台、广告主数据、系统设置并列；不改这 4 个模块的布局与功能</td></tr>
+<tr><td>与创意工作台的区别</td><td>现有链路输入为落地页/产品事实 + 证据门；本模块输入为一条完整参考视频，产出模仿其结构的再创作视频</td></tr>
+<tr><td>大模型</td><td>只读 <code>model_configs</code>，走 <code>get_llm_with_info</code>/<code>get_video</code>；不新建配置模块、不改 LLMSettings</td></tr>
+<tr><td>任务不中断</td><td>任务事实存 <code>generation_jobs</code>/<code>creative_batches</code>，租约 worker 驱动；进度订阅提升到 App 层常驻，全局 Dock 角标，切页/刷新/关浏览器均可回看</td></tr>
+</tbody>
+</table>
+<h2>（二）核心概念：双脚本模型</h2>
+<p>本模块的核心资产是两个维度对齐、内容独立的脚本：</p>
+<ul>
+<li><strong>分析脚本（交付物①）</strong>：对原视频逐层解构，产出完整、系统、具象的结构化文档，回答"这条视频为什么有效、它是怎么做出来的"。</li>
+<li><strong>创作脚本（交付物②）</strong>：叠加用户创作选项后，基于分析脚本重新演绎，产出内容全新、可直接驱动生成的分镜指令，回答"我们要做一条怎样的新视频"。</li>
+</ul>
+<p>两者的维度一一对应（内容布局/结构/细节/画面要求/运动轨迹/颜色特点/拍摄手法等），但创作脚本的内容不得逐字复制原片——这是"模仿方法论、不复制内容"的落地方式。</p>
+<h2>（三）模仿边界</h2>
+<ul>
+<li>模仿：分镜数量与顺序、时长节奏、钩子与 CTA 位置、叙事框架、运镜与构图倾向、色彩风格、拍摄手法、画面分区布局。</li>
+<li>不复制：字幕文本、真人话术、原片品牌 Logo、承诺性数字、未经核实的宣传声明。</li>
+<li>可选保留：品牌名、文案、销售信息、促销信息——由用户逐类勾选，且必须经改写后呈现（C-M1）。</li>
+</ul>
+
+<h1 id="s3">三、端到端管线与状态机</h1>
+<h2>（一）管线阶段</h2>
+<table>
+<caption>表 3-1 S1–S6 管线</caption>
+<thead><tr><th>阶段</th><th>名称</th><th>输入</th><th>输出</th><th>责任方</th><th>费用</th></tr></thead>
+<tbody>
+<tr><td>S1</td><td>源视频获取</td><td>链接 URL 或本地文件</td><td>源视频文件 + 元数据</td><td>后端下载/上传服务</td><td>否</td></tr>
+<tr><td>S2</td><td>分析脚本生成</td><td>源视频</td><td>完整分析脚本</td><td>VLM 分析 + LLM 归纳</td><td>是（缓存复用）</td></tr>
+<tr><td>S3</td><td>创作脚本生成</td><td>分析脚本 + 用户选项</td><td>完整创作脚本</td><td>LLM 文本模型</td><td>是</td></tr>
+<tr><td>S4</td><td>确认闸门</td><td>创作脚本</td><td>确认后的脚本</td><td>用户</td><td>否</td></tr>
+<tr><td>S5</td><td>逐镜生成</td><td>逐镜生成指令</td><td>分段视频片段</td><td>图生视频模型</td><td>是（主要成本）</td></tr>
+<tr><td>S6</td><td>复核与交付</td><td>片段 + 脚本</td><td>成片 + 中间产物 + 归档</td><td>后端 + 前端</td><td>否</td></tr>
+</tbody>
+</table>
+<p>两条输入路径（链接 / 上传）在"源视频文件"处汇合，S2 之后完全一致。同链接按 file_hash 复用 S1/S2 结果，不重复计费。</p>
+<h2>（二）状态机</h2>
+<table>
+<caption>表 3-2 状态流转</caption>
+<thead><tr><th>层</th><th>取值</th></tr></thead>
+<tbody>
+<tr><td>用户可见</td><td>已创建 → 获取源视频 → 结构分析 → 待确认 → 生成中 → 复核中 → 已完成 / 需关注 / 失败 / 已取消</td></tr>
+<tr><td>后台 stage</td><td><code>source_acquiring → analyzing → planning → awaiting_confirm → submitting → provider_pending → downloading → validating → completed</code></td></tr>
+<tr><td>失败口径</td><td>无片 = <code>needs_attention</code>；服务端 bug = <code>failed</code>；拿到 provider_task_id 立即落库，重启按号续查<strong>不重提</strong></td></tr>
+</tbody>
+</table>
+<p class="warn">&nbsp;&nbsp;状态流转红线：worker 每步结束必须释放 <code>lease_until</code>；SQLite 时间统一 naive UTC；只有 <code>save_video_media</code> 落盘并通过 <code>verify_video_file</code> 才算 succeeded，分镜永远只是兜底交付物。</p>
+
+<h1 id="s4">四、功能需求详述</h1>
+<h2>（一）源视频获取（S1）</h2>
+<ul>
+<li>双入口 Tab：链接输入（服务端代下载，SSRF 校验，直链优先）与本地上传（复用 <code>/api/assets/upload-video</code>）。</li>
+<li>字段：任务名称、输入来源、源链接或视频文件、目标语言（英文/中文/跟随原片）、目标时长（15/30/60 秒/跟随原片）、结构保持度（高/中/低）、目标投放位（平台+版位，必选）、产品卖点/品牌、AI 标识开关、权利声明勾选。</li>
+<li>校验：URL 格式校验、仅 http/https、私有网段 SSRF 拦截；时长建议 10–120 秒、体积 ≤200MB，超限明确失败原因；非视频容器拦截。nginx 上传上限由 50MB 放宽至 200MB。</li>
+<li>元数据：时长、画幅、分辨率、帧率、容器、音轨有无，由 <code>verify_video_file()</code> 提取。</li>
+<li>边界用例：非直链/需登录/防盗链 → 提示改贴直链或走上传；无音轨/无画面文字 → 标"无"不猜测。</li>
+</ul>
+<h2>（二）分析脚本生成（S2）</h2>
+<ul>
+<li>抽帧：逐镜 3–5 帧 + 全局取色 + VLM 逐帧理解（C-M3），不引入新模型用途。</li>
+<li>底层能力：复用 <code>extract_frames</code>/<code>recognize_frames</code>/<code>deconstruct_video</code>，产出后由 LLM 归纳为完整分析脚本（字段见第五章）。</li>
+<li>视觉模型不可用时标 <code>unavailable</code>，不冒充已复核、不误伤成片。</li>
+<li>同链接按 file_hash 缓存 S2 结果；用户可查看与导出分析脚本（结构化 JSON + 可读视图）。</li>
+</ul>
+<h2>（三）创作脚本生成与确认闸门（S3/S4）</h2>
+<ul>
+<li>统一文本模型把「分析脚本 + 用户创作选项」转成完整创作脚本（字段见第五章）。</li>
+<li>确认页展示：原片/新片结构对照、逐镜创作指令表、商业信息"原文→改写后"对照、预计消耗。</li>
+<li>用户可逐句改写旁白、删镜、排序、调整结构保持度；确认后才提交计费生成。</li>
+<li>模型未过 <code>last_test_ok</code> → 422 拦截，不产生费用。</li>
+</ul>
+<h2>（四）逐镜生成与复核（S5/S6）</h2>
+<ul>
+<li>生成：复用 <code>get_video()</code> → <code>ModelVideo.submit_job/poll_job</code> 逐镜生成；首期逐镜"干净首帧 + 运动 prompt"，不依赖多帧参考。</li>
+<li>落盘：<code>save_video_media()</code> + <code>verify_video_file()</code>；规格复核 <code>validate_video_delivery()</code>，按目标投放位规格强校验，不跟随原片画幅。</li>
+<li>拼接与文字：按 C-M1 决策执行（见第六章）；视觉 OCR 复核沿用三道防线，标 <code>TEXT_VISION_MISMATCH</code> / needs_attention。</li>
+<li>幂等：拿到 provider_task_id 立即落库；重启按号续查；只有 regenerate 才产生新费用。</li>
+<li>交付：在线 video 播放器预览、成片与中间产物下载、归档 <code>CreativeAsset</code>；单段失败重试一次后标 needs_attention，不阻塞整体。</li>
+</ul>
+
+<h1 id="s5">五、分析脚本与创作脚本完整规格</h1>
+<p class="note">&nbsp;&nbsp;本章是"越详细越好、越具象越好"要求的落地定义，是开发的核心数据契约。</p>
+<h2>（一）分析脚本字段规格（交付物①）</h2>
+<table>
+<caption>表 5-1 分析脚本 A1–A10</caption>
+<thead><tr><th>组</th><th>字段</th><th>数据来源</th></tr></thead>
+<tbody>
+<tr><td>A1 全局规格</td><td>时长、画幅比、分辨率、帧率、容器、音轨有无、整体风格一句话</td><td><code>verify_video_file()</code> + VLM 归纳</td></tr>
+<tr><td>A2 叙事骨架</td><td>前 3 秒钩子手法、情绪曲线、卖点排布顺序、CTA 时机与形式、信息密度节奏</td><td>VLM 逐帧 + LLM 归纳</td></tr>
+<tr><td>A3 内容布局</td><td>逐镜画面分区（主体区/文字区/Logo 位/留白区）、安全区、文字每屏停留时长</td><td>VLM 标注</td></tr>
+<tr><td>A4 逐镜镜头表</td><td>镜号、时码起止、时长、景别、机位、拍摄手法（推拉摇移跟/升降/手持/稳定器）、运镜轨迹与速度、主体动作、场景道具、转场方式</td><td>逐帧 VLM 理解</td></tr>
+<tr><td>A5 运动轨迹</td><td>每镜主体运动方向与路径、镜头运动路径、屏内元素运动速度</td><td>逐帧 VLM 理解</td></tr>
+<tr><td>A6 色彩光影</td><td>主色/辅色/点缀色（十六进制估值）、色温、饱和度、对比度、色调风格、光源类型与方向、光影变化</td><td>全局取色 + VLM</td></tr>
+<tr><td>A7 商业信息</td><td>品牌名/文案/销售/促销原文、出现时机与位置、字幕样式、口播逐字稿与语速</td><td>OCR + VLM</td></tr>
+<tr><td>A8 音频</td><td>BGM 风格与卡点、音效节点、口播停顿重音</td><td>音轨分析（首期仅有无+节点）</td></tr>
+<tr><td>A9 合规标记</td><td>承诺性数字、绝对化用语、未核实声明、需证据支撑的声明</td><td>LLM 规则识别</td></tr>
+<tr><td>A10 可模仿结论</td><td>3–5 条"这条视频为什么有效"的方法论摘要</td><td>LLM 归纳，通向创作脚本的桥</td></tr>
+</tbody>
+</table>
+<h2>（二）创作脚本字段规格（交付物②）</h2>
+<table>
+<caption>表 5-2 创作脚本 C1–C8</caption>
+<thead><tr><th>组</th><th>字段</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>C1 目标规格</td><td>从 <code>media_spec_library</code> 按目标投放位取唯一规格</td><td>前端零硬编码</td></tr>
+<tr><td>C2 结构方案</td><td>逐镜时长/顺序/钩子/CTA，结构保持度高/中/低</td><td>高=逐镜时长顺序全保留；中=保留钩子与 CTA；低=仅保留叙事骨架；均可微调</td></tr>
+<tr><td>C3 逐镜生成指令</td><td>画面描述、景别、运镜、运动 prompt、负向 prompt、首帧参考、时长、转场</td><td>驱动 S5 生成</td></tr>
+<tr><td>C4 风格方案</td><td>继承 A6 色系光影并按品牌色校正</td><td>风格保持与创新平衡</td></tr>
+<tr><td>C5 商业信息方案</td><td>品牌/文案/销售/促销四类开关 + "原文→改写后"对照</td><td>标注未逐字复制（C-M1）</td></tr>
+<tr><td>C6 字幕/话术方案</td><td>新文案、样式、停留时长、口播改写稿</td><td>口播仅交付文案、人工配音（C-M2）</td></tr>
+<tr><td>C7 合规标注</td><td>承诺数字/绝对化用语是否保留、证据引用</td><td>承接 A9</td></tr>
+<tr><td>C8 生成参数</td><td>幂等键、预计消耗、模型用途</td><td>计费与续查</td></tr>
+</tbody>
+</table>
+
+<h1 id="s6">六、商业信息呈现与三道防线（C-M1 决策）</h1>
+<p>用户确认采用方案 A：改写后的商业信息文字<strong>烧录进成片</strong>，投放平台通用、下载带字。</p>
+<ul>
+<li>受控例外：在现有"画面零文字 + 播放层 DOM 叠加 + 真实视觉 OCR 复核"三道防线上开一个例外——仅本模块、仅用户勾选、仅经改写与词典校验的文字允许烧录；通用默认仍是原片零文字。</li>
+<li>实现路径：品牌字样不交给视频模型画（避免模型画字错误），由后端在复核通过后按创作脚本时间轴烧录；烧录后做真实视觉 OCR 复核，比对词典，违规标 <code>TEXT_VISION_MISMATCH</code> / needs_attention，原片保留核对。</li>
+<li>改写约束：字幕与真人话术不得逐字复制原片；商业信息须经 LLM 改写并从文案层进入烧录流程。</li>
+<li>能力缺口：系统当前无系统 ffmpeg/ffprobe、无 ASS/drawtext 烧录组件，烧录能力为 V4.149 必须新建项（本项目内实现，不引入独立大模型配置）。</li>
+</ul>
+
+<h1 id="s7">七、页面设计与交互</h1>
+<p>页面三段式，均在 <code>#/imitatevideo</code> 内：</p>
+<ol>
+<li><strong>新建任务区</strong>：双 Tab（链接/上传）+ 字段表单 + 商业信息四类勾选 + 权利声明勾选。</li>
+<li><strong>脚本确认区</strong>：分析脚本查看/导出；原片与新片结构对照；逐镜创作指令表（可改写旁白、删镜、排序、调结构保持度）；商业信息"原文→改写后"对照；预计消耗；"确认并生成"按钮。</li>
+<li><strong>任务列表区</strong>：状态、当前阶段、各阶段耗时、中间产物（脚本表/分段视频/音频）、成片预览与下载；全局 Dock 角标显示进行中任务数。</li>
+</ol>
+<p>进度订阅提升到 App 层常驻（<code>useCreativeTasks</code> 上提），切页/刷新/关浏览器后任务不中断，回来可续看进度与状态。</p>
+
+<h1 id="s8">八、数据模型与接口清单</h1>
+<h2>（一）数据模型</h2>
+<table>
+<caption>表 8-1 数据表设计</caption>
+<thead><tr><th>表</th><th>用途</th><th>关键字段</th></tr></thead>
+<tbody>
+<tr><td><code>generation_jobs</code></td><td>任务事实（kind=imitate_video）</td><td>id, owner_id, kind, status, stage, lease_until, next_poll_at, provider_task_id, file_hash</td></tr>
+<tr><td><code>creative_batches</code></td><td>批次快照</td><td>job_id, script_snapshot, options_snapshot</td></tr>
+<tr><td><code>imitate_analysis_script</code></td><td>分析脚本（新增）</td><td>job_id, file_hash, script_json, version</td></tr>
+<tr><td><code>imitate_creation_script</code></td><td>创作脚本（新增）</td><td>job_id, script_json, version, confirmed_at</td></tr>
+<tr><td><code>imitate_case_library</code></td><td>好案例沉淀（V4.150）</td><td>owner_id, script_json, style_tags, source_job_id</td></tr>
+</tbody>
+</table>
+<p>新增表由 <code>backend/migrations.py</code> 版本化迁移创建；时间字段统一 naive UTC。</p>
+<h2>（二）接口清单</h2>
+<table>
+<caption>表 8-2 API 接口</caption>
+<thead><tr><th>方法</th><th>路径</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td>POST</td><td><code>/api/imitate-video/jobs</code></td><td>创建任务（入队前校验模型 last_test_ok、权利声明、目标规格）</td></tr>
+<tr><td>GET</td><td><code>/api/imitate-video/jobs</code></td><td>任务列表（owner 隔离）</td></tr>
+<tr><td>GET</td><td><code>/api/imitate-video/jobs/{id}</code></td><td>任务详情与进度</td></tr>
+<tr><td>GET</td><td><code>/api/imitate-video/jobs/{id}/analysis-script</code></td><td>获取分析脚本（JSON + 可读视图）</td></tr>
+<tr><td>PATCH</td><td><code>/api/imitate-video/jobs/{id}/creation-script</code></td><td>编辑创作脚本（逐镜改写/删镜/排序）</td></tr>
+<tr><td>POST</td><td><code>/api/imitate-video/jobs/{id}/confirm</code></td><td>确认闸门，提交计费生成</td></tr>
+<tr><td>POST</td><td><code>/api/imitate-video/jobs/{id}/regenerate</code></td><td>重新生成（产生新费用）</td></tr>
+<tr><td>GET</td><td><code>/api/imitate-video/jobs/{id}/artifacts</code></td><td>中间产物与成片下载</td></tr>
+<tr><td>POST</td><td><code>/api/imitate-video/jobs/{id}/rate</code></td><td>标记好/修改/重做（V4.150 案例沉淀）</td></tr>
+</tbody>
+</table>
+<p>进度复用 <code>/api/creative-tasks</code>，用新 kind 区分并加标签；前端类型在 <code>frontend/src/api.ts</code> 补齐。</p>
+
+<h1 id="s9">九、大模型调用设计</h1>
+<table>
+<caption>表 9-1 模型调用分工</caption>
+<thead><tr><th>环节</th><th>模型用途</th><th>输入</th><th>输出</th><th>失败策略</th></tr></thead>
+<tbody>
+<tr><td>分析脚本</td><td>analysis（复用 VLM 能力）</td><td>源视频逐帧</td><td>分析脚本 JSON</td><td>重试 1 次，失败标 unavailable</td></tr>
+<tr><td>创作脚本</td><td>copy（文本模型）</td><td>分析脚本 + 用户选项</td><td>创作脚本 JSON</td><td>缩写重试 2 次</td></tr>
+<tr><td>逐镜生成</td><td>video（图生视频）</td><td>干净首帧 + 运动 prompt</td><td>分段视频</td><td>重试 1 次，降级 needs_attention</td></tr>
+<tr><td>视觉复核</td><td>analysis（视觉）</td><td>成片抽帧</td><td>OCR 文本比对</td><td>不可用标 unavailable，不冒充通过</td></tr>
+</tbody>
+</table>
+<p class="warn">&nbsp;&nbsp;禁止 MockLLM/FallbackLLM 冒充交付；模型未配置或 <code>last_test_ok</code> 非 True → 422 拦截，不产生费用。</p>
+
+<h1 id="s10">十、待确认事项确认结论（C-M1~C-M8）</h1>
+<p>用户对下列事项答复「没有异议」，全部按建议默认值执行，构成本任务书已冻结的参数：</p>
+<table>
+<caption>表 10-1 冻结参数</caption>
+<thead><tr><th>编号</th><th>事项</th><th>冻结结论</th></tr></thead>
+<tbody>
+<tr><td>C-M1</td><td>商业信息文字呈现</td><td>方案 A：烧录进成片；三道防线上开受控例外（仅本模块、仅勾选、仅改写+词典校验）</td></tr>
+<tr><td>C-M2</td><td>真人形象/口播</td><td>首期不做真人出镜；口播以改写文案交付、人工配音，不引入 TTS/数字人</td></tr>
+<tr><td>C-M3</td><td>视觉分析深度</td><td>逐镜 3–5 帧 + 全局取色 + VLM 逐帧理解，接受成本；不引入新模型用途</td></tr>
+<tr><td>C-M4</td><td>链接范围</td><td>首期仅直链 CDN；平台页解析（yt-dlp）列二期</td></tr>
+<tr><td>C-M5</td><td>权利与合规</td><td>强制勾选"已获授权/自有素材"并留痕来源 URL 与勾选记录</td></tr>
+<tr><td>C-M6</td><td>目标投放规格</td><td>新建任务必选目标平台+版位，从规格库取唯一规格；不跟随原片画幅</td></tr>
+<tr><td>C-M7</td><td>案例库共享范围</td><td>按 owner 隔离、任务私有沉淀；跨账号共享列二期</td></tr>
+<tr><td>C-M8</td><td>结构保持度档位</td><td>高/中/低三档；高=逐镜时长顺序全保留，中=保留钩子与 CTA，低=仅保留叙事骨架，均可逐镜微调</td></tr>
+</tbody>
+</table>
+<p>沿用上一轮默认值的其他口径：源视频 10–120 秒/≤200MB；viewer 不可见该菜单；关键操作写审计；不复制承诺性数字；目标语言英文/中文/跟随原片；AI 标识默认关闭、经理可开；成片归档 <code>CreativeAsset</code> + 下载。</p>
+
+<h1 id="s11">十一、权限、合规与边界用例</h1>
+<h2>（一）权限</h2>
+<table>
+<caption>表 11-1 角色权限</caption>
+<thead><tr><th>角色</th><th>权限</th></tr></thead>
+<tbody>
+<tr><td>admin/manager/editor</td><td>CAN_EDIT：创建、确认、下载、标记案例</td></tr>
+<tr><td>manager</td><td>CAN_REVIEW：查看全员任务与用量；可开启 AI 标识</td></tr>
+<tr><td>viewer</td><td>不可见该一级菜单</td></tr>
+</tbody>
+</table>
+<p>创建/确认/生成/下载等关键操作写 <code>_audit()</code> 审计留痕。</p>
+<h2>（二）合规</h2>
+<ul>
+<li>下载第三方视频二创须用户具备权利，强制勾选并留痕来源 URL 与勾选记录。</li>
+<li>不复制原片承诺性数字、绝对化用语、未核实声明（A9 标记，创作脚本默认剔除）。</li>
+<li>AI 标识默认关闭，经理可按地区合规要求开启。</li>
+<li>真实付费出片、真实视觉抽检与品牌方确认属外部验收项，模拟测试不能替代。</li>
+</ul>
+<h2>（三）边界用例</h2>
+<table>
+<caption>表 11-2 边界用例</caption>
+<thead><tr><th>场景</th><th>处理</th></tr></thead>
+<tbody>
+<tr><td>非直链/需登录/防盗链</td><td>提示改贴直链或走上传</td></tr>
+<tr><td>私有网段 URL（SSRF）</td><td>拦截</td></tr>
+<tr><td>超 200MB / 非视频容器</td><td>明确失败原因</td></tr>
+<tr><td>无音轨 / 无画面文字</td><td>标"无"，不猜测</td></tr>
+<tr><td>模型未过 last_test_ok</td><td>422 拦截，不产生费用</td></tr>
+<tr><td>视觉模型不可用</td><td>标 unavailable，不冒充通过也不误伤成片</td></tr>
+<tr><td>单段生成失败</td><td>重试一次后标 needs_attention，不阻塞整体</td></tr>
+<tr><td>拿到 provider_task_id 后崩溃</td><td>重启按号续查，不重提、不重复计费</td></tr>
+</tbody>
+</table>
+
+<h1 id="s12">十二、技术开发流程与版本切分</h1>
+<p>每版独立验收、可回滚、tag + push、CHANGELOG 独立条目；不改动现有 4 个一级模块的功能与布局。</p>
+<table>
+<caption>表 12-1 版本切分</caption>
+<thead><tr><th>版本</th><th>内容</th><th>回滚方式</th></tr></thead>
+<tbody>
+<tr><td>V4.145</td><td>骨架：一级菜单 + 页面壳 + 数据模型/迁移 + 上传链路复用 + 新 kind 任务状态机（不产生费用）</td><td>移除菜单与页面</td></tr>
+<tr><td>V4.146</td><td>源视频获取：直链下载、本地上传、元数据、原片预览</td><td>开关关闭</td></tr>
+<tr><td>V4.147</td><td>分析脚本：逐帧解构 → 完整分析脚本 + 同链接缓存 + 查看/导出</td><td>开关关闭</td></tr>
+<tr><td>V4.148</td><td>创作脚本：统一 LLM + 确认闸门 + 成本预估 + 幂等</td><td>开关关闭</td></tr>
+<tr><td>V4.149</td><td>出片与复核：逐镜生成 + 续查不重提 + 拼接 + 规格强校验 + 烧录 + 视觉复核 + 下载归档 + 全局进度</td><td>开关关闭</td></tr>
+<tr><td>V4.150（可选）</td><td>质量闭环：好/修改/重做标记 + 案例库沉淀 + 风格参考复用</td><td>独立开关</td></tr>
+</tbody>
+</table>
+<h2>（一）技术红线</h2>
+<ul>
+<li>不新建大模型配置模块；禁用 Mock/Fallback 冒充交付。</li>
+<li>任务事实只有一份，禁止进程内任务字典；<code>kind=="video"</code> 硬编码需在 <code>_claim</code>/<code>recover</code>/<code>_drive</code> 三处放开。</li>
+<li>SQLite 时间统一 naive UTC；worker 每步释放 <code>lease_until</code>。</li>
+<li>只有 <code>save_video_media</code> + <code>verify_video_file</code> 通过才算成功。</li>
+<li>参考视频不是已核实产品事实，不能沿用落地页 <code>[E###]</code> 证据契约。</li>
+</ul>
+<h2>（二）每版验收</h2>
+<p>专项 unittest + 隔离库全量回归 + <code>npx tsc --noEmit</code> + <code>npm run build</code> + <code>prepare_release --sync/--check</code> + CHANGELOG 独立版本条目 + tag + push。</p>
+
+<h1 id="s13">十三、测试矩阵</h1>
+<table>
+<caption>表 13-1 测试覆盖矩阵</caption>
+<thead><tr><th>维度</th><th>覆盖点</th></tr></thead>
+<tbody>
+<tr><td>入口与菜单</td><td>一级菜单渲染、hash 路由、viewer 不可见</td></tr>
+<tr><td>源视频获取</td><td>直链/上传、SSRF 拦截、超限失败、元数据提取、file_hash 缓存</td></tr>
+<tr><td>分析脚本</td><td>A1–A10 字段齐全、逐帧解构调用、VLM 不可用标 unavailable、缓存复用</td></tr>
+<tr><td>创作脚本</td><td>A→C 维度对齐、四类商业信息改写对照、不逐字复制、结构保持度三档</td></tr>
+<tr><td>确认闸门</td><td>未确认不提交、模型未测 422、编辑后重新计价</td></tr>
+<tr><td>生成与续查</td><td>provider_task_id 落库、重启续查不重提、幂等键、单段失败降级</td></tr>
+<tr><td>规格与复核</td><td>目标投放位规格强校验、烧录受控例外、视觉 OCR 比对、不冒充通过</td></tr>
+<tr><td>任务不中断</td><td>切页/刷新后进度可续、worker 释放 lease、状态机流转</td></tr>
+<tr><td>权限合规</td><td>四级角色、审计留痕、权利声明留痕、承诺数字剔除</td></tr>
+<tr><td>发版</td><td>版本号=CHANGELOG=发布数据一致、tag、可回滚</td></tr>
+</tbody>
+</table>
+
+<h1 id="s14">十四、交付与后续</h1>
+<ul>
+<li>本任务书为参数冻结版本，确认后自 V4.145 起进入开发。</li>
+<li>烧录能力（C-M1）、平台页解析（C-M4）、TTS/数字人（C-M2）为明确的能力缺口或二期项，已在对应版本或后续版本安排。</li>
+<li>真实上游联调、真实视觉抽检与品牌方确认是外部验收项，不由模拟测试替代。</li>
+</ul>
+</section>
+</body>
+</html>

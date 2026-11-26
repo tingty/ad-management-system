@@ -15,18 +15,19 @@ import MaterialWorkshop from './pages/MaterialWorkshop'
 import CwTaskDock from './CwTaskDock'
 import AdvertiserApi from './pages/AdvertiserApi'
 import AdvertiserReports from './pages/AdvertiserReports'
+import ImitateVideo from './pages/ImitateVideo'
 
 /* V4.75：移除「素材创作平台」（素材创作 / 素材提示词）两个子模块及其独占代码，
    「素材历史」迁移为「创意工作台」的最后一个二级菜单；系统设置保留。 */
 type Tab = 'workshop' | 'workbench' | 'creativeanalysis' | 'speclibrary' | 'materialprompts' | 'history'
-  | 'llm' | 'accounts' | 'logs' | 'releasenotes' | 'advertiserapi' | 'advertiserreports'
+  | 'llm' | 'accounts' | 'logs' | 'releasenotes' | 'advertiserapi' | 'advertiserreports' | 'imitatevideo'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: '管理员', manager: '投放经理', editor: '投放执行', viewer: '只读',
 }
 
 const TABS: Tab[] = ['workshop', 'workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history',
-  'llm', 'accounts', 'logs', 'releasenotes', 'advertiserapi', 'advertiserreports']
+  'llm', 'accounts', 'logs', 'releasenotes', 'advertiserapi', 'advertiserreports', 'imitatevideo']
 const SB_KEY = 'admb_sidebar'
 
 /* ---------------- 菜单结构：一级 → 二级 ---------------- */
@@ -79,6 +80,17 @@ const GROUP_ADVERTISER_DATA: NavGroup = {
     { key: 'advertiserreports', label: '广告主报表', icon: 'chart',
       // V4.140：趋势 / 排行子模块已移除，描述改为当前真实能力，不再误导。
       desc: '按订单佣金明细聚合，查看收入概览与筛选明细，并下钻到原始记录。' },
+  ],
+}
+
+/* V4.145：模仿创作视频——独立一级菜单，单入口。以专业投放视频为学习对象，
+   解构其创作方案后重新演绎出符合投放规格的新片；本版仅骨架（不产生费用）。 */
+const GROUP_IMITATE_VIDEO: NavGroup = {
+  name: '模仿创作视频',
+  icon: 'sparkles',
+  items: [
+    { key: 'imitatevideo', label: '模仿创作视频', icon: 'sparkles',
+      desc: '以专业投放视频为学习对象，系统解构其创作方案输出分析脚本，再重新演绎出符合投放规格的新视频。' },
   ],
 }
 
@@ -149,7 +161,7 @@ function allowedTabs(user: User): Tab[] {
   const canEdit = ['admin', 'manager', 'editor'].includes(user.role)
   // V4.100：materialprompts 必须列入白名单，否则点击后被下方校验重定向回工作台。
   return [
-    ...(canEdit ? (['workshop', 'workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history', 'advertiserapi', 'advertiserreports'] as Tab[]) : []),
+    ...(canEdit ? (['workshop', 'workbench', 'creativeanalysis', 'speclibrary', 'materialprompts', 'history', 'advertiserapi', 'advertiserreports', 'imitatevideo'] as Tab[]) : []),
     ...(user.role === 'admin' ? (['llm', 'accounts', 'logs'] as Tab[]) : []),
     // 「新版通知」对所有角色开放，方便用户随时查阅每次优化与变更的版本内容
     'releasenotes',
@@ -260,7 +272,7 @@ export default function App() {
   const isEditor = !!user && ['admin', 'manager', 'editor'].includes(user.role)
   const isAdmin = user?.role === 'admin'
 
-  const visibleGroups: NavGroup[] = [GROUP_WORKSHOP, GROUP_WORKBENCH, GROUP_ADVERTISER_DATA, GROUP_SYSTEM]
+  const visibleGroups: NavGroup[] = [GROUP_WORKSHOP, GROUP_WORKBENCH, GROUP_ADVERTISER_DATA, GROUP_IMITATE_VIDEO, GROUP_SYSTEM]
     .map(g => ({
       ...g,
       items: g.items.filter(it =>
@@ -426,6 +438,7 @@ export default function App() {
           {tab === 'logs' && isAdmin && <Logs />}
           {tab === 'advertiserapi' && isEditor && <AdvertiserApi />}
           {tab === 'advertiserreports' && isEditor && <AdvertiserReports />}
+          {tab === 'imitatevideo' && isEditor && <ImitateVideo />}
           {tab === 'releasenotes' && <ReleaseNotes />}
         </div>
       </main>

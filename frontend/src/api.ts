@@ -1741,3 +1741,17 @@ export interface ReportDrilldown {
   field_maps?: { source_path: string; target_field: string; transform: string; note: string }[]
   chain?: string[]
 }
+
+/* V4.145 · 模仿创作视频（骨架）：任务视图类型与接口。 */
+export interface ImitateTask {
+  job_id: string
+  name?: string
+  status: string
+  stage?: string
+  source?: string
+  created_at?: string
+}
+
+export const imitateVideoApi = {
+  tasks: () => req<ImitateTask[]>('/api/imitate-video/tasks'),
+}

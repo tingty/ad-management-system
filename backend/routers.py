@@ -74,6 +74,7 @@ import advertiser_api
 import advertiser_ingest  # V4.132 / P1-B：映射写入与幂等落库
 import advertiser_scheduler  # V4.134 / P1-C + P2：历史回填与自动调度
 import advertiser_reports  # V4.135 / P3：广告主报表查询层（纯读）
+import imitate_video  # V4.145 / P0：模仿创作视频（骨架，任务事实视图）
 # V4.82：视频链路复用 D0 证据 / 限定保护，避免图片链路拦住的夸大承诺从视频溜出去
 from video_claims import (video_evidence_context, audit_video_plan,
                           repair_video_plan, video_asset_gate)
@@ -4709,3 +4710,16 @@ async def api_advertiser_report_export(connection_id: Optional[int] = None,
                  "X-Exported-Rows": str(payload["exported"]),
                  "X-Total-Rows": str(payload["total"])},
     )
+
+
+# ============================================================
+# V4.145 · 模仿创作视频（骨架）
+# ============================================================
+@router.get("/imitate-video/tasks")
+async def api_imitate_video_tasks(db: Session = Depends(get_db),
+                                  user: User = Depends(require_roles(*CAN_EDIT))):
+    """模仿创作视频任务列表（只读，owner 隔离）。
+
+    V4.145 骨架版：仅列出生效的 imitate_video 任务；不创建、不计费、不提交生成。
+    """
+    return imitate_video.list_tasks(db, user)

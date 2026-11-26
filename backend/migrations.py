@@ -363,6 +363,23 @@ def _migrate_v4144_2(conn) -> str:
     return f"模板标识 {old} → {new} 统一（{', '.join(changed) or '无历史数据'}）"
 
 
+def _migrate_v4145_1(conn) -> str:
+    """V4.145.1：模仿创作视频骨架初始化。
+
+    新表 imitate_analysis_script 由 models.py 的 create_all 建立（本迁移不写 CREATE TABLE）；
+    这里仅在 system_state 记录模块启用标记与已登记的 VIDEO_KINDS，供版本核验与后续版本读取。
+    """
+    if "system_state" not in set(inspect(conn).get_table_names()):
+        return "system_state 不存在，跳过模仿创作视频标记"
+    conn.execute(text("""INSERT OR REPLACE INTO system_state(key, value, updated_at)
+                         VALUES(:k, :v, CURRENT_TIMESTAMP)"""),
+                 {"k": "imitate_video_enabled", "v": "1"})
+    conn.execute(text("""INSERT OR REPLACE INTO system_state(key, value, updated_at)
+                         VALUES(:k, :v, CURRENT_TIMESTAMP)"""),
+                 {"k": "imitate_video_kinds", "v": "video,imitate_video"})
+    return "模仿创作视频骨架标记已就绪：imitate_video_enabled / imitate_video_kinds"
+
+
 def _current_order_view_sql(conn) -> str:
     """优先用库中持久化的视图定义（改名后已同步），否则用代码内默认定义。"""
     row = conn.execute(
@@ -485,6 +502,7 @@ MIGRATIONS = [
     ("V4.138.1", "advertiser_awin_field_map", _migrate_v4138_1),
     ("V4.143.1", "advertiser_partnerstack_field_map", _migrate_v4143_1),
     ("V4.144.2", "advertiser_partnerstack_template_id", _migrate_v4144_2),
+    ("V4.145.1", "imitate_video_skeleton", _migrate_v4145_1),
 ]
 
 

@@ -2,6 +2,34 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.145 新增一级模块「模仿创作视频」骨架（菜单 / 页面壳 / 数据模型 / 任务状态机）
+**发布日期**：2026-11-26 14:29
+**变更类型**：新增
+**涉及模块**：前端与菜单、任务引擎、数据模型与迁移、后端接口、专项测试、发版数据、新版通知、系统版本
+**变更摘要**：按用户确认的《模仿创作视频 需求规格与技术开发任务书》落地首个垂直切片——新增独立一级菜单「模仿创作视频」（入口 `#/imitatevideo`）、页面壳与只读任务列表；新增 imitate_analysis_script 数据表与 V4.145.1 迁移；把租约 worker 的任务 kind 从硬编码 `video` 放开为 `video / imitate_video`，新 kind 共用同一套任务事实与状态机。本版不调用大模型、不提交视频生成、不产生任何费用，源视频获取 / 分析脚本 / 创作脚本 / 出片能力依次由 V4.146–V4.149 交付。
+**更新要点**
+- 【新增】前端一级菜单：`App.tsx` 新增 `GROUP_IMITATE_VIDEO` 分组与 `imitatevideo` 路由白名单，单入口 `#/imitatevideo`；新增 `ImitateVideo.tsx` 页面壳（任务列表只读展示、状态与阶段标签），viewer 不可见，其余 4 个一级模块的布局与功能不变。
+- 【新增】任务引擎多 kind：`creative_tasks.py` 新增 `VIDEO_KINDS = (video, imitate_video)`，`_claim()` / `recover()` 三处过滤由 `== "video"` 改为 `.in_(VIDEO_KINDS)`，`job_to_task()` 按集合识别视频类任务；不新增进程内任务字典，续查不重提、租约与状态机逻辑完全复用。
+- 【新增】数据模型与迁移：`models.py` 新增 `ImitateAnalysisScript` 表（script_id / job_id / file_hash / script_json / creation_json / owner_id / status），由 create_all 建表；`migrations.py` 新增 `_migrate_v4145_1()` 写模块启用标记，`MIGRATIONS` 注册 `V4.145.1`。
+- 【新增】后端接口与业务模块：新增 `imitate_video.py` 提供 owner 隔离的只读任务列表；`routers.py` 注册 `GET /api/imitate-video/tasks`，`require_roles(*CAN_EDIT)` 鉴权。
+- 【新增】前端类型与标签：`api.ts` 新增 `ImitateTask` 与 `imitateVideoApi`；`CreativeTasksDrawer.tsx` 的 KIND_LABEL 增加 `imitate_video`，`useCreativeTasks.ts` 注释同步；模仿创作视频任务不回填到工作台草稿，保持模块独立。
+- 【新增】专项测试 `tests/test_imitate_video_v4145.py`：覆盖新表与迁移版本、worker 多 kind、job_to_task 识别、owner 隔离列表、骨架模块无付费调用、前端菜单 / 标签 / 接口静态契约、路由注册共 8 项。
+**本次优化与更改的功能 / 模块**
+- 【新增】前端与菜单：独立一级模块「模仿创作视频」入口、页面壳与只读任务列表。
+- 【新增】任务引擎：worker 接管 `imitate_video` kind，共用租约与状态机，不新增任务字典。
+- 【新增】数据模型与迁移：分析脚本表与 V4.145.1 启用标记，可回滚、幂等。
+- 【新增】后端接口：`GET /api/imitate-video/tasks`（owner 隔离、CAN_EDIT 鉴权）。
+- 【新增】专项测试：锁定「多 kind / 新表 / 菜单 / 无付费调用」四类骨架红线。
+**影响范围**
+- 兼容：`video` kind 的全部既有行为不变——worker 三处过滤改为集合后仍包含 `video`，`job_to_task()` 对 `video` 的识别结果不变；CJ / Awin / 现有 4 个一级模块与全部既有接口零改动。建表继续走 `create_all`，新表不影响既有表结构。
+- 边界：本版为骨架，任务列表在无数据时显示「新建任务入口将于 V4.146 开放」，不提供创建 / 分析 / 生成入口，不调用任何模型；真实付费出片与 OCR 抽检属外部验收项。
+- 回滚：移除 `App.tsx` 菜单与页面、新表与 `V4.145.1` 迁移、`imitate_video.py` 与路由、`creative_tasks.py` 的 `VIDEO_KINDS` 改动即可回到 V4.144 结构。
+**验证**
+- 专项：`test_imitate_video_v4145` 8 passed（含 V4.145.1 在全新库正确应用、列表 owner 隔离、骨架无付费调用静态断言）。
+- 前端：`npx tsc --noEmit` 0 错误；`npm run build` 通过（53 modules，prod build 成功）。
+- 隔离库全量后端回归：774 passed / 2 skipped。
+- 发版：`prepare_release --sync` 重建发布数据后独立进程 `--check` 校验系统版本、CHANGELOG 与发布数据一致；打 `v4.145.0` 并推送 `origin main` 与标签。
+
 ## V4.144 按官方文档重定义 PartnerStack 模板（模板名 partnerstack / 仅 API Key）
 **发布日期**：2026-11-25 16:31
 **变更类型**：修复 / 优化 / 新增
