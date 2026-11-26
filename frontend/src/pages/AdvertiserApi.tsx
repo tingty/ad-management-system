@@ -1,5 +1,7 @@
 /**
- * V4.128 / V4.129 / V4.131 / V4.132 / V4.133 / V4.134 / V4.137 · 广告主数据 / API对接。
+ * V4.128 / V4.129 / V4.131 / V4.132 / V4.133 / V4.134 / V4.137 / V4.153 · 广告主数据 / API对接。
+ * V4.153：模板声明 credential_compose 时，新建/编辑弹窗按 parts 渲染独立输入框，
+ * 保存时拼成 oauthcc:client_id|client_secret|sid 存入既有 token 列；后端拉取链路零改动。
  * V4.137：所有时间列与测试时间统一按东八区北京时间展示（无时区后缀按 UTC 解析）。
  * V4.134：设置弹窗接入自动调度状态、历史回填按钮与运行记录；调度由后端 startup 协程驱动，
  * 前端只展示与手动补拉，不改变列表列结构。
@@ -90,6 +92,20 @@ function pretty(value: unknown): string {
   try { return JSON.stringify(value, null, 2) } catch { return String(value) }
 }
 
+// V4.153：采集层凭据拼接。只在模板声明 credential_compose 时启用，
+// 其余渠道仍走原 token 输入框，行为与 V4.152 完全一致。
+function composeKeys(tpl: ApiTemplate | undefined): string[] {
+  return tpl?.credential_compose?.parts || []
+}
+
+function composeCredential(tpl: ApiTemplate | undefined, values: Record<string, string>): string {
+  const rule = tpl?.credential_compose
+  if (!rule) return (values.token || '').trim()
+  const pieces = composeKeys(tpl).map(k => (values[k] || '').trim())
+  if (!pieces.length || pieces.some(p => !p)) return ''
+  return `${rule.prefix || ''}${pieces.join(rule.delimiter || '|')}`
+}
+
 export default function AdvertiserApi() {
   const [templates, setTemplates] = useState<ApiTemplate[]>([])
   const [connections, setConnections] = useState<ApiConnection[]>([])
@@ -97,11 +113,11 @@ export default function AdvertiserApi() {
   const [msg, setMsg] = useState<Msg | null>(null)
 
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ name: '', template_code: 'cj_publisher_commissions', token: '', cid: '', endpoint: '' })
+  const [form, setForm] = useState({ name: '', template_code: 'cj_publisher_commissions', token: '', cid: '', endpoint: '', client_id: '', client_secret: '', sid: '' })
   const [saving, setSaving] = useState(false)
   // V4.133：编辑弹窗（复用新建弹窗组件样式），token 留空表示不修改
   const [editingId, setEditingId] = useState<number | null>(null)
-  const [editForm, setEditForm] = useState({ name: '', cid: '', endpoint: '', token: '' })
+  const [editForm, setEditForm] = useState({ name: '', cid: '', endpoint: '', token: '', client_id: '', client_secret: '', sid: '' })
   const [savingEdit, setSavingEdit] = useState(false)
 
   const [settingsId, setSettingsId] = useState<number | null>(null)
@@ -155,18 +171,27 @@ export default function AdvertiserApi() {
   const cidRequired = (code: string) => hasField(code, 'cid') && cidField(code)?.required !== false
   const tokenLabel = (code: string) => fieldOf(code, 'token')?.label || 'API Token'
   const endpointLabel = (code: string) => fieldOf(code, 'endpoint')?.label || 'Endpoint（留空用模板默认）'
+  const tplOf = (code: string) => templates.find(t => t.code === code)
+  const credentialKeys = (code: string) => composeKeys(tplOf(code))
 
   async function saveNew() {
     if (!form.name.trim()) { setMsg({ kind: 'err', text: '请填写广告主名称' }); return }
-    if (!form.token.trim()) { setMsg({ kind: 'err', text: '请填写 API Token' }); return }
+    const token = composeCredential(tplOf(form.template_code), form)
+    if (!token) {
+      setMsg({ kind: 'err', text: credentialKeys(form.template_code).length
+        ? '请完整填写凭据字段（不可留空）' : '请填写 API Token' }); return
+    }
     if (cidRequired(form.template_code) && !form.cid.trim()) {
       setMsg({ kind: 'err', text: '请填写发布者 CID（不是登录邮箱）' }); return
     }
     setSaving(true); setMsg(null)
     try {
-      const r = await advertiserApi.createAndTestConnection(form)
+      const r = await advertiserApi.createAndTestConnection({
+        name: form.name.trim(), template_code: form.template_code, token,
+        cid: form.cid.trim(), endpoint: form.endpoint.trim(),
+      })
       setShowCreate(false)
-      setForm({ name: '', template_code: 'cj_publisher_commissions', token: '', cid: '', endpoint: '' })
+      setForm({ name: '', template_code: 'cj_publisher_commissions', token: '', cid: '', endpoint: '', client_id: '', client_secret: '', sid: '' })
       setMsg(r.last_test_ok
         ? { kind: 'ok', text: `「${r.name}」已保存，接口测试成功` }
         : { kind: 'err', text: `「${r.name}」已保存，但接口测试失败：${r.last_test_error || '请检查填写信息'}` })
@@ -179,7 +204,7 @@ export default function AdvertiserApi() {
   function openEdit(c: ApiConnection) {
     setMsg(null); setHover(null)
     setEditingId(c.id)
-    setEditForm({ name: c.name, cid: c.cid, endpoint: c.endpoint, token: '' })
+    setEditForm({ name: c.name, cid: c.cid, endpoint: c.endpoint, token: '', client_id: '', client_secret: '', sid: '' })
   }
 
   async function saveEdit() {
@@ -189,12 +214,24 @@ export default function AdvertiserApi() {
     if (cidRequired(editingTemplate) && !editForm.cid.trim()) {
       setMsg({ kind: 'err', text: '请填写发布者 CID' }); return
     }
+    // V4.153：组合凭据不回显，全部留空表示沿用原密钥；填了就必须填全。
+    let nextToken = ''
+    const keys = credentialKeys(editingTemplate)
+    if (keys.length) {
+      const filled = keys.filter(k => editForm[k as keyof typeof editForm].trim())
+      if (filled.length > 0 && filled.length !== keys.length) {
+        setMsg({ kind: 'err', text: '请完整填写全部凭据字段，或全部留空表示不修改' }); return
+      }
+      nextToken = composeCredential(tplOf(editingTemplate), editForm)
+    } else {
+      nextToken = editForm.token.trim()
+    }
     setSavingEdit(true); setMsg(null)
     try {
       const payload: Record<string, string> = {
         name: editForm.name.trim(), cid: editForm.cid.trim(), endpoint: editForm.endpoint.trim(),
       }
-      if (editForm.token.trim()) payload.token = editForm.token.trim()
+      if (nextToken) payload.token = nextToken
       await advertiserApi.updateConnection(editingId, payload)
       setEditingId(null)
       setMsg({ kind: 'ok', text: '配置已更新，更新时间已刷新' })
@@ -561,10 +598,28 @@ export default function AdvertiserApi() {
                   ))}
                 </select>
               </label>
-              <label>{tokenLabel(form.template_code)} *
-                <input type="password" value={form.token} onChange={e => setForm(f => ({ ...f, token: e.target.value }))}
-                       placeholder="Bearer 后面的个人访问令牌" autoComplete="off" />
-              </label>
+              {credentialKeys(form.template_code).length ? (
+                credentialKeys(form.template_code).map(key => {
+                  const field = fieldOf(form.template_code, key)
+                  return (
+                    <label className="span2" key={key}>{field?.label || key} *
+                      <input
+                        type={field?.type === 'password' ? 'password' : 'text'}
+                        value={form[key as keyof typeof form]}
+                        onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                        placeholder={key === 'client_secret' ? '不回显，仅本次保存使用'
+                          : key === 'sid' ? '请输入应用有权访问的 SID' : '按应用信息填写'}
+                        autoComplete="off"
+                      />
+                    </label>
+                  )
+                })
+              ) : (
+                <label>{tokenLabel(form.template_code)} *
+                  <input type="password" value={form.token} onChange={e => setForm(f => ({ ...f, token: e.target.value }))}
+                         placeholder="Bearer 后面的个人访问令牌" autoComplete="off" />
+                </label>
+              )}
               {hasField(form.template_code, 'cid') && (
                 <label>{cidField(form.template_code)?.label || '发布者 ID'}{cidRequired(form.template_code) ? ' *' : '（可选）'}
                   <input value={form.cid} onChange={e => setForm(f => ({ ...f, cid: e.target.value }))}
@@ -611,11 +666,28 @@ export default function AdvertiserApi() {
                          placeholder="https://commissions.api.cj.com/query" />
                 </label>
               )}
-              <label className="span2">API Token（留空表示不修改）
-                <input type="password" value={editForm.token}
-                       onChange={e => setEditForm(f => ({ ...f, token: e.target.value }))}
-                       placeholder="如需更换 Token 才填写" autoComplete="off" />
-              </label>
+              {credentialKeys(connections.find(c => c.id === editingId)?.template_code || '').length ? (
+                credentialKeys(connections.find(c => c.id === editingId)?.template_code || '').map(key => {
+                  const field = fieldOf(connections.find(c => c.id === editingId)?.template_code || '', key)
+                  return (
+                    <label className="span2" key={key}>{field?.label || key}（留空不修改）
+                      <input
+                        type={field?.type === 'password' ? 'password' : 'text'}
+                        value={editForm[key as keyof typeof editForm]}
+                        onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))}
+                        placeholder={key === 'client_secret' ? '如需更换才填写' : '如需更换才填写'}
+                        autoComplete="off"
+                      />
+                    </label>
+                  )
+                })
+              ) : (
+                <label className="span2">API Token（留空表示不修改）
+                  <input type="password" value={editForm.token}
+                         onChange={e => setEditForm(f => ({ ...f, token: e.target.value }))}
+                         placeholder="如需更换 Token 才填写" autoComplete="off" />
+                </label>
+              )}
             </div>
             <p className="ad-modal-hint muted">模板与任务设置请在「设置」弹窗中调整；保存后列表「更新时间」将刷新，接口请求时间单独计入「API同步时间」。</p>
             <div className="ad-modal-foot">

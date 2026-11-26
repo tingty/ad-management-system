@@ -4322,6 +4322,8 @@ async def api_advertiser_templates(_: User = Depends(require_roles(*ROLES))):
             {**f, "required": bool(f.get("required", True))}
             for f in (t.get("required_fields") or [])
         ],
+        # V4.153：下发给前端的凭据采集规则；未声明的模板保持原字段表单不变。
+        "credential_compose": t.get("credential_compose"),
         "limits": t.get("limits", ""), "framework_version": t.get("framework_version", ""),
         "status": t.get("status", "active"),
         # V4.129：明确声明请求对象是 PublisherCommission 明细，不是统计包装

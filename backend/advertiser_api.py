@@ -215,14 +215,21 @@ PRESET_TEMPLATES: list[dict] = [
         "method": "GET",
         "auth_type": "bearer",
         "default_endpoint": "https://api.linksynergy.com",
+        # V4.153：界面按这里声明的三个字段独立采集，保存时拼成
+        # oauthcc:client_id|client_secret|sid 存入既有 token 列。
+        # 这只是采集层元数据；resolve_credential / 调度 / 报表链路完全不变，
+        # 老连接里已存的 token 字符串也继续可用。
         "required_fields": [
-            {
-                "key": "token",
-                "label": "API Token / oauth:token-key|account-id / oauthcc:client_id|client_secret|account-id",
-                "type": "password",
-                "required": True,
-            },
+            {"key": "client_id", "label": "Client ID", "type": "text", "required": True},
+            {"key": "client_secret", "label": "Client Secret", "type": "password", "required": True},
+            {"key": "sid", "label": "SID（account-id）", "type": "text", "required": True},
         ],
+        "credential_compose": {
+            "target": "token",
+            "prefix": "oauthcc:",
+            "delimiter": "|",
+            "parts": ["client_id", "client_secret", "sid"],
+        },
         "query_name": "transactions",
         "pagination": "page/limit 分页；本页条数小于 limit 即结束",
         "limits": "Token 端点 100 次/分钟；Events 默认 limit=100（本模板固定 300）；token-key 生成的 access_token 有效期 3600 秒",

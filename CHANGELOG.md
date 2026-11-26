@@ -2,6 +2,33 @@
 
 按《在线营销素材管理平台-版本开发规划.docx》的顺序交付，每个版本都是可独立验收的垂直切片。
 
+## V4.153 Rakuten 三字段凭据录入与组合凭据采集层
+**发布日期**：2026-11-26 17:12
+**变更类型**：新增、优化
+**涉及模块**：广告主 API、Rakuten Advertising、前端表单、模板元数据、专项测试、发版数据、新版通知、系统版本、标准工作流文档
+**变更摘要**：按用户确认的正确 SID（`4752032`）与最终方案，把 Rakuten 连接的凭据录入从单个字符串框改为 Client ID / Client Secret / SID 三个独立输入框（纵向单列、密文框不回显）。这纯粹是采集层变化：前端保存时按模板声明自动拼成 V4.152 已验证可用的 `oauthcc:client_id|client_secret|sid` 串存入既有加密 token 列，后端 `resolve_credential`、调度器、字段映射、报表链路零改动；既有老连接继续可用，无需数据库迁移或额外系统配置。
+**更新要点**
+- 【新增】模板元数据 `credential_compose = {target: token, prefix: oauthcc:, delimiter: |, parts: [client_id, client_secret, sid]}`，由 `ApiTemplateOut` 与 `/advertiser-data/templates` 下发给前端；未声明该元数据的 CJ / Awin / PartnerStack 表单行为完全不变。
+- 【新增】`AdvertiserApi.tsx` 新增通用 `composeKeys` / `composeCredential`：按模板 `parts` 渲染独立输入框并拼接，不在业务代码里写任何渠道分支或真实凭据值；新建三个字段全部必填，编辑时三个框留空表示沿用原密钥、填则必须填全。
+- 【优化】三个字段独占整行（纵向单列），沿用现有 `ad-form-grid` 控件外观，与系统级 UI 规范一致；Client Secret 使用密码框，不回显、不落入前端固定值。
+- 【新增】专项测试 `tests/test_advertiser_rakuten_fields_v4153.py`：覆盖模板三字段声明、其他模板零影响、元数据下发、前端通用拼接守约、无凭据值硬编码、拼接结果仍被后端正确交换、老 token 直传兼容与文档口径。
+- 【优化】同步更新 V4.150 / V4.151 / V4.152 旧断言与文档，记录三字段录入方式、定期拉取零配置与 SID 已确认结论。
+**本次优化与更改的功能 / 模块**
+- 【新增】广告主 API 新建/编辑弹窗：Rakuten 可按官方凭据字段直接录入 Client ID、Client Secret、SID，不需要手工拼 `oauthcc:` 字符串。
+- 【优化】添加新渠道时，如需多字段录入，只需在模板加一条 `credential_compose` 声明，前端无需写渠道分支。
+- 【优化】Rakuten 接入文档：明确三字段录入、加密单列存储、老连接兼容，以及「设置」里打开调度即可按任务定期拉取（默认 7 天窗口符合上游 ≤30 天限制）。
+**影响范围**
+- 仅改 Rakuten 模板字段声明、模板元数据下发、前端采集表单与测试文档；不改数据库结构、字段映射、入库幂等、报表前后端、凭据加密/交换/调度逻辑。
+- CJ / Awin / PartnerStack 及 V4.150–V4.152 已保存的 Rakuten 连接（直传 token / `oauth:` / `oauthcc:` 字符串）行为不变，无需数据库迁移。
+- 生产需重启后端加载新模板声明，并重建前端静态包；回滚回退本版代码即可，已落库数据不受影响。
+- 未写入任何真实凭据值；测试全部使用替身值与 mock。
+**验证**
+- 专项：`test_advertiser_rakuten_fields_v4153` 8 passed；`test_advertiser_rakuten_oauthcc_v4152` 6 passed；`test_advertiser_rakuten_v4150` 16 passed；`test_rakuten_longterm_v4151` 3 passed。
+- 隔离库全量后端回归：干净代码副本 + 隔离 `DATABASE_URL` 下 Ran 850 / OK（5 skipped），无新增失败。
+- 前端：`npx tsc --noEmit` 与 `npm run build` 通过（build 输出 54 modules transformed）。
+- 发版：`prepare_release --sync` 重建发布数据后独立进程 `--check` 校验系统版本、CHANGELOG 与发布数据一致。
+- 待外部验收：在生产界面用真实三字段创建连接、测试通过并由调度器定期拉取；真实凭据与付费出片一样属外部验收项，本版未在仓库留存任何密钥。
+
 ## V4.152 Rakuten client_credentials 真实验证与自动 SID 注入
 **发布日期**：2026-11-26 16:55
 **变更类型**：新增、优化

@@ -69,7 +69,9 @@ class TestTemplateContract(unittest.TestCase):
         self.assertEqual(tpl["code"], "rakuten_advertising")
         self.assertEqual(tpl["name"], "Rakuten Advertising")
         self.assertEqual(tpl["record_object"], "Transaction")
-        self.assertEqual([f["key"] for f in tpl["required_fields"]], ["token"])
+        # V4.153 起改为三字段采集，前端按 credential_compose 拼成 oauthcc 串
+        self.assertEqual([f["key"] for f in tpl["required_fields"]],
+                         ["client_id", "client_secret", "sid"])
         self.assertFalse(advertiser_api.requires_cid(RAKUTEN))
         codes = [t["code"] for t in advertiser_api.PRESET_TEMPLATES]
         self.assertEqual(len(codes), len(set(codes)))

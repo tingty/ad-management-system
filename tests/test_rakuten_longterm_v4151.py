@@ -19,7 +19,9 @@ class RakutenLongTermContractV4151(unittest.TestCase):
         self.assertIn("`account-id` 作为 `scope`", self.text)
         self.assertIn("Authorization: Bearer <access_token>", self.text)
         self.assertIn("oauth:{token-key}|{account-id}", self.text)
-        self.assertIn("未拆成", self.text)
+        # V4.153：界面已改为三个独立输入框，保存时仍拼回同一 oauthcc 凭据
+        self.assertIn("三个独立输入框", self.text)
+        self.assertIn("oauthcc:{client_id}|{client_secret}|{sid}", self.text)
 
     def test_token_lifetime_and_rate_limits_are_explicit(self):
         self.assertIn("3600", self.text)

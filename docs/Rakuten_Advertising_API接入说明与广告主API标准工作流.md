@@ -1,7 +1,7 @@
 # Rakuten Advertising API 接入说明与广告主 API 标准工作流
 
 > 适用系统：广告管理系统 / 广告主数据 → 广告主 API → 广告主报表  
-> 适用版本：V4.152
+> 适用版本：V4.153
 > 本文同时承担两个职责：①说明 Rakuten Advertising 佣金数据应如何拉取；②沉淀今后所有广告主 API 模板开发的标准流程。
 
 ---
@@ -278,8 +278,10 @@ Authorization: Bearer <access_token>
   1. 直接填 `access_token`（Developer Portal 手工生成，60 分钟有效，不适合长期调度）；
   2. 填 `oauth:{token-key}|{account-id}`，系统用 Bearer token-key 自动调用 `/token` 换取 access_token；
   3. **（V4.152 推荐）**填 `oauthcc:{client_id}|{client_secret}|{account-id}`，系统用 body `client_credentials` 换 token，并自动给业务请求加 `x-rm-preferred-sid: {account-id}` 头。真实验证中只有方式 3 对该 Application 可用。
-- `token-key` 由 `Base64(client_id:client_secret)` 得到；`account-id` 作为 `scope`。当前界面仍是单一凭据输入框，未拆成 `client_id / client_secret / account_id` 三个独立字段，三个值用 `|` 拼接录入；如需三字段录入，应作为后续版本的小改动实现。
-- **account-id 必须与该 Application 有权访问的 SID 一致**，填错时 Events API 返回 200 空数组而非报错，需核对响应记录的 `sid` 字段。
+- `token-key` 由 `Base64(client_id:client_secret)` 得到；`account-id` 作为 `scope`。
+- **V4.153 起界面提供三个独立输入框**：Client ID / Client Secret / SID（纵向单列，密文框不回显）。保存时前端按模板声明自动拼成 `oauthcc:{client_id}|{client_secret}|{sid}` 存入既有加密 `token` 列；编辑弹窗三个框留空表示沿用原密钥，填写则必须填全。后端 `resolve_credential`、调度器、字段映射、报表全部零改动，V4.152 之前保存的老连接（直传 token / `oauth:` / `oauthcc:` 字符串）继续可用。
+- **account-id / SID 必须与该 Application 有权访问的 SID 一致**（本次已确认为 `4752032`），填错时 Events API 返回 200 空数组而非报错，需核对响应记录的 `sid` 字段。
+- 该连接按「设置」里的任务配置定期拉取即可，无需额外系统配置；回溯窗口默认 7 天，符合上游 ≤30 天的硬限制。
 
 ### 4.2 协议配置
 
@@ -293,6 +295,7 @@ Authorization: Bearer <access_token>
 - `record_filter={field: is_event, equals: N}`：过滤 Event 重复视角，避免重复计佣
 - `external_id_path=etransaction_id`
 - `credential` 声明 token-key 换取规则；`credential.alternates` 声明 `oauthcc:` 的 client_credentials 换取方式与 `request_headers`（SID 头）模板，二者都是协议层通用能力，业务代码无渠道分支
+- V4.153 新增模板元数据 `credential_compose = {target: token, prefix: oauthcc:, delimiter: |, parts: [client_id, client_secret, sid]}`：只给前端表单用来渲染字段与拼接字符串，不参与任何 API 请求构造。新渠道若需要多字段录入，加一条声明即可，前端无需写渠道分支
 
 ### 4.3 字段映射
 

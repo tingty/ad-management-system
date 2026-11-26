@@ -880,6 +880,8 @@ class ApiTemplateOut(BaseModel):
     auth_type: str = "bearer"
     default_endpoint: str = ""
     required_fields: List[dict] = []
+    # V4.153：模板声明的组合凭据采集规则（前端把多个输入框拼成 token 字符串）
+    credential_compose: Optional[dict] = None
     limits: str = ""
     framework_version: str = ""
     status: str = "active"

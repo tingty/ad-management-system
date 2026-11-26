@@ -1490,6 +1490,8 @@ export interface ApiTemplate {
   auth_type: string
   default_endpoint: string
   required_fields: { key: string; label: string; type: string; required: boolean }[]
+  // V4.153：组合凭据采集规则；有值时前端按 parts 渲染独立输入框并拼成 token
+  credential_compose?: { target: string; prefix: string; delimiter: string; parts: string[] } | null
   limits: string
   framework_version: string
   status: string

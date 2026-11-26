@@ -56,8 +56,12 @@ class TestTemplateCredentialContract(unittest.TestCase):
     def test_template_declares_oauthcc_alternate(self):
         tpl = advertiser_api.template_by_code(RAKUTEN)
         self.assertIsNotNone(tpl)
-        self.assertEqual([f["key"] for f in tpl["required_fields"]], ["token"])
-        self.assertIn("oauthcc:", tpl["required_fields"][0]["label"])
+        # V4.153：改由三个独立字段采集，前端按 credential_compose 拼成同一 oauthcc 串
+        self.assertEqual([f["key"] for f in tpl["required_fields"]],
+                         ["client_id", "client_secret", "sid"])
+        self.assertEqual(tpl["credential_compose"]["prefix"], "oauthcc:")
+        self.assertEqual(tpl["credential_compose"]["parts"],
+                         ["client_id", "client_secret", "sid"])
 
         cfg = tpl["protocol"]["credential"]
         self.assertEqual(cfg["prefix"], "oauth:")
